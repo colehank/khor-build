@@ -30,6 +30,18 @@ export KHOR_TEST_AGENT_BIN="$KHOR_AGENT_BUNDLE"
 export KHOR_TEST_MCP_EXECUTABLE="$CARGO_TARGET_DIR/debug/khor"
 export KHOR_RUNTIME_DIR="$RUNNER_TEMP/runtime-images-$GITHUB_RUN_ID"
 printf '%s\n' "$SOURCE_SHA" > "$REPORT_DIR/source-sha.txt"
+case "${CHECK:-full}" in
+  approval)
+    test -x "$KHOR_AGENT_BUNDLE"
+    # This narrow regression does not execute the frontend or agent bundle.
+    # Full native acceptance and trusted release builds remain separate gates.
+    cargo test --locked -p khor-node --lib khor_agent::conversations::tests::approval_answers_reach_only_the_conversation_that_owns_the_run -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/approval.log"
+    grep -Eq '^test result: ok\. 1 passed;' "$REPORT_DIR/approval.log"
+    exit 0
+    ;;
+  full) ;;
+  *) echo 'Unknown validation scope' >&2; exit 2 ;;
+esac
 npm ci --prefix apps/agent
 (cd apps/agent && node build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE")
 npm test --prefix apps/agent

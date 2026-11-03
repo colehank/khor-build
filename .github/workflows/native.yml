@@ -9,6 +9,13 @@ on:
         default: d437aa58e8a75c79d140fad28c65f5c6a0554891
         type: string
 
+      check:
+        description: Full acceptance or the isolated conversation approval regression
+        required: true
+        default: full
+        type: choice
+        options: [full, approval]
+
 permissions:
   contents: read
 
@@ -60,6 +67,7 @@ jobs:
         shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          CHECK: ${{ inputs.check }}
           SOURCE_PACKAGE: ${{ runner.temp }}/source-package
           REPORT_DIR: ${{ runner.temp }}/native-evidence
         run: /Users/z13/khor-builder/bin/run-build /bin/bash "$SOURCE_PACKAGE/native.sh"
