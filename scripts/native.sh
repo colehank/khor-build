@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 source /Users/z13/khor-builder/env.sh
+export GIT_CONFIG_GLOBAL=/dev/null
 export CARGO_TERM_COLOR=never
 export CARGO_HTTP_MULTIPLEXING=false
 if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -59,5 +60,5 @@ run_tests terminal-io -p khor-gui-core --lib term::io_tests::
 run_tests terminal-current -p khor-gui-core --test terminal_current
 run_tests account-registration -p khor-gui-core --test account_registration
 run_tests keeper -p khor-cli --test serve_keeper
-run_tests ssh-install -p khor-cli --test add_ssh
+KHOR_TEST_KEEP=1 run_tests ssh-install -p khor-cli --test add_ssh
 printf '%s\n' 'Khor native development checks passed.' >> "$GITHUB_STEP_SUMMARY"

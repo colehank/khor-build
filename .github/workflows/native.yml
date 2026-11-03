@@ -26,6 +26,13 @@ jobs:
     runs-on: [khor-mac-mini, khor-dev]
     timeout-minutes: 180
     steps:
+      - name: Give checkout an isolated writable Git configuration
+        shell: bash
+        run: |
+          umask 077
+          git_config="$RUNNER_TEMP/checkout-$GITHUB_RUN_ID.gitconfig"
+          : > "$git_config"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$git_config" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
