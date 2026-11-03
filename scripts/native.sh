@@ -30,6 +30,12 @@ export KHOR_TEST_AGENT_BIN="$KHOR_AGENT_BUNDLE"
 export KHOR_TEST_MCP_EXECUTABLE="$CARGO_TARGET_DIR/debug/khor"
 export KHOR_RUNTIME_DIR="$RUNNER_TEMP/runtime-images-$GITHUB_RUN_ID"
 printf '%s\n' "$SOURCE_SHA" > "$REPORT_DIR/source-sha.txt"
+run_tests() {
+  local name=$1
+  shift
+  cargo test --locked "$@" -- --test-threads=1 2>&1 | tee "$REPORT_DIR/$name.log"
+  grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
+}
 case "${CHECK:-full}" in
   approval|close)
     test -x "$KHOR_AGENT_BUNDLE"
@@ -52,6 +58,14 @@ print(raw)
 PYTEST
     exit 0
     ;;
+  contracts)
+    test -x "$KHOR_AGENT_BUNDLE"
+    run_tests runtime-image -p khor-cli --test runtime_image
+    run_tests conversations -p khor-node --lib khor_agent::conversations::tests
+    run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
+    run_tests pairing-progress -p khor-node --lib unfinished_bootstrap_is_progress
+    exit 0
+    ;;
   full) ;;
   *) echo 'Unknown validation scope' >&2; exit 2 ;;
 esac
@@ -70,12 +84,6 @@ python3 scripts/native_provenance.py prepare --metadata "$REPORT_DIR/node-metada
 cargo test --locked -p khor-node --lib --no-run --message-format=json > "$REPORT_DIR/node-artifacts.json"
 python3 scripts/native_provenance.py verify --prepared "$REPORT_DIR/node-prepared.json" --artifacts "$REPORT_DIR/node-artifacts.json" --output "$REPORT_DIR/node-provenance.json"
 python3 scripts/run-node-acceptance.py --suite runtime-close --artifacts "$REPORT_DIR/node-artifacts.json" --provenance "$REPORT_DIR/node-provenance.json" --worker-provenance "$REPORT_DIR/cli-provenance.json" --output "$REPORT_DIR/node-native-close"
-run_tests() {
-  local name=$1
-  shift
-  cargo test --locked "$@" -- --test-threads=1 2>&1 | tee "$REPORT_DIR/$name.log"
-  grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
-}
 run_tests runtime-image -p khor-cli --test runtime_image
 run_tests conversations -p khor-node --lib khor_agent::conversations::tests
 run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
