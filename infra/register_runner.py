@@ -22,7 +22,7 @@ ENV = {
     'CARGO_PROFILE_RELEASE_INCREMENTAL': 'false', 'CARGO_PROFILE_DEV_DEBUG': '0',
     'CARGO_PROFILE_TEST_DEBUG': '0', 'npm_config_cache': str(ROOT / 'cache/npm'),
     'BUN_INSTALL_CACHE_DIR': str(ROOT / 'cache/bun'), 'TMPDIR': str(ROOT / 'tmp'),
-    'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
+    'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': str(ROOT / 'cache/runner.gitconfig'), 'GIT_TERMINAL_PROMPT': '0',
 }
 
 
@@ -41,6 +41,10 @@ def install_service():
     plist = Path('/Library/LaunchDaemons') / (LABEL + '.plist')
     if plist.exists():
         raise RuntimeError('Service already exists; preserve it for inspection')
+    git_config = ROOT / 'cache/runner.gitconfig'
+    git_config.touch(exist_ok=True)
+    os.chown(git_config, 501, 20)
+    git_config.chmod(0o600)
     entry = INSTALL / 'runsvc.sh'
     shutil.copy2(INSTALL / 'bin/runsvc.sh', entry)
     os.chown(entry, 501, 20)

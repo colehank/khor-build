@@ -30,8 +30,8 @@ export KHOR_TEST_MCP_EXECUTABLE="$CARGO_TARGET_DIR/debug/khor"
 export KHOR_RUNTIME_DIR="$RUNNER_TEMP/runtime-images-$GITHUB_RUN_ID"
 printf '%s\n' "$SOURCE_SHA" > "$REPORT_DIR/source-sha.txt"
 npm ci --prefix apps/agent
-npm test --prefix apps/agent
 (cd apps/agent && node build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE")
+npm test --prefix apps/agent
 npm ci --prefix apps/gui
 npm run build --prefix apps/gui
 native_host=$(rustc -vV | sed -n 's/^host: //p')
