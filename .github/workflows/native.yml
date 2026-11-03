@@ -1,0 +1,39 @@
+name: Khor native development checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full Khor commit SHA to build and test
+        required: true
+        default: d437aa58e8a75c79d140fad28c65f5c6a0554891
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-mini-worker
+  cancel-in-progress: false
+
+jobs:
+  native:
+    runs-on: [khor-mac-mini, khor-dev]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build and test pinned public Khor source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          REPORT_DIR: ${{ runner.temp }}/native-evidence
+        run: /Users/z13/khor-builder/bin/run-build /bin/bash scripts/native.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: mac-native-evidence
+          path: ${{ runner.temp }}/native-evidence
+          if-no-files-found: warn
+          retention-days: 7
