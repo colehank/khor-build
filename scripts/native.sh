@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 source /Users/z13/khor-builder/env.sh
+python3 -c 'import hashlib,sys; assert sys.version_info >= (3,11) and hasattr(hashlib,"file_digest"), "Builder needs Python 3.11 or newer"'
 export GIT_CONFIG_GLOBAL=/dev/null
 export CARGO_TERM_COLOR=never
 export CARGO_HTTP_MULTIPLEXING=false

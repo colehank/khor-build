@@ -14,7 +14,7 @@ NAME = 'khor-mac-mini-m4'
 LABEL = 'com.khor.github-runner.macmini'
 ENV = {
     'HOME': '/Users/z13', 'USER': 'z13', 'LOGNAME': 'z13', 'LANG': 'en_US.UTF-8',
-    'PATH': '/Users/z13/khor-builder/tools/node-v22.19.0-darwin-arm64/bin:/Users/z13/khor-builder/tools/bun-1.3.14/bun-darwin-aarch64:/Users/z13/.cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+    'PATH': '/Users/z13/khor-builder/tools/node-v22.19.0-darwin-arm64/bin:/Users/z13/khor-builder/tools/bun-1.3.14/bun-darwin-aarch64:/Users/z13/.cargo/bin:/opt/homebrew/opt/python@3.13/libexec/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     'DEVELOPER_DIR': str(ROOT / 'tools/xcode-26.5/Xcode.app/Contents/Developer'),
     'RUSTUP_TOOLCHAIN': '1.95.0', 'CARGO_HOME': str(ROOT / 'cache/cargo'),
     'CARGO_TARGET_DIR': str(ROOT / 'cache/target'), 'CARGO_BUILD_JOBS': '2',
