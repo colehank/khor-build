@@ -59,6 +59,7 @@ run_tests transfer-owner -p khor-node --lib doc_transfer_state::io::tests
 run_tests attachment-failure -p khor-node --lib connection_failure_does_not_claim_the_host_ended
 run_tests handshake-recovery -p khor-node --lib interrupted_and_invalid_handshakes_have_different_recovery
 run_tests explicit-refusal -p khor-node --lib a_cookie_refusal_keeps_the_hosts_reason
+run_tests pairing-progress -p khor-node --lib unfinished_bootstrap_is_progress
 run_tests gui-rejoin -p khor-gui-core --lib first_rejoin_is_safe_inside_a_runtime_worker
 run_tests terminal-io -p khor-gui-core --lib term::io_tests::
 run_tests terminal-current -p khor-gui-core --test terminal_current
