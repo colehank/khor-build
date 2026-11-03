@@ -51,6 +51,8 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 run_tests runtime-image -p khor-cli --test runtime_image
+run_tests conversations -p khor-node --lib khor_agent::conversations::tests
+run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
 run_tests pi-usage -p khor-node --lib accounts::pi_usage
 run_tests observer -p khor-node --lib observer_tests
 run_tests transfer-owner -p khor-node --lib doc_transfer_state::io::tests
