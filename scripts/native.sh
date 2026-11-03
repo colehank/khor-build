@@ -31,12 +31,25 @@ export KHOR_TEST_MCP_EXECUTABLE="$CARGO_TARGET_DIR/debug/khor"
 export KHOR_RUNTIME_DIR="$RUNNER_TEMP/runtime-images-$GITHUB_RUN_ID"
 printf '%s\n' "$SOURCE_SHA" > "$REPORT_DIR/source-sha.txt"
 case "${CHECK:-full}" in
-  approval)
+  approval|close)
     test -x "$KHOR_AGENT_BUNDLE"
-    # This narrow regression does not execute the frontend or agent bundle.
-    # Full native acceptance and trusted release builds remain separate gates.
-    cargo test --locked -p khor-node --lib khor_agent::conversations::tests::approval_answers_reach_only_the_conversation_that_owns_the_run -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/approval.log"
-    grep -Eq '^test result: ok\. 1 passed;' "$REPORT_DIR/approval.log"
+    # Targeted checks do not replace full provenance, frontend or release gates.
+    cargo test --locked -p khor-node --lib --no-run --message-format=json > "$REPORT_DIR/targeted-artifacts.json"
+    python3 - "$CHECK" "$REPORT_DIR" <<'PYTEST'
+import json, runpy, sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd() / "scripts"))
+supervisor = runpy.run_path("scripts/run-node-acceptance.py")
+check, report = sys.argv[1], Path(sys.argv[2])
+name = ("khor_agent::conversations::tests::approval_answers_reach_only_the_conversation_that_owns_the_run" if check == "approval"
+        else "khor_agent::runtime_close_tests::running_token_retry_is_idempotent_and_its_record_writer_blocks_close")
+binary, _ = supervisor["select_binary"](report / "targeted-artifacts.json", Path.cwd())
+arguments = [name, "--exact", "--nocapture", "--test-threads=1"] + (["--ignored"] if check == "close" else [])
+result, raw = supervisor["run"](binary, arguments, report / f"{check}.log", Path.cwd())
+supervisor["require_test_success"](raw, name, set())
+(report / f"{check}-result.json").write_text(json.dumps(result, indent=2) + "\n")
+print(raw)
+PYTEST
     exit 0
     ;;
   full) ;;

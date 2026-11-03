@@ -10,11 +10,11 @@ on:
         type: string
 
       check:
-        description: Full acceptance or the isolated conversation approval regression
+        description: Full acceptance or an isolated approval/close regression
         required: true
         default: full
         type: choice
-        options: [full, approval]
+        options: [full, approval, close]
 
 permissions:
   contents: read
