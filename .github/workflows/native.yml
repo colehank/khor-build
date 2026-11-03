@@ -12,36 +12,57 @@ on:
 permissions:
   contents: read
 
-env:
-  GIT_CONFIG_COUNT: "1"
-  GIT_CONFIG_KEY_0: http.version
-  GIT_CONFIG_VALUE_0: HTTP/1.1
-
 concurrency:
   group: mac-mini-worker
   cancel-in-progress: false
 
 jobs:
-  native:
-    runs-on: [khor-mac-mini, khor-dev]
-    timeout-minutes: 180
+  prepare-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Give checkout an isolated writable Git configuration
-        shell: bash
-        run: |
-          umask 077
-          git_config="$RUNNER_TEMP/checkout-$GITHUB_RUN_ID.gitconfig"
-          : > "$git_config"
-          printf 'GIT_CONFIG_GLOBAL=%s\n' "$git_config" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Package the pinned public source and build driver
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          package_dir="$RUNNER_TEMP/source-package"
+          mkdir -p "$package_dir"
+          git init --bare "$package_dir/source.git"
+          git -C "$package_dir/source.git" -c credential.helper= fetch --depth=1 https://github.com/colehank/khor.git "$SOURCE_SHA"
+          git -C "$package_dir/source.git" update-ref refs/heads/source FETCH_HEAD
+          git -C "$package_dir/source.git" symbolic-ref HEAD refs/heads/source
+          test "$(git --git-dir="$package_dir/source.git" rev-parse HEAD)" = "$SOURCE_SHA"
+          cp scripts/native.sh "$package_dir/native.sh"
+          printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pinned-source
+          path: ${{ runner.temp }}/source-package
+          retention-days: 7
+
+  native:
+    needs: prepare-source
+    permissions: {}
+    runs-on: [khor-mac-mini, khor-dev]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: pinned-source
+          path: ${{ runner.temp }}/source-package
       - name: Build and test pinned public Khor source
         shell: bash
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_PACKAGE: ${{ runner.temp }}/source-package
           REPORT_DIR: ${{ runner.temp }}/native-evidence
-        run: /Users/z13/khor-builder/bin/run-build /bin/bash scripts/native.sh
+        run: /Users/z13/khor-builder/bin/run-build /bin/bash "$SOURCE_PACKAGE/native.sh"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

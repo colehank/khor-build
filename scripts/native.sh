@@ -9,6 +9,8 @@ if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 source_dir=/Users/z13/khor-builder/work/khor
+source_repo="$SOURCE_PACKAGE/source.git"
+test "$(git --git-dir="$source_repo" rev-parse HEAD)" = "$SOURCE_SHA"
 if [[ ! -d "$source_dir/.git" ]]; then
   git init "$source_dir"
   git -C "$source_dir" remote add origin https://github.com/colehank/khor.git
@@ -17,7 +19,7 @@ if [[ -n "$(git -C "$source_dir" status --porcelain --untracked-files=no)" ]]; t
   echo 'Tracked source edits exist; preserving them and refusing checkout' >&2
   exit 2
 fi
-git -C "$source_dir" -c credential.helper= -c http.version=HTTP/1.1 fetch --depth=1 origin "$SOURCE_SHA"
+git -C "$source_dir" -c protocol.file.allow=always fetch --depth=1 --update-shallow "$source_repo" "$SOURCE_SHA"
 git -C "$source_dir" checkout --detach "$SOURCE_SHA"
 test "$(git -C "$source_dir" rev-parse HEAD)" = "$SOURCE_SHA"
 cd "$source_dir"
