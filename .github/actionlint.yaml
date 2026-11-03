@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - khor-mac-mini
+    - khor-dev

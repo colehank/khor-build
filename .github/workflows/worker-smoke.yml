@@ -1,0 +1,41 @@
+name: Mac worker smoke
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mac-mini-worker
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: [khor-mac-mini, khor-dev]
+    timeout-minutes: 10
+    steps:
+      - name: Verify native toolchain and build guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = z13
+          test "$(uname -m)" = arm64
+          source /Users/z13/khor-builder/env.sh
+          node --version
+          bun --version
+          rustc --version
+          cargo --version
+          xcodebuild -version
+          xcodebuild -checkFirstLaunchStatus
+          xcrun --sdk macosx --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-version
+          probe_dir=$(mktemp -d "$TMPDIR/actions-smoke.XXXXXX")
+          trap 'rm -rf "$probe_dir"' EXIT
+          printf '%s\n' '#include <stdio.h>' 'int main(void) { puts("Khor worker ready"); return 0; }' > "$probe_dir/probe.c"
+          /Users/z13/khor-builder/bin/run-build xcrun --sdk macosx clang "$probe_dir/probe.c" -o "$probe_dir/probe"
+          "$probe_dir/probe"
+          {
+            echo 'Mac mini worker is online.'
+            echo 'Native C compilation and scoped Xcode/Rust/Node/Bun checks passed.'
+            echo 'No signing, deployment, or product installation was performed.'
+          } >> "$GITHUB_STEP_SUMMARY"
