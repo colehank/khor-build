@@ -150,6 +150,9 @@ PYTEST
   contracts)
     test -x "$KHOR_AGENT_BUNDLE"
     run_tests runtime-image -p khor-cli --test runtime_image
+    run_tests agent-hook-retirement -p khor-cli --test run
+    run_tests agent-recognition -p khor-node --lib recognition::tests
+    run_tests agent-native-status -p khor-node --lib adaptor::claude::
     run_tests conversations -p khor-node --lib khor_agent::conversations::tests
     run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
     run_tests pairing-progress -p khor-node --lib unfinished_bootstrap_is_progress
@@ -198,6 +201,9 @@ cargo test --locked -p khor-node --lib --no-run --message-format=json > "$REPORT
 python3 scripts/native_provenance.py verify --prepared "$REPORT_DIR/node-prepared.json" --artifacts "$REPORT_DIR/node-artifacts.json" --output "$REPORT_DIR/node-provenance.json"
 python3 scripts/run-node-acceptance.py --suite runtime-close --artifacts "$REPORT_DIR/node-artifacts.json" --provenance "$REPORT_DIR/node-provenance.json" --worker-provenance "$REPORT_DIR/cli-provenance.json" --output "$REPORT_DIR/node-native-close"
 run_tests runtime-image -p khor-cli --test runtime_image
+run_tests agent-hook-retirement -p khor-cli --test run
+run_tests agent-recognition -p khor-node --lib recognition::tests
+run_tests agent-native-status -p khor-node --lib adaptor::claude::
 run_tests conversations -p khor-node --lib khor_agent::conversations::tests
 run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
 run_tests pi-usage -p khor-node --lib accounts::pi_usage
