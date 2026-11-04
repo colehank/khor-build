@@ -40,6 +40,12 @@ if [[ "$DEV_TASK" = updates ]]; then
   git diff --binary -- '*.rs' > "$REPORT_DIR/format.patch"
   cargo test --locked -p khor-update -p khor-runtime 2>&1 | tee "$REPORT_DIR/updates.log"
   cargo test --locked -p khor-commands --lib 2>&1 | tee "$REPORT_DIR/commands.log"
+  if [[ -f apps/gui/src-tauri/src/app_updates.rs ]]; then
+    npm ci --prefix apps/gui
+    npm run build --prefix apps/gui
+    git diff --binary -- apps/gui/src/gen > "$REPORT_DIR/bindings.patch"
+    cargo check --locked -p khor-gui --lib 2>&1 | tee "$REPORT_DIR/desktop-updates.log"
+  fi
   exit 0
 fi
 install_dependencies() {
