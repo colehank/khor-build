@@ -38,13 +38,13 @@ run_tests() {
 }
 case "${CHECK:-full}" in
   files)
+    test "$(git --git-dir="$SOURCE_PACKAGE/swift-rs.git" rev-parse --is-bare-repository)" = true
+    cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
     run_tests original-file-handoff -p khor-gui-core --lib file_handoff::tests
     npm ci --prefix apps/gui
     npm run build --prefix apps/gui
     cargo check --locked -p khor-gui --lib
     rustup target add aarch64-apple-ios
-    test -d "$SOURCE_PACKAGE/swift-rs.git"
-    cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
     export GIT_CONFIG_COUNT=1
     export GIT_CONFIG_KEY_0="url.file://$SOURCE_PACKAGE/swift-rs.git.insteadOf"
     export GIT_CONFIG_VALUE_0=https://github.com/Brendonovich/swift-rs

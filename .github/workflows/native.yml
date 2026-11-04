@@ -49,6 +49,7 @@ jobs:
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
           if [[ "$CHECK" = files ]]; then
             git -c credential.helper= clone --mirror https://github.com/Brendonovich/swift-rs "$package_dir/swift-rs.git"
+            git --git-dir="$package_dir/swift-rs.git" update-ref refs/khor/source HEAD
             git --git-dir="$package_dir/swift-rs.git" rev-parse HEAD > "$package_dir/swift-rs-sha.txt"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
