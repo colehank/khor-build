@@ -153,6 +153,10 @@ PYTEST
     run_tests agent-hook-retirement -p khor-cli --test run
     run_tests agent-recognition -p khor-node --lib recognition::tests
     run_tests agent-native-status -p khor-node --lib adaptor::claude::
+    run_tests agent-native-unread -p khor-node --lib native_claude_state_supersedes_retired_hook_reports
+    run_tests agent-terminal-seat -p khor-node --lib a_khor_terminal_wears_the_agent_inside_it
+    run_tests agent-native-identity -p khor-node --lib a_native_status_file_identifies_the_vendor
+    run_tests agent-roster -p khor-node --lib what_is_on_the_list_is_the_users_choice
     run_tests conversations -p khor-node --lib khor_agent::conversations::tests
     run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
     run_tests pairing-progress -p khor-node --lib unfinished_bootstrap_is_progress
@@ -204,6 +208,10 @@ run_tests runtime-image -p khor-cli --test runtime_image
 run_tests agent-hook-retirement -p khor-cli --test run
 run_tests agent-recognition -p khor-node --lib recognition::tests
 run_tests agent-native-status -p khor-node --lib adaptor::claude::
+run_tests agent-native-unread -p khor-node --lib native_claude_state_supersedes_retired_hook_reports
+run_tests agent-terminal-seat -p khor-node --lib a_khor_terminal_wears_the_agent_inside_it
+run_tests agent-native-identity -p khor-node --lib a_native_status_file_identifies_the_vendor
+run_tests agent-roster -p khor-node --lib what_is_on_the_list_is_the_users_choice
 run_tests conversations -p khor-node --lib khor_agent::conversations::tests
 run_tests conversation-commands -p khor-gui-core --lib console::tests::slash_receipts
 run_tests pi-usage -p khor-node --lib accounts::pi_usage
