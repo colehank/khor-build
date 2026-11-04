@@ -43,7 +43,7 @@ case "$DEV_TASK" in
   fast)
     printf 'Runner ProcessType: '
     /usr/libexec/PlistBuddy -c 'Print :ProcessType' /Library/LaunchDaemons/com.khor.github-runner.macmini.plist
-    /usr/bin/taskpolicy -B -t 0 -l 0 -p $$
+    /usr/sbin/taskpolicy -B -t 0 -l 0 -p $$
     if [[ ! -x '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' ]]; then
       (cd apps/gui && node node_modules/playwright-core/cli.js install chrome)
     fi
