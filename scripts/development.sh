@@ -40,6 +40,7 @@ if [[ "$DEV_TASK" = updates ]]; then
   git diff --binary -- '*.rs' > "$REPORT_DIR/format.patch"
   cargo test --locked -p khor-update -p khor-runtime 2>&1 | tee "$REPORT_DIR/updates.log"
   cargo test --locked -p khor-commands --lib 2>&1 | tee "$REPORT_DIR/commands.log"
+  cargo test --locked -p khor-cli --test runtime_image activation_check_and_incompatible_local_runtime_never_open_user_data -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/update-activation.log"
   if [[ -f apps/gui/src-tauri/src/app_updates.rs ]]; then
     npm ci --prefix apps/gui
     npm run gen --prefix apps/gui
