@@ -38,6 +38,14 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
+  update-lab)
+    npm ci --prefix apps/agent
+    node apps/agent/build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE"
+    npm ci --prefix apps/gui
+    npm run build --prefix apps/gui
+    python3 "$SOURCE_PACKAGE/update-lab.py"
+    exit 0
+    ;;
   files)
     test "$(git --git-dir="$SOURCE_PACKAGE/swift-rs.git" rev-parse --is-bare-repository)" = true
     cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"

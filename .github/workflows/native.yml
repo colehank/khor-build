@@ -13,7 +13,7 @@ on:
         required: true
         default: full
         type: choice
-        options: [full, approval, close, contracts, files, pair, keeper, startup, ssh-evidence, ssh]
+        options: [full, approval, close, contracts, files, pair, keeper, startup, ssh-evidence, ssh, update-lab]
 
 permissions:
   contents: read
@@ -46,6 +46,7 @@ jobs:
           git -C "$package_dir/source.git" symbolic-ref HEAD refs/heads/source
           test "$(git --git-dir="$package_dir/source.git" rev-parse HEAD)" = "$SOURCE_SHA"
           cp scripts/native.sh "$package_dir/native.sh"
+          cp scripts/update-lab.py "$package_dir/update-lab.py"
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
           if [[ "$CHECK" = files ]]; then
             git -c credential.helper= clone --mirror https://github.com/Brendonovich/swift-rs "$package_dir/swift-rs.git"
