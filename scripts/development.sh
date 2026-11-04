@@ -50,6 +50,9 @@ if [[ "$DEV_TASK" = updates ]]; then
     export KHOR_TEST_CHROME=1
     npm run chat-drafts --prefix apps/gui
     npm run updates-ui --prefix apps/gui
+    export WORKSPACE_RESTART_REQUIRE=1
+    export WORKSPACE_CONTENT_DIR="$REPORT_DIR/workspace-restart"
+    npm run workspace-content-ui --prefix apps/gui
   fi
   exit 0
 fi
