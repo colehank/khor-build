@@ -41,6 +41,9 @@ install_dependencies agent
 install_dependencies gui
 case "$DEV_TASK" in
   fast)
+    if [[ ! -x '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' ]]; then
+      (cd apps/gui && node node_modules/playwright-core/cli.js install chrome)
+    fi
     npm run gen --prefix apps/gui
     python3 scripts/local_checks.py gui
     python3 scripts/local_checks.py agent
