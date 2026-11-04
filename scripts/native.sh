@@ -37,6 +37,15 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
+  files)
+    run_tests original-file-handoff -p khor-gui-core --lib file_handoff::tests
+    npm ci --prefix apps/gui
+    npm run build --prefix apps/gui
+    cargo check --locked -p khor-gui --lib
+    rustup target add aarch64-apple-ios
+    cargo check --locked -p khor-gui --lib --target aarch64-apple-ios
+    exit 0
+    ;;
   ssh-evidence)
     python3 - "$CARGO_TARGET_DIR/tmp" "$REPORT_DIR" <<'PYSSH'
 import json, shutil, sys
