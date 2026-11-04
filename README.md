@@ -62,6 +62,14 @@ transport snapshot and materialized build commit. `task.log` retains failure out
 `dev-lab/source.json` also hashes the archive. These receipts describe development
 provenance, **not a release attestation**: the rented host remains untrusted.
 
+Development jobs use macOS application resource policies via `/usr/sbin/taskpolicy`;
+browser checks also clear inherited background I/O and timer latency tiers for
+their own process. The runner daemon itself stays in the Background class.
+This avoids launchd coalescing short browser timers while preserving the shared
+build slot, memory/disk admission checks and idle daemon policy. No timing
+assertions or product timeouts are relaxed (see `man launchd.plist` and
+`man taskpolicy`).
+
 Each completed request retires only its own matching `dev-snapshots/<request_id>`
 branch. Source/Lab artifacts expire after 3 days; evidence after 7 days.
 An interrupted dispatch can leave a source branch; compare the local request
