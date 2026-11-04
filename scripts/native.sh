@@ -71,6 +71,25 @@ PYTEST
     ;;
   keeper)
     test -x "$KHOR_AGENT_BUNDLE"
+    python3 - "$CARGO_TARGET_DIR/debug/khor" "$REPORT_DIR" <<'PYPROFILE'
+import json, subprocess, sys, time
+from pathlib import Path
+program, report = sys.argv[1], Path(sys.argv[2])
+started = time.monotonic()
+with subprocess.Popen([program, "_runtime_check", program], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+    try:
+        time.sleep(1)
+        if process.poll() is None:
+            subprocess.run(["/usr/bin/sample", str(process.pid), "2", "-file", str(report / "activation-sample.txt")], timeout=10, check=False)
+        out, err = process.communicate(timeout=120)
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+result = {"seconds": time.monotonic() - started, "returncode": process.returncode, "stdout": out.decode(), "stderr": err.decode()}
+(report / "activation-timing.json").write_text(json.dumps(result, indent=2) + "\n")
+print(json.dumps(result))
+PYPROFILE
     run_tests keeper -p khor-cli --test serve_keeper
     exit 0
     ;;
