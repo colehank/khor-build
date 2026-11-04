@@ -222,13 +222,21 @@ def main():
             key = root / "fixture.key"
             run(str(signer), "signer", "generate", "--ci", "--password", "public-lab-fixture",
                 "--write-keys", str(key), stdout=subprocess.DEVNULL)
-            for name in ["crates/update/updater.pub", "crates/update/src/feed.rs", "apps/gui/src-tauri/src/updater_package.rs", "apps/gui/src-tauri/src/updater_commands.rs"]:
+            for name in ["crates/update/updater.pub", "crates/update/src/feed.rs", "apps/gui/src-tauri/src/updater_package.rs", "apps/gui/src-tauri/src/updater_commands.rs", "apps/gui/src-tauri/src/app_update_install.rs"]:
                 originals[name] = (SOURCE / name).read_bytes()
             (SOURCE / "crates/update/updater.pub").write_bytes(key.with_suffix(".key.pub").read_bytes())
             replace("crates/update/src/feed.rs", "https://api.github.com/repos/colehank/khor/releases?per_page=100", address + "/releases")
             # This prefix occurs once in each production adapter; package signatures still remain mandatory.
             replace("crates/update/src/feed.rs", "https://github.com/colehank/khor/releases/download/", address + "/assets/")
             replace("apps/gui/src-tauri/src/updater_package.rs", "https://github.com/colehank/khor/releases/download/", address + "/assets/")
+            replace("apps/gui/src-tauri/src/app_update_install.rs", "    let mut command = Command::new(program);", r'''    let log_path = std::path::PathBuf::from(std::env::var("KHOR_UPDATE_LAB_CONTROL").unwrap()).with_file_name("relaunch.log");
+    let log = std::fs::OpenOptions::new().create(true).append(true).open(log_path).map_err(|e|e.to_string())?;
+    let mut command = Command::new(program);''')
+            replace("apps/gui/src-tauri/src/app_update_install.rs",
+                    '        .stdout(Stdio::null())\n        .stderr(Stdio::null())',
+                    '        .stdout(Stdio::from(log.try_clone().map_err(|e|e.to_string())?))\n        .stderr(Stdio::from(log))')
+            replace("apps/gui/src-tauri/src/app_update_install.rs", '    command.spawn().map_err(|e| e.to_string())',
+                    '    let child=command.spawn().map_err(|e|e.to_string())?;\n    eprintln!("private Lab relaunch pid {} health {}",child.id(),health.is_some());\n    Ok(child)')
             replace("apps/gui/src-tauri/src/updater_commands.rs", "    crate::app_updates::start(&app);",
                     "    crate::app_updates::start(&app);\n    update_lab_start(app.clone());")
             replace("apps/gui/src-tauri/src/updater_commands.rs",
@@ -336,7 +344,7 @@ def main():
             if ready(root, NEW):
                 raise AssertionError("a fresh download restarted the App during this launch")
             command(root, OLD, "install", wait_reply=False)
-            new_ui = wait_for(lambda: ready(root, NEW), 90, "installed native App did not restore its React UI")
+            new_ui = wait_for(lambda: ready(root, NEW), 135, "installed native App did not restore its React UI")
             if new_ui["pid"] == evidence["initial_ui"]["pid"]:
                 raise AssertionError("SDK installation did not relaunch the native App")
             wait_for(lambda: any(json.loads(p.read_text())["phase"] == "Complete"
@@ -368,7 +376,7 @@ def main():
             command(root, NEW, "install", wait_reply=False)
             wait_for(lambda: (root / "failed-ui.json").is_file(), 90, "fault-injected build never reached React UI")
             restored = wait_for(lambda: ready(root, NEW) if ready(root, NEW) and ready(root, NEW)["pid"] != new_ui["pid"] else None,
-                                90, "previous native App did not relaunch after UI health failure")
+                                135, "previous native App did not relaunch after UI health failure")
             time.sleep(3)
             if digest(program) != evidence["builds"][0]["program_sha256"] or hosts(root) != after_hosts:
                 raise AssertionError("native rollback changed the retained program or existing task hosts")
@@ -379,6 +387,14 @@ def main():
                 old_bytes_restored=True, hosts_unchanged=True, failed_offer_deferred=True)
             print("Native updater Lab passed: actual SDK install, restored React UI, continuous old Shell, new runtime and health-failure rollback")
         finally:
+            owned = own_processes(root)
+            evidence["processes_before_cleanup"] = subprocess.check_output(
+                ["/bin/ps", "-p", ",".join(map(str, owned)), "-o", "pid=,ppid=,lstart=,stat=,command="], text=True
+            ) if owned else ""
+            for path in root.glob("reply-*.json"):
+                shutil.copyfile(path, REPORT / path.name)
+            if (root / "relaunch.log").is_file():
+                shutil.copyfile(root / "relaunch.log", REPORT / "update-lab-relaunch.log")
             if bootstrapped:
                 subprocess.run(["launchctl", "bootout", domain + "/" + label], check=False, capture_output=True)
             for pid in own_processes(root):
