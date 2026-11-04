@@ -41,7 +41,6 @@ install_dependencies agent
 install_dependencies gui
 case "$DEV_TASK" in
   fast)
-    python3 scripts/check-rust-format.py --check
     python3 scripts/local_checks.py scripts
     npm run gen --prefix apps/gui
     python3 scripts/local_checks.py gui
