@@ -241,6 +241,10 @@ def interrupted_install(root, program, expected_digest, initial_ui, before_hosts
     pid = initial_ui["pid"]
     if pid not in own_processes(root):
         raise AssertionError("the isolated parent App exited before the interruption fixture")
+    os.kill(pid, signal.SIGSTOP)
+    if json.loads(receipt.read_text())["phase"] != "Installing":
+        os.kill(pid, signal.SIGCONT)
+        raise AssertionError("interruption fixture missed the SDK installation window")
     os.kill(pid, signal.SIGKILL)
     restored = wait_for(lambda: ready(root, OLD) if ready(root, OLD) and ready(root, OLD)["pid"] != pid else None,
                         135, "interrupted installation did not restore the previous native App")
