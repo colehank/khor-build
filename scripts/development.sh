@@ -51,6 +51,7 @@ case "$DEV_TASK" in
     python3 scripts/local_checks.py gui
     export KHOR_TEST_CHROME=1
     npm run list-scroll-ui --prefix apps/gui
+    npm run file-handoff --prefix apps/gui
     npm run khor-conversations-ui --prefix apps/gui
     python3 scripts/local_checks.py agent
     ;;
