@@ -61,11 +61,18 @@ jobs:
         with:
           components: rustfmt
       - name: Check portable Rust formatting on the hosted lint machine
+        id: rust-format
         if: inputs.task == 'fast'
         working-directory: ${{ runner.temp }}/portable-source
         run: |
           set -euo pipefail
           python3 scripts/check-rust-format.py --check 2>&1 | tee "$RUNNER_TEMP/portable-evidence/format.log"
+      - name: Attach the formatter patch for a source-only checkout
+        if: always() && inputs.task == 'fast' && steps.rust-format.outcome == 'failure'
+        working-directory: ${{ runner.temp }}/portable-source
+        run: |
+          python3 scripts/check-rust-format.py --write
+          git diff --binary > "$RUNNER_TEMP/portable-evidence/format.patch"
       - name: Run the portable script suite in its canonical CI environment
         if: inputs.task == 'fast'
         working-directory: ${{ runner.temp }}/portable-source
