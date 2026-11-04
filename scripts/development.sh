@@ -6,6 +6,9 @@ export CARGO_TERM_COLOR=never
 export CARGO_HTTP_MULTIPLEXING=false
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
+test "$(python3 -c 'import json,os; print(json.load(open(os.environ["REPORT_DIR"]+"/source.json"))["snapshot_commit"])')" = "$SOURCE_SHA"
+SOURCE_SHA=$(python3 -c 'import json,os; print(json.load(open(os.environ["REPORT_DIR"]+"/source.json"))["build_commit"])')
+export SOURCE_SHA
 printf '%s\n' "$DEV_TASK" > "$REPORT_DIR/task.txt"
 if [[ "$DEV_TASK" = native ]]; then
   /bin/bash "$SOURCE_PACKAGE/native.sh"

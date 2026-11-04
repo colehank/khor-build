@@ -24,7 +24,9 @@ class PrepareDevelopmentTest(unittest.TestCase):
             git("add", ".")
             tree = git("write-tree")
             info = {"schema": 1, "base_commit": "a" * 40, "tree": tree, "dirty": True}
-            sha = git("commit-tree", tree, "-m", "Khor developer snapshot\n\n" + json.dumps(info))
+            container = subprocess.check_output(["git", "-C", str(source), "mktree"],
+                                                input=f"040000 tree {tree}\tsource\n", text=True, env=env).strip()
+            sha = git("commit-tree", container, "-m", "Khor developer snapshot\n\n" + json.dumps(info))
             git("checkout", "--detach", sha)
             package = Path(directory) / "package"
             subprocess.run([sys.executable, str(script), str(source), str(package)],
@@ -38,8 +40,12 @@ class PrepareDevelopmentTest(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(path, target)
             result = subprocess.check_output(["git", "--git-dir=" + str(restored / "source.git"), "rev-parse", "HEAD"], env=env, text=True).strip()
-            self.assertEqual(result, sha)
-            self.assertEqual(json.loads((restored / "source.json").read_text())["tree"], tree)
+            actual = json.loads((restored / "source.json").read_text())
+            self.assertEqual(result, actual["build_commit"])
+            self.assertEqual(actual["snapshot_commit"], sha)
+            self.assertEqual(actual["tree"], tree)
+            materialized = subprocess.check_output(["git", "--git-dir=" + str(restored / "source.git"), "ls-tree", "--name-only", "HEAD"], env=env, text=True).strip()
+            self.assertEqual(materialized, "test.txt")
             config = (restored / "source.git/config").read_text()
             self.assertNotIn("extraheader", config.lower())
             self.assertNotIn("[remote", config)
