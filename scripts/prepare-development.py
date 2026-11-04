@@ -28,6 +28,8 @@ assert info["tree"] == git(source, "rev-parse", "HEAD^{tree}")
 info["snapshot_commit"] = sha
 output.mkdir(parents=True, exist_ok=False)
 subprocess.run(["git", "clone", "--bare", "--no-hardlinks", str(source.resolve()), str(output / "source.git")], check=True)
+subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "update-ref", "refs/heads/source", sha], check=True)
+subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "symbolic-ref", "HEAD", "refs/heads/source"], check=True)
 # checkout's auth header belongs to its working repository; clone --bare does not copy it.
 subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "remote", "remove", "origin"], check=True)
 for name in ["native.sh", "development.sh", "package-lab.py"]:
