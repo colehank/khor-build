@@ -49,6 +49,7 @@ if [[ "$DEV_TASK" = updates ]]; then
     cargo test --locked -p khor-gui --lib update_ -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-update-contracts.log"
     export KHOR_TEST_CHROME=1
     npm run chat-drafts --prefix apps/gui
+    npm run workspace-memory --prefix apps/gui
     npm run updates-ui --prefix apps/gui
     export WORKSPACE_RESTART_REQUIRE=1
     export WORKSPACE_CONTENT_DIR="$REPORT_DIR/workspace-restart"
