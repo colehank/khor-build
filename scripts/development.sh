@@ -51,9 +51,16 @@ case "$DEV_TASK" in
     python3 scripts/local_checks.py gui
     export KHOR_TEST_CHROME=1
     npm run list-scroll-ui --prefix apps/gui
-    npm run file-handoff --prefix apps/gui
     npm run khor-conversations-ui --prefix apps/gui
     python3 scripts/local_checks.py agent
+    export FILE_HANDOFF_OUT="$REPORT_DIR/file-handoff"
+    npm run file-handoff --prefix apps/gui
+    export FILE_HANDOFF_OUT="$REPORT_DIR/quicklook"
+    npm run quicklook --prefix apps/gui
+    if node -e 'process.exit(JSON.parse(require("fs").readFileSync("apps/gui/package.json")).scripts["file-pdf-ui"]?0:1)'; then
+      export FILE_HANDOFF_OUT="$REPORT_DIR/pdf"
+      npm run file-pdf-ui --prefix apps/gui
+    fi
     ;;
   lab)
     mkdir -p /Users/z13/khor-builder/cache/agent
