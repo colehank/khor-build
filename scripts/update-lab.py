@@ -198,6 +198,28 @@ def hosts(root):
     return found
 
 
+def build_app(app, tag, environment, label):
+    print(f"Native Lab: building {tag}", flush=True)
+    number = tag.rsplit(".", 1)[1]
+    environment.update(KHOR_RELEASE_TAG=tag, KHOR_RELEASE_BUILD=number)
+    run("cargo", "build", "--locked", "-p", "khor-gui", "--bin", "khor-gui", env=environment)
+    primary = Path(environment["CARGO_TARGET_DIR"]) / "debug/khor-gui"
+    primary_digest = digest(primary)
+    program = app / "Contents/MacOS/khor-gui"
+    program.parent.mkdir(parents=True)
+    shutil.copyfile(primary, program)
+    program.chmod(0o755)
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleName": "Khor Update Lab",
+        "CFBundleDisplayName": "Khor Update Lab", "CFBundleIdentifier": label,
+        "CFBundleExecutable": "khor-gui", "CFBundlePackageType": "APPL",
+        "CFBundleVersion": number, "CFBundleShortVersionString": "0.2.0", "NSHighResolutionCapable": True}))
+    run("codesign", "--force", "--deep", "--sign", "-", str(app))
+    info = json.loads(subprocess.check_output([str(program), "_release_info"], env=environment))
+    if info["build"]["release"]["tag"] != tag or info["build"]["source"] != SHA:
+        raise AssertionError("Lab executable has a different source or release identity")
+    return dict(program=info, program_sha256=digest(program)), primary_digest
+
+
 def main():
     REPORT.mkdir(parents=True, exist_ok=True)
     if shutil.disk_usage(SOURCE).free < 20 * 1024 ** 3:
@@ -265,35 +287,11 @@ def main():
                 environment.pop(name, None)
             app = root / "KhorUpdateLab.app"
             program = app / "Contents/MacOS/khor-gui"
-            program.parent.mkdir(parents=True)
-            evidence["builds"] = []
-            for tag in [NEW, FAILED, OLD]:
-                number = tag.rsplit(".", 1)[1]
-                environment.update(KHOR_RELEASE_TAG=tag, KHOR_RELEASE_BUILD=number)
-                run("cargo", "build", "--locked", "-p", "khor-gui", "--bin", "khor-gui", env=environment)
-                primary = Path(environment["CARGO_TARGET_DIR"]) / "debug/khor-gui"
-                lab_binary_digest = digest(primary)
-                shutil.copyfile(primary, program)
-                program.chmod(0o755)
-                (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleName": "Khor Update Lab",
-                    "CFBundleDisplayName": "Khor Update Lab", "CFBundleIdentifier": label,
-                    "CFBundleExecutable": "khor-gui", "CFBundlePackageType": "APPL",
-                    "CFBundleVersion": number, "CFBundleShortVersionString": "0.2.0", "NSHighResolutionCapable": True}))
-                run("codesign", "--force", "--deep", "--sign", "-", str(app))
-                info = json.loads(subprocess.check_output([str(program), "_release_info"], env=environment))
-                if info["build"]["release"]["tag"] != tag or info["build"]["source"] != SHA:
-                    raise AssertionError("Lab executable has a different source or release identity")
-                record = dict(program=info, program_sha256=digest(program))
-                if tag != OLD:
-                    record.update(publish_fixture(root, signer, key, app, info, address))
-                evidence["builds"].append(record)
-            evidence["program"] = info
-            identity = evidence["program"]["build"]["release"]
-            if identity["tag"] != OLD or identity["source"] != SHA:
-                raise AssertionError("Lab executable has a different source or release identity")
-            with program.open("rb") as stream:
-                evidence["program_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
-            lab_binary_digest = evidence["program_sha256"]
+            record, lab_binary_digest = build_app(app, OLD, environment, label)
+            builds = {OLD: record}
+            evidence["builds"] = builds
+            evidence["program"] = record["program"]
+            evidence["program_sha256"] = record["program_sha256"]
             home = root / "data"
             runtime = root / "runtime"
             log = root / "app.log"
@@ -333,6 +331,11 @@ def main():
             before_hosts = wait_for(lambda: hosts(root), 30, "native Shell host did not start")
             wait_for(lambda: heartbeat.exists() and heartbeat.stat().st_size > 0, 30, "Shell heartbeat did not start")
             evidence["old_host"] = dict(session=session, processes=before_hosts)
+            new_app = root / "packages" / NEW / app.name
+            record, lab_binary_digest = build_app(new_app, NEW, environment, label)
+            record.update(publish_fixture(root, signer, key, new_app, record["program"], address))
+            builds[NEW] = record
+            print("Native Lab: checking, downloading and installing the new App", flush=True)
             Feed.routes["/releases"] = json.dumps([dict(tag_name=NEW, draft=False, prerelease=True)]).encode()
             checked = command(root, OLD, "check")
             if checked["available"] != NEW:
@@ -357,7 +360,7 @@ def main():
             rows = command(root, NEW, "sessions")
             if session not in json.dumps(rows):
                 raise AssertionError("updated native App lost its existing Shell session")
-            if digest(program) != evidence["builds"][0]["program_sha256"]:
+            if digest(program) != builds[NEW]["program_sha256"]:
                 raise AssertionError("installed App bytes do not match the actual new build")
             evidence["sdk_update"] = dict(ui=new_ui, phase="Complete", host_unchanged=True, task_continues=True)
             next_session = command(root, NEW, "shell", command=shell, token="native-update-lab-new")
@@ -368,6 +371,11 @@ def main():
             if not new_commands or old_commands & new_commands:
                 raise AssertionError("new Shell reused the previous runtime executable")
             evidence["new_host"] = dict(session=next_session, processes=after_hosts, new_runtime=True)
+            failed_app = root / "packages" / FAILED / app.name
+            record, lab_binary_digest = build_app(failed_app, FAILED, environment, label)
+            record.update(publish_fixture(root, signer, key, failed_app, record["program"], address))
+            builds[FAILED] = record
+            print("Native Lab: checking UI-health failure rollback", flush=True)
             Feed.routes["/releases"] = json.dumps([dict(tag_name=FAILED, draft=False, prerelease=True)]).encode()
             command(root, NEW, "check")
             downloaded = command(root, NEW, "download")
@@ -378,7 +386,7 @@ def main():
             restored = wait_for(lambda: ready(root, NEW) if ready(root, NEW) and ready(root, NEW)["pid"] != new_ui["pid"] else None,
                                 135, "previous native App did not relaunch after UI health failure")
             time.sleep(3)
-            if digest(program) != evidence["builds"][0]["program_sha256"] or hosts(root) != after_hosts:
+            if digest(program) != builds[NEW]["program_sha256"] or hosts(root) != after_hosts:
                 raise AssertionError("native rollback changed the retained program or existing task hosts")
             deferred = runtime / "app-updates/deferred.json"
             if not deferred.is_file() or FAILED not in deferred.read_text():
@@ -388,9 +396,14 @@ def main():
             print("Native updater Lab passed: actual SDK install, restored React UI, continuous old Shell, new runtime and health-failure rollback")
         finally:
             owned = own_processes(root)
-            evidence["processes_before_cleanup"] = subprocess.check_output(
-                ["/bin/ps", "-p", ",".join(map(str, owned)), "-o", "pid=,ppid=,lstart=,stat=,command="], text=True
-            ) if owned else ""
+            evidence["processes_before_cleanup"] = subprocess.run(
+                ["/bin/ps", "-p", ",".join(map(str, owned)), "-o", "pid=,ppid=,lstart=,stat=,command="],
+                text=True, capture_output=True, check=False
+            ).stdout if owned else ""
+            evidence["parent_lock_holders"] = []
+            for path in (root / "runtime").glob("app-updates/install-*/parent.lock"):
+                evidence["parent_lock_holders"].append(subprocess.run(
+                    ["/usr/sbin/lsof", "-n", "-P", str(path)], text=True, capture_output=True, check=False).stdout)
             for path in root.glob("reply-*.json"):
                 shutil.copyfile(path, REPORT / path.name)
             if (root / "relaunch.log").is_file():
