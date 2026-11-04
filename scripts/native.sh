@@ -43,6 +43,23 @@ import json, os, shutil, signal, subprocess, sys, tempfile, time
 from pathlib import Path
 program, report = sys.argv[1], Path(sys.argv[2])
 with tempfile.TemporaryDirectory(prefix="khor-startup-profile-") as home:
+    timings = []
+    for index in range(3):
+        candidate = Path(home) / f"cold-candidate-{index}"
+        shutil.copyfile(program, candidate)
+        candidate.chmod(0o700)
+        before_spawn = time.monotonic()
+        cold = subprocess.Popen([str(candidate), "_runtime_info"], env={}, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        spawned = time.monotonic()
+        try:
+            cold_out, cold_err = cold.communicate(timeout=20)
+        finally:
+            if cold.poll() is None:
+                cold.kill()
+                cold.wait()
+        timings.append({"spawn_seconds": spawned - before_spawn, "execution_seconds": time.monotonic() - spawned, "returncode": cold.returncode, "stdout_bytes": len(cold_out), "stderr": cold_err.decode()})
+        candidate.unlink()
+    (report / "cold-candidate-timing.json").write_text(json.dumps(timings, indent=2) + "\n")
     copied = Path(home) / "khor-copy"
     shutil.copyfile(program, copied)
     copied.chmod(0o700)
