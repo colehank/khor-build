@@ -39,6 +39,8 @@ if [[ "$DEV_TASK" = updates ]]; then
   python3 scripts/check-rust-format.py --write
   git diff --binary -- '*.rs' > "$REPORT_DIR/format.patch"
   cargo test --locked -p khor-update -p khor-runtime 2>&1 | tee "$REPORT_DIR/updates.log"
+  python3 -m unittest discover -s scripts/tests -p test_install_activation.py 2>&1 | tee "$REPORT_DIR/install-activation.log"
+  python3 scripts/check-release-install.py 2>&1 | tee "$REPORT_DIR/release-install.log"
   cargo test --locked -p khor-commands --lib 2>&1 | tee "$REPORT_DIR/commands.log"
   cargo test --locked -p khor-cli --test runtime_image activation_check_and_incompatible_local_runtime_never_open_user_data -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/update-activation.log"
   if [[ -f apps/gui/src-tauri/src/app_updates.rs ]]; then
