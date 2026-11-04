@@ -37,6 +37,33 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
+  ssh-evidence)
+    python3 - "$CARGO_TARGET_DIR/tmp" "$REPORT_DIR" <<'PYSSH'
+import json, shutil, sys
+from pathlib import Path
+root, report = map(Path, sys.argv[1:])
+cases = sorted(root.glob("add-ssh-*"), key=lambda p: p.stat().st_mtime, reverse=True)
+assert cases, "No retained SSH fixture"
+case = cases[0]
+for name in ["origin.log", "sponsor.log"]:
+    path = case / name
+    if path.is_file():
+        shutil.copyfile(path, report / ("ssh-" + name))
+summary = {"fixture": str(case), "endpoints": {}}
+for node in ["origin", "sponsor"]:
+    path = case / node / ".khor/endpoint.json"
+    if path.is_file():
+        value = json.loads(path.read_text())
+        summary["endpoints"][node] = {k: value.get(k) for k in ["pid", "addrs", "app"]}
+(report / "ssh-fixture-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+PYSSH
+    exit 0
+    ;;
+  ssh)
+    test -x "$KHOR_AGENT_BUNDLE"
+    KHOR_TEST_KEEP=1 run_tests ssh-install -p khor-cli --test add_ssh
+    exit 0
+    ;;
   startup)
     python3 - "$CARGO_TARGET_DIR/debug/khor" "$REPORT_DIR" <<'PYSTARTUP'
 import json, os, shutil, signal, subprocess, sys, tempfile, time

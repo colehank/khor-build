@@ -14,7 +14,7 @@ on:
         required: true
         default: full
         type: choice
-        options: [full, approval, close, contracts, pair, keeper, startup]
+        options: [full, approval, close, contracts, pair, keeper, startup, ssh-evidence, ssh]
 
 permissions:
   contents: read
