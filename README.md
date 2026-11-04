@@ -46,7 +46,7 @@ are sent to the Mac worker; checkout credentials are never forwarded.
 
 Tasks:
 
-- `fast`: hosted Rust format check; Mac script tests, generated bindings,
+- `fast`: hosted Rust format and portable script checks; Mac generated bindings,
   GUI unit/types/design/mobile static checks and Agent unit/types checks.
 - `native`: the existing full Mac native acceptance driver.
 - `lab`: a standalone, ad-hoc signed `KhorLab.zip` for native device acceptance.

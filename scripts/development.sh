@@ -41,8 +41,6 @@ install_dependencies agent
 install_dependencies gui
 case "$DEV_TASK" in
   fast)
-    python3 scripts/sync-install-components.py
-    python3 -m unittest discover -s scripts/tests -p 'test_*.py' --verbose --failfast
     npm run gen --prefix apps/gui
     python3 scripts/local_checks.py gui
     python3 scripts/local_checks.py agent

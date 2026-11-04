@@ -46,14 +46,40 @@ jobs:
         env:
           SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
         run: python3 control/scripts/prepare-development.py source "$RUNNER_TEMP/source-package"
+      - name: Prepare the portable check checkout
+        if: inputs.task == 'fast'
+        run: |
+          git clone --no-hardlinks "$RUNNER_TEMP/source-package/source.git" "$RUNNER_TEMP/portable-source"
+          mkdir -p "$RUNNER_TEMP/portable-evidence"
+          cp "$RUNNER_TEMP/source-package/source.json" "$RUNNER_TEMP/portable-evidence/source.json"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        if: inputs.task == 'fast'
+        with:
+          node-version: 22.19.0
       - uses: dtolnay/rust-toolchain@1.95.0
         if: inputs.task == 'fast'
         with:
           components: rustfmt
       - name: Check portable Rust formatting on the hosted lint machine
         if: inputs.task == 'fast'
-        working-directory: source/source
-        run: python3 scripts/check-rust-format.py --check
+        working-directory: ${{ runner.temp }}/portable-source
+        run: |
+          set -euo pipefail
+          python3 scripts/check-rust-format.py --check 2>&1 | tee "$RUNNER_TEMP/portable-evidence/format.log"
+      - name: Run the portable script suite in its canonical CI environment
+        if: inputs.task == 'fast'
+        working-directory: ${{ runner.temp }}/portable-source
+        run: |
+          set -euo pipefail
+          python3 scripts/sync-install-components.py
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py' --verbose --failfast 2>&1 | tee "$RUNNER_TEMP/portable-evidence/scripts.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always() && inputs.task == 'fast'
+        with:
+          name: dev-portable-evidence
+          path: ${{ runner.temp }}/portable-evidence
+          retention-days: 7
+          if-no-files-found: warn
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: dev-source
