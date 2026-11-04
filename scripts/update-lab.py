@@ -73,6 +73,7 @@ def main():
         label = f"io.github.colehank.khor.update-lab.{os.environ['GITHUB_RUN_ID']}"
         domain = f"gui/{os.getuid()}"
         bootstrapped = False
+        lab_binary_digest = None
         originals = {}
         evidence = {"source": SHA, "mode": "native UI smoke only", "published": False,
                     "formal_signing_key": "never read or transferred"}
@@ -114,8 +115,12 @@ def main():
                 "CFBundleVersion": "900001", "CFBundleShortVersionString": "0.2.0", "NSHighResolutionCapable": True}))
             run("codesign", "--force", "--deep", "--sign", "-", str(app))
             evidence["program"] = json.loads(subprocess.check_output([str(program), "_release_info"], env=environment))
+            identity = evidence["program"]["build"]["release"]
+            if identity["tag"] != OLD or identity["source"] != SHA:
+                raise AssertionError("Lab executable has a different source or release identity")
             with program.open("rb") as stream:
                 evidence["program_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
+            lab_binary_digest = evidence["program_sha256"]
             home = root / "data"
             runtime = root / "runtime"
             ready = root / "ui.ready"
@@ -173,6 +178,11 @@ def main():
                 shutil.copyfile(log, REPORT / "update-lab-app.log")
             for name, contents in originals.items():
                 (SOURCE / name).write_bytes(contents)
+            primary = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/khor-gui"
+            if lab_binary_digest and primary.is_file():
+                with primary.open("rb") as stream:
+                    if hashlib.file_digest(stream, "sha256").hexdigest() == lab_binary_digest:
+                        primary.unlink()  # Keep dependency caches, never a fake-root primary executable.
             server.shutdown()
             (REPORT / "update-lab.json").write_text(json.dumps(evidence, indent=2) + "\n")
 
