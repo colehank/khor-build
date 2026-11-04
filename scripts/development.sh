@@ -33,6 +33,13 @@ if [[ "$DEV_TASK" = resolve ]]; then
   git diff --binary -- Cargo.lock > "$REPORT_DIR/resolve.patch"
   exit 0
 fi
+if [[ "$DEV_TASK" = updates ]]; then
+  trap 'git restore -- crates/update' EXIT
+  cargo fmt -p khor-update
+  git diff --binary -- crates/update > "$REPORT_DIR/format.patch"
+  cargo test --locked -p khor-update 2>&1 | tee "$REPORT_DIR/updates.log"
+  exit 0
+fi
 install_dependencies() {
   local app=$1
   local expected
