@@ -34,10 +34,11 @@ if [[ "$DEV_TASK" = resolve ]]; then
   exit 0
 fi
 if [[ "$DEV_TASK" = updates ]]; then
-  trap 'git restore -- crates/update' EXIT
-  cargo fmt -p khor-update
-  git diff --binary -- crates/update > "$REPORT_DIR/format.patch"
-  cargo test --locked -p khor-update 2>&1 | tee "$REPORT_DIR/updates.log"
+  trap 'git restore -- .' EXIT
+  python3 scripts/check-rust-format.py --write
+  git diff --binary -- '*.rs' > "$REPORT_DIR/format.patch"
+  cargo test --locked -p khor-update -p khor-runtime 2>&1 | tee "$REPORT_DIR/updates.log"
+  cargo test --locked -p khor-commands --lib 2>&1 | tee "$REPORT_DIR/commands.log"
   exit 0
 fi
 install_dependencies() {
