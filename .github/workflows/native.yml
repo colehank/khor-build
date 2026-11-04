@@ -14,7 +14,7 @@ on:
         required: true
         default: full
         type: choice
-        options: [full, approval, close, contracts, pair, keeper]
+        options: [full, approval, close, contracts, pair, keeper, startup]
 
 permissions:
   contents: read

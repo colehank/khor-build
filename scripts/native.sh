@@ -37,6 +37,33 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
+  startup)
+    python3 - "$CARGO_TARGET_DIR/debug/khor" "$REPORT_DIR" <<'PYSTARTUP'
+import os, signal, subprocess, sys, tempfile, time
+from pathlib import Path
+program, report = sys.argv[1], Path(sys.argv[2])
+with tempfile.TemporaryDirectory(prefix="khor-startup-profile-") as home:
+    env = dict(os.environ, KHOR_HOME=home, KHOR_NAME="startup-profile", KHOR_WEB_PORT="0", KHOR_RUNTIME_DIR=str(Path(home) / "runtime"))
+    env.pop("KHOR_SESSION", None)
+    process = subprocess.Popen([program, "serve"], env=env, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(5)
+        if process.poll() is None:
+            subprocess.run(["/usr/bin/sample", str(process.pid), "2", "-file", str(report / "startup-sample.txt")], timeout=10, check=False)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            out, err = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            out, err = process.communicate(timeout=10)
+        (report / "startup-stdout.txt").write_bytes(out)
+        (report / "startup-stderr.txt").write_bytes(err)
+print("Startup profiling completed; this diagnostic does not replace keeper acceptance.")
+PYSTARTUP
+    exit 0
+    ;;
   approval|close|pair)
     test -x "$KHOR_AGENT_BUNDLE"
     # Targeted checks do not replace full provenance, frontend or release gates.
