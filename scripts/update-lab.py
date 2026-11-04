@@ -78,6 +78,11 @@ fn update_lab_start(app: tauri::AppHandle) {
             let id = request["id"].as_u64().unwrap_or(0);
             if id <= last || request["tag"].as_str() != Some(tag) { continue; }
             last = id;
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(root.join(format!("claim-{id}"))) {
+                Ok(_) => {},
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("private Lab request could not be claimed: {e}"),
+            }
             let state = app.state::<crate::app_updates::AppUpdates>();
             let result: Result<serde_json::Value,String> = match request["action"].as_str().unwrap_or("") {
                 "status" => state.status().and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
