@@ -38,7 +38,10 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
-  update-lab)
+  update-lab|update-lab-interrupt)
+    if [[ "$CHECK" = update-lab-interrupt ]]; then
+      export KHOR_UPDATE_LAB_CASE=interrupt
+    fi
     npm ci --prefix apps/agent
     node apps/agent/build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE"
     npm ci --prefix apps/gui

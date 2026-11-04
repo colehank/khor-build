@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import shlex
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -225,6 +226,41 @@ def build_app(app, tag, environment, label):
     return dict(program=info, program_sha256=digest(program)), primary_digest
 
 
+def interrupted_install(root, program, expected_digest, initial_ui, before_hosts, heartbeat):
+    receipts = root / "runtime/app-updates"
+    known = set(receipts.glob("install-*/receipt.json"))
+    command(root, OLD, "install", wait_reply=False)
+
+    def installing():
+        for path in set(receipts.glob("install-*/receipt.json")) - known:
+            if json.loads(path.read_text())["phase"] == "Installing":
+                return path
+        return None
+
+    receipt = wait_for(installing, 30, "did not observe the real SDK installation window")
+    pid = initial_ui["pid"]
+    if pid not in own_processes(root):
+        raise AssertionError("the isolated parent App exited before the interruption fixture")
+    os.kill(pid, signal.SIGKILL)
+    restored = wait_for(lambda: ready(root, OLD) if ready(root, OLD) and ready(root, OLD)["pid"] != pid else None,
+                        135, "interrupted installation did not restore the previous native App")
+    record = json.loads(receipt.read_text())
+    if record["phase"] != "RolledBack" or digest(program) != expected_digest:
+        raise AssertionError("interrupted installation did not restore its complete old bundle")
+    if hosts(root) != before_hosts:
+        raise AssertionError("interrupted installation replaced an existing task host")
+    size = heartbeat.stat().st_size
+    wait_for(lambda: heartbeat.stat().st_size > size, 10, "existing task stopped after interrupted installation")
+    deferred = receipts / "deferred.json"
+    if not deferred.is_file() or NEW not in deferred.read_text():
+        raise AssertionError("interrupted installation was not deferred against automatic retry")
+    time.sleep(3)
+    if digest(program) != expected_digest or hosts(root) != before_hosts:
+        raise AssertionError("interrupted installation retried or changed an existing host")
+    return dict(ui=restored, parent_killed_during="Installing", receipt_phase=record["phase"],
+                old_bytes_restored=True, hosts_unchanged=True, task_continues=True, failed_offer_deferred=True)
+
+
 def main():
     REPORT.mkdir(parents=True, exist_ok=True)
     if shutil.disk_usage(SOURCE).free < 20 * 1024 ** 3:
@@ -351,6 +387,11 @@ def main():
             time.sleep(2)
             if ready(root, NEW):
                 raise AssertionError("a fresh download restarted the App during this launch")
+            if os.environ.get("KHOR_UPDATE_LAB_CASE") == "interrupt":
+                evidence["interrupted_installation"] = interrupted_install(root, program, builds[OLD]["program_sha256"],
+                    evidence["initial_ui"], before_hosts, heartbeat)
+                print("Native interruption Lab passed: parent killed during installation, old bundle/UI restored, task survives and retry deferred", flush=True)
+                return
             command(root, OLD, "install", wait_reply=False)
             new_ui = wait_for(lambda: ready(root, NEW), 135, "installed native App did not restore its React UI")
             if new_ui["pid"] == evidence["initial_ui"]["pid"]:
