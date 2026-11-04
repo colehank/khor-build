@@ -53,14 +53,16 @@ case "$DEV_TASK" in
     npm run list-scroll-ui --prefix apps/gui
     npm run khor-conversations-ui --prefix apps/gui
     python3 scripts/local_checks.py agent
-    export FILE_HANDOFF_OUT="$REPORT_DIR/file-handoff"
-    npm run file-handoff --prefix apps/gui
-    export FILE_HANDOFF_OUT="$REPORT_DIR/quicklook"
-    npm run quicklook --prefix apps/gui
+    file_failed=0
+    for file_gate in file-handoff quicklook; do
+      export FILE_HANDOFF_OUT="$REPORT_DIR/$file_gate"
+      if ! npm run "$file_gate" --prefix apps/gui; then file_failed=1; fi
+    done
     if node -e 'process.exit(JSON.parse(require("fs").readFileSync("apps/gui/package.json")).scripts["file-pdf-ui"]?0:1)'; then
       export FILE_HANDOFF_OUT="$REPORT_DIR/pdf"
-      npm run file-pdf-ui --prefix apps/gui
+      if ! npm run file-pdf-ui --prefix apps/gui; then file_failed=1; fi
     fi
+    if [[ "$file_failed" = 1 ]]; then exit 1; fi
     ;;
   lab)
     mkdir -p /Users/z13/khor-builder/cache/agent
