@@ -27,6 +27,12 @@ fi
 git -C "$source_dir" -c protocol.file.allow=always fetch "$SOURCE_PACKAGE/source.git" "$SOURCE_SHA"
 git -C "$source_dir" checkout --detach "$SOURCE_SHA"
 cd "$source_dir"
+if [[ "$DEV_TASK" = resolve ]]; then
+  trap 'git restore -- Cargo.lock' EXIT
+  cargo update --workspace
+  git diff --binary -- Cargo.lock > "$REPORT_DIR/resolve.patch"
+  exit 0
+fi
 install_dependencies() {
   local app=$1
   local expected
