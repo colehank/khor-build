@@ -24,6 +24,7 @@ git -C "$source_dir" -c protocol.file.allow=always fetch --depth=1 --update-shal
 git -C "$source_dir" checkout --detach "$SOURCE_SHA"
 test "$(git -C "$source_dir" rev-parse HEAD)" = "$SOURCE_SHA"
 cd "$source_dir"
+export KHOR_BUILD_SOURCE="$SOURCE_SHA"
 mkdir -p "$REPORT_DIR" /Users/z13/khor-builder/cache/agent
 export KHOR_AGENT_BUNDLE=/Users/z13/khor-builder/cache/agent/khor-agent-native
 export KHOR_TEST_AGENT_BIN="$KHOR_AGENT_BUNDLE"
