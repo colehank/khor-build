@@ -39,10 +39,25 @@ run_tests() {
 case "${CHECK:-full}" in
   startup)
     python3 - "$CARGO_TARGET_DIR/debug/khor" "$REPORT_DIR" <<'PYSTARTUP'
-import os, signal, subprocess, sys, tempfile, time
+import json, os, shutil, signal, subprocess, sys, tempfile, time
 from pathlib import Path
 program, report = sys.argv[1], Path(sys.argv[2])
 with tempfile.TemporaryDirectory(prefix="khor-startup-profile-") as home:
+    copied = Path(home) / "khor-copy"
+    shutil.copyfile(program, copied)
+    copied.chmod(0o700)
+    started = time.monotonic()
+    probe = subprocess.Popen([str(copied), "_runtime_info"], env={}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(0.5)
+        if probe.poll() is None:
+            subprocess.run(["/usr/bin/sample", str(probe.pid), "2", "-file", str(report / "copied-probe-sample.txt")], timeout=10, check=False)
+        out, err = probe.communicate(timeout=20)
+    finally:
+        if probe.poll() is None:
+            probe.kill()
+            probe.wait()
+    (report / "copied-probe.json").write_text(json.dumps({"seconds": time.monotonic() - started, "returncode": probe.returncode, "stdout": out.decode(), "stderr": err.decode()}, indent=2) + "\n")
     env = dict(os.environ, KHOR_HOME=home, KHOR_NAME="startup-profile", KHOR_WEB_PORT="0", KHOR_RUNTIME_DIR=str(Path(home) / "runtime"))
     env.pop("KHOR_SESSION", None)
     process = subprocess.Popen([program, "serve"], env=env, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
