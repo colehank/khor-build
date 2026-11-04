@@ -69,6 +69,11 @@ PYTEST
     run_tests pairing-progress -p khor-node --lib unfinished_bootstrap_is_progress
     exit 0
     ;;
+  keeper)
+    test -x "$KHOR_AGENT_BUNDLE"
+    run_tests keeper -p khor-cli --test serve_keeper
+    exit 0
+    ;;
   full) ;;
   *) echo 'Unknown validation scope' >&2; exit 2 ;;
 esac
