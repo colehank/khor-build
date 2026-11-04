@@ -21,10 +21,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: mac-mini-worker
-  cancel-in-progress: false
-
 jobs:
   prepare:
     runs-on: ubuntu-24.04
@@ -67,6 +63,9 @@ jobs:
 
   development:
     needs: prepare
+    concurrency:
+      group: mac-mini-worker
+      cancel-in-progress: false
     permissions: {}
     runs-on: [khor-mac-mini, khor-dev]
     timeout-minutes: 180

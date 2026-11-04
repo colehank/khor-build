@@ -39,6 +39,7 @@ subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check
 subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
 archive = output / "KhorLab.zip"
 subprocess.run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(archive)], check=True)
-info["archive_sha256"] = hashlib.file_digest(archive.open("rb"), "sha256").hexdigest()
+with archive.open("rb") as stream:
+    info["archive_sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
 (output / "source.json").write_text(json.dumps(info, indent=2) + "\n")
 shutil.rmtree(app)
