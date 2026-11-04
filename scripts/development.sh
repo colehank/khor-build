@@ -45,6 +45,9 @@ if [[ "$DEV_TASK" = updates ]]; then
     npm run gen --prefix apps/gui
     npm run build --prefix apps/gui
     git diff --binary -- apps/gui/src/gen > "$REPORT_DIR/bindings.patch"
+    export KHOR_TEST_CHROME=1
+    npm run chat-drafts --prefix apps/gui
+    npm run updates-ui --prefix apps/gui
     cargo check --locked -p khor-gui --lib 2>&1 | tee "$REPORT_DIR/desktop-updates.log"
   fi
   exit 0
