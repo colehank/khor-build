@@ -43,6 +43,7 @@ case "${CHECK:-full}" in
     node apps/agent/build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE"
     npm ci --prefix apps/gui
     npm run build --prefix apps/gui
+    cargo test --locked -p khor-gui --lib updater_package::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/updater-initialization.log"
     python3 "$SOURCE_PACKAGE/update-lab.py"
     exit 0
     ;;
