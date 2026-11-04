@@ -1,0 +1,35 @@
+"""Package an exact source snapshot without forwarding repository credentials."""
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+
+def git(directory, *args):
+    return subprocess.check_output(["git", "-C", str(directory), *args], text=True).strip()
+
+
+source, output = map(Path, sys.argv[1:])
+sha = os.environ["SNAPSHOT_SHA"]
+assert re.fullmatch(r"[0-9a-f]{40}", sha)
+assert git(source, "rev-parse", "HEAD") == sha
+assert len(git(source, "cat-file", "-p", sha).split("\n\n", 1)[0].splitlines()) >= 3
+parents = [line for line in git(source, "cat-file", "-p", sha).splitlines() if line.startswith("parent ")]
+assert not parents, "Only a parentless source snapshot is accepted"
+message = git(source, "show", "-s", "--format=%B", sha)
+assert message.startswith("Khor developer snapshot\n\n")
+info = json.loads(message.split("\n\n", 1)[1])
+assert info["schema"] == 1
+assert re.fullmatch(r"[0-9a-f]{40}", info["base_commit"])
+assert info["tree"] == git(source, "rev-parse", "HEAD^{tree}")
+info["snapshot_commit"] = sha
+output.mkdir(parents=True, exist_ok=False)
+subprocess.run(["git", "clone", "--bare", "--no-hardlinks", str(source.resolve()), str(output / "source.git")], check=True)
+# checkout's auth header belongs to its working repository; clone --bare does not copy it.
+subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "remote", "remove", "origin"], check=True)
+for name in ["native.sh", "development.sh", "package-lab.py"]:
+    shutil.copyfile(Path(__file__).with_name(name), output / name)
+(output / "source.json").write_text(json.dumps(info, indent=2) + "\n")

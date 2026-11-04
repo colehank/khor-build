@@ -1,0 +1,64 @@
+#!/bin/bash
+set -euo pipefail
+source /Users/z13/khor-builder/env.sh
+export GIT_CONFIG_GLOBAL=/dev/null
+export CARGO_TERM_COLOR=never
+export CARGO_HTTP_MULTIPLEXING=false
+mkdir -p "$REPORT_DIR"
+cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
+printf '%s\n' "$DEV_TASK" > "$REPORT_DIR/task.txt"
+if [[ "$DEV_TASK" = native ]]; then
+  /bin/bash "$SOURCE_PACKAGE/native.sh"
+  exit 0
+fi
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+test "$(git --git-dir="$SOURCE_PACKAGE/source.git" rev-parse HEAD)" = "$SOURCE_SHA"
+source_dir=/Users/z13/khor-builder/work/khor
+if [[ ! -d "$source_dir/.git" ]]; then
+  git init "$source_dir"
+fi
+if [[ -n "$(git -C "$source_dir" status --porcelain --untracked-files=no)" ]]; then
+  echo 'Preserving remote tracked edits; refusing source replacement' >&2
+  exit 2
+fi
+git -C "$source_dir" -c protocol.file.allow=always fetch "$SOURCE_PACKAGE/source.git" "$SOURCE_SHA"
+git -C "$source_dir" checkout --detach "$SOURCE_SHA"
+cd "$source_dir"
+install_dependencies() {
+  local app=$1
+  local expected
+  expected=$(shasum -a 256 "apps/$app/package-lock.json" | cut -d ' ' -f 1)
+  local stamp="apps/$app/node_modules/.khor-dev-lock"
+  if [[ ! -f "$stamp" || "$(cat "$stamp")" != "$expected" ]]; then
+    npm ci --prefix "apps/$app"
+    printf '%s\n' "$expected" > "$stamp"
+  fi
+}
+install_dependencies agent
+install_dependencies gui
+case "$DEV_TASK" in
+  fast)
+    python3 scripts/check-rust-format.py --check
+    python3 scripts/local_checks.py scripts
+    npm run gen --prefix apps/gui
+    python3 scripts/local_checks.py gui
+    python3 scripts/local_checks.py agent
+    ;;
+  lab)
+    mkdir -p /Users/z13/khor-builder/cache/agent
+    export KHOR_AGENT_BUNDLE=/Users/z13/khor-builder/cache/agent/khor-agent-native
+    (cd apps/agent && node build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE")
+    npm run build --prefix apps/gui
+    export TAURI_CONFIG='{"identifier":"io.github.colehank.khor.lab","productName":"KhorLab"}'
+    cargo build --locked -p khor-gui
+    python3 "$SOURCE_PACKAGE/package-lab.py" "$CARGO_TARGET_DIR/debug/khor-gui" "$LAB_DIR" "$REPORT_DIR/source.json"
+    ;;
+  *) echo 'Unknown development task' >&2; exit 2 ;;
+esac
+printf '%s\n' 'Development task passed. This is NOT the trusted GitHub Quality or release gate.' | tee "$REPORT_DIR/result.txt"
+{
+  echo "Development task: $DEV_TASK"
+  echo "Snapshot: $SOURCE_SHA"
+  echo 'Source tree and public base: see dev-evidence/source.json.'
+  echo 'Native device gestures and IME still require human acceptance. No production signing or installation.'
+} >> "$GITHUB_STEP_SUMMARY"

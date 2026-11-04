@@ -6,7 +6,6 @@ on:
       source_sha:
         description: Full Khor commit SHA to build and test
         required: true
-        default: d437aa58e8a75c79d140fad28c65f5c6a0554891
         type: string
 
       check:
