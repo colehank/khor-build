@@ -89,7 +89,8 @@ fn update_lab_start(app: tauri::AppHandle) {
                 "download" => state.download(&app).await.and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
                 "install" => state.install(&app,false).await.and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
                 "shell" => async {
-                    let session = crate::open_shell(String::new(), root.to_string_lossy().into_owned(), request["command"].as_str().unwrap().into(), Some("Updater Lab heartbeat".into()), Some(80), Some(24), request["token"].as_str().unwrap().into()).await?;
+                    let machine = crate::off_main(|| khor_node::Node::open(khor_node::Node::root_from_env()).map(|n| n.name().to_owned())).await?;
+                    let session = crate::open_shell(machine, root.to_string_lossy().into_owned(), request["command"].as_str().unwrap().into(), Some("Updater Lab heartbeat".into()), Some(80), Some(24), request["token"].as_str().unwrap().into()).await?;
                     crate::off_main(move || {
                         let node = khor_node::Node::open(khor_node::Node::root_from_env())?;
                         let host = node.terminal_address(&khor_node::SessionId(session.clone()))?;
