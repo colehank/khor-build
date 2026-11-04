@@ -37,7 +37,7 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
-  approval|close)
+  approval|close|pair)
     test -x "$KHOR_AGENT_BUNDLE"
     # Targeted checks do not replace full provenance, frontend or release gates.
     cargo test --locked -p khor-node --lib --no-run --message-format=json > "$REPORT_DIR/targeted-artifacts.json"
@@ -47,8 +47,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / "scripts"))
 supervisor = runpy.run_path("scripts/run-node-acceptance.py")
 check, report = sys.argv[1], Path(sys.argv[2])
-name = ("khor_agent::conversations::tests::approval_answers_reach_only_the_conversation_that_owns_the_run" if check == "approval"
-        else "khor_agent::runtime_close_tests::running_token_retry_is_idempotent_and_its_record_writer_blocks_close")
+name = {
+    "approval": "khor_agent::conversations::tests::approval_answers_reach_only_the_conversation_that_owns_the_run",
+    "close": "khor_agent::runtime_close_tests::running_token_retry_is_idempotent_and_its_record_writer_blocks_close",
+    "pair": "link::pairing::tests::unfinished_bootstrap_is_progress_and_never_a_false_completion",
+}[check]
 binary, _ = supervisor["select_binary"](report / "targeted-artifacts.json", Path.cwd())
 arguments = [name, "--exact", "--nocapture", "--test-threads=1"] + (["--ignored"] if check == "close" else [])
 result, raw = supervisor["run"](binary, arguments, report / f"{check}.log", Path.cwd())
