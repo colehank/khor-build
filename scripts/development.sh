@@ -30,7 +30,7 @@ cd "$source_dir"
 install_dependencies() {
   local app=$1
   local expected
-  expected=$(shasum -a 256 "apps/$app/package-lock.json" | cut -d ' ' -f 1)
+  expected=$({ shasum -a 256 "apps/$app/package-lock.json" "apps/$app/package.json"; node --version; npm --version; } | shasum -a 256 | cut -d ' ' -f 1)
   local stamp="apps/$app/node_modules/.khor-dev-lock"
   if [[ ! -f "$stamp" || "$(cat "$stamp")" != "$expected" ]]; then
     npm ci --prefix "apps/$app"
