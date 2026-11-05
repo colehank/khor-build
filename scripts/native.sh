@@ -225,9 +225,16 @@ PYPROFILE
 esac
 npm ci --prefix apps/agent
 (cd apps/agent && node build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE")
+export KHOR_TEST_AGENT_BIN="$KHOR_AGENT_BUNDLE"
+run_tests runtime-update-domain -p khor-runtime -p khor-update
+cargo test --locked -p khor-runtime actual_standalone_agent -- --ignored --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/actual-agent-runtime.log"
 npm test --prefix apps/agent
 npm ci --prefix apps/gui
 npm run build --prefix apps/gui
+cargo test --locked -p khor-gui --lib update -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-update-contracts.log"
+if [[ -f apps/gui/src-tauri/src/app_companions.rs ]]; then
+  cargo test --locked -p khor-gui --lib app_companions -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-component-contracts.log"
+fi
 native_host=$(rustc -vV | sed -n 's/^host: //p')
 test -n "$native_host"
 cargo metadata --locked --format-version 1 --filter-platform "$native_host" > "$REPORT_DIR/node-metadata.json"
