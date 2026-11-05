@@ -37,6 +37,9 @@ if args.mode == 'inventory':
         ({'file':str(path),'bytes':path.stat().st_size,'links':path.stat().st_nlink}
          for path in (ROOT/'debug/deps').iterdir() if path.is_file() and not path.is_symlink()),
         key=lambda item:item['bytes'], reverse=True)[:30]
+    summary['incremental_directories'] = [
+        {'directory':str(path),'bytes':allocated(path),'modified':path.stat().st_mtime}
+        for path in sorted((ROOT/'debug/incremental').iterdir()) if path.is_dir() and not path.is_symlink()]
 deps=ROOT/'debug/deps'
 assert deps.is_dir() and not deps.is_symlink()
 groups=defaultdict(list)
