@@ -237,7 +237,6 @@ npm ci --prefix apps/agent
 export KHOR_TEST_AGENT_BIN="$KHOR_AGENT_BUNDLE"
 run_tests runtime-update-domain -p khor-runtime -p khor-update
 cargo test --locked -p khor-runtime actual_standalone_agent -- --ignored --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/actual-agent-runtime.log"
-npm test --prefix apps/agent
 npm ci --prefix apps/gui
 npm run build --prefix apps/gui
 cargo test --locked -p khor-gui --lib update -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-update-contracts.log"
@@ -250,6 +249,7 @@ cargo metadata --locked --format-version 1 --filter-platform "$native_host" > "$
 python3 scripts/native_provenance.py prepare --metadata "$REPORT_DIR/node-metadata.json" --target-dir "$CARGO_TARGET_DIR" --package khor-cli --name khor --kind bin --tool "$(rustup which cargo)" --tool "$(rustup which rustc)" --apply-refresh --output "$REPORT_DIR/cli-prepared.json"
 cargo build --locked -p khor-cli --bin khor --message-format=json > "$REPORT_DIR/cli-artifacts.json"
 python3 scripts/native_provenance.py verify --prepared "$REPORT_DIR/cli-prepared.json" --artifacts "$REPORT_DIR/cli-artifacts.json" --output "$REPORT_DIR/cli-provenance.json"
+KHOR_TEST_CLI_BIN="$CARGO_TARGET_DIR/debug/khor" npm test --prefix apps/agent 2>&1 | tee "$REPORT_DIR/agent-runtime-and-cli.log"
 python3 scripts/native_provenance.py prepare --metadata "$REPORT_DIR/node-metadata.json" --target-dir "$CARGO_TARGET_DIR" --package khor-node --name khor_node --kind lib --test --tool "$(rustup which cargo)" --tool "$(rustup which rustc)" --prior "$REPORT_DIR/cli-provenance.json" --apply-refresh --output "$REPORT_DIR/node-prepared.json"
 cargo test --locked -p khor-node --lib --no-run --message-format=json > "$REPORT_DIR/node-artifacts.json"
 python3 scripts/native_provenance.py verify --prepared "$REPORT_DIR/node-prepared.json" --artifacts "$REPORT_DIR/node-artifacts.json" --output "$REPORT_DIR/node-provenance.json"
