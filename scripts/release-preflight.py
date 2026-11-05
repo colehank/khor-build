@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
+import time
 import subprocess
 import tomllib
 
@@ -17,8 +19,43 @@ VERSION = tomllib.loads((SOURCE / "Cargo.toml").read_text())["workspace"]["packa
 TAG = f"v{VERSION}-rc.900099"
 
 
-def run(*arguments, environment):
-    subprocess.run(arguments, env=environment, stdin=subprocess.DEVNULL, check=True)
+def run(*arguments, environment, timeout=None):
+    started = time.monotonic()
+    print(f"Preflight command started: {' '.join(arguments[:3])}", flush=True)
+    try:
+        subprocess.run(arguments, env=environment, stdin=subprocess.DEVNULL, check=True, timeout=timeout)
+    finally:
+        print(f"Preflight command finished after {time.monotonic()-started:.1f}s: {' '.join(arguments[:3])}", flush=True)
+
+
+def ios_prerequisites(environment, evidence):
+    sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
+                                  env=environment, text=True, timeout=30).strip()
+    if not sdk or not Path(sdk).is_dir():
+        raise RuntimeError("the selected Xcode has no usable iPhoneOS SDK")
+    evidence["iphoneos_sdk"] = sdk
+
+    def runtimes():
+        result = json.loads(subprocess.check_output(
+            ["xcrun", "simctl", "list", "runtimes", "--json"], env=environment, text=True, timeout=30))
+        return [item for item in result.get("runtimes", [])
+                if item.get("name", "").startswith("iOS") and item.get("isAvailable") is True]
+
+    installed = runtimes()
+    if not installed:
+        free = shutil.disk_usage(CACHE).free
+        evidence["free_before_runtime_install"] = free
+        if free < 60 * 1024 ** 3:
+            raise RuntimeError("preserving cache: runtime installation requires60GiB free, including40GiB reserve")
+        # Tauri2.12.1 checks simctl even for a device-only archive. Only the renter gets this public runtime.
+        run("sudo", "-n", "xcodebuild", "-downloadPlatform", "iOS", "-architectureVariant", "arm64",
+            environment=environment, timeout=2700)
+        installed = runtimes()
+    if not installed:
+        raise RuntimeError("Tauri requires an available iOS simulator runtime before starting any compilation")
+    evidence["ios_runtimes"] = [{key: item.get(key) for key in ("name", "identifier", "version", "isAvailable")}
+                                for item in installed]
+    print("iOS device SDK and Tauri runtime prerequisites confirmed", flush=True)
 
 
 def identity(program, component, environment):
@@ -34,6 +71,9 @@ def identity(program, component, environment):
 
 
 def main():
+    phase = os.environ.get("KHOR_PREFLIGHT_PHASE", "all")
+    if phase not in {"all", "ios"}:
+        raise RuntimeError("unknown unsigned preflight phase")
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("APPLE_", "IOS_CERTIFICATE", "TAURI_SIGNING_", "MAC_CERTIFICATE"))
                    and key not in {"IOS_PROFILE", "GH_TOKEN", "GITHUB_TOKEN"}}
@@ -52,23 +92,29 @@ def main():
         link.symlink_to(CACHE, target_is_directory=True)
         created = True
     inode = link.lstat().st_ino
-    evidence = {"source": SHA, "profile": "release", "fixture_tag": TAG,
+    evidence = {"source": SHA, "profile": "release", "fixture_tag": TAG, "phase": phase,
                 "signed": False, "uploaded": False, "installed": False}
+    apple_inputs = [SOURCE / "apps/gui/src-tauri/gen/apple/khor-gui.xcodeproj/project.pbxproj",
+                    SOURCE / "apps/gui/src-tauri/gen/apple/khor-gui_iOS/Info.plist"]
+    originals = {path: path.read_bytes() for path in apple_inputs if path.is_file()}
     try:
+        ios_prerequisites(environment, evidence)
         run("rustup", "target", "add", "aarch64-apple-ios", environment=environment)
-        run("npm", "ci", "--prefix", "apps/agent", environment=environment)
-        run("node", "apps/agent/build.mjs", TARGET, environment["KHOR_AGENT_BUNDLE"], environment=environment)
+        if phase == "all":
+            run("npm", "ci", "--prefix", "apps/agent", environment=environment)
+            run("node", "apps/agent/build.mjs", TARGET, environment["KHOR_AGENT_BUNDLE"], environment=environment)
         run("npm", "ci", "--prefix", "apps/gui", environment=environment)
         run("npm", "run", "build", "--prefix", "apps/gui", environment=environment)
-        print("Unsigned release preflight: original release profile CLI", flush=True)
-        run("cargo", "build", "--locked", "--release", "--target", TARGET,
-            "-p", "khor-cli", "--bin", "khor", environment=environment)
-        evidence["cli"] = identity(CACHE / TARGET / "release/khor", "cli", environment)
-        print("Unsigned release preflight: original Mac App adapter and layered icon", flush=True)
-        run("python3", "scripts/apple_release.py", "mac-build", "--target", TARGET,
-            "--signed", "false", environment=environment)
-        app = CACHE / TARGET / "release/bundle/macos/Khor.app"
-        evidence["app"] = identity(app / "Contents/MacOS/khor-gui", "desktop-app", environment)
+        if phase == "all":
+            print("Unsigned release preflight: original release profile CLI", flush=True)
+            run("cargo", "build", "--locked", "--release", "--target", TARGET,
+                "-p", "khor-cli", "--bin", "khor", environment=environment)
+            evidence["cli"] = identity(CACHE / TARGET / "release/khor", "cli", environment)
+            print("Unsigned release preflight: original Mac App adapter and layered icon", flush=True)
+            run("python3", "scripts/apple_release.py", "mac-build", "--target", TARGET,
+                "--signed", "false", environment=environment)
+            app = CACHE / TARGET / "release/bundle/macos/Khor.app"
+            evidence["app"] = identity(app / "Contents/MacOS/khor-gui", "desktop-app", environment)
         print("Unsigned release preflight: original no-sign iOS archive adapter", flush=True)
         run("python3", "scripts/apple_release.py", "ios-build", "--signed", "false", environment=environment)
         phone = SOURCE / "apps/gui/src-tauri/gen/apple/build/khor-gui_iOS.xcarchive/Products/Applications/Khor.app"
@@ -85,6 +131,11 @@ def main():
                            "program_bytes": program.stat().st_size}
         evidence["complete"] = True
     finally:
+        changes = subprocess.check_output(["git", "diff", "--binary"], cwd=SOURCE)
+        (REPORT / "ios-generated-inputs.patch").write_bytes(changes)
+        for path, original in originals.items():
+            if path.read_bytes() != original:
+                path.write_bytes(original)  # This exclusive worker owns Tauri's generated project/version edits.
         if created and link.is_symlink() and link.lstat().st_ino == inode and link.resolve() == CACHE:
             link.unlink()
         (REPORT / "unsigned-release.json").write_text(json.dumps(evidence, indent=2) + "\n")

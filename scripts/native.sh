@@ -38,7 +38,10 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
-  release-preflight)
+  release-preflight|ios-release-preflight)
+    if [[ "$CHECK" = ios-release-preflight ]]; then
+      export KHOR_PREFLIGHT_PHASE=ios
+    fi
     test "$(git --git-dir="$SOURCE_PACKAGE/swift-rs.git" rev-parse --is-bare-repository)" = true
     cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
     export GIT_CONFIG_COUNT=1
