@@ -32,7 +32,7 @@ class RuntimeAdmission(unittest.TestCase):
         self.available = {"name": "iOS26.5", "identifier": "public-test", "version": "26.5", "isAvailable": True}
 
     def check(self, lists, free=80):
-        replies = [str(self.sdk)] + [json.dumps({"runtimes": rows}) for rows in lists]
+        replies = [str(self.root), str(self.sdk)] + [json.dumps({"runtimes": rows}) for rows in lists]
         with patch.object(self.module.subprocess, "check_output", side_effect=replies), \
              patch.object(self.module.shutil, "disk_usage", return_value=SimpleNamespace(free=free*1024**3)), \
              patch.object(self.module, "run") as execute:
@@ -45,6 +45,15 @@ class RuntimeAdmission(unittest.TestCase):
         calls, evidence = self.check([[self.available]])
         self.assertEqual(calls, [])
         self.assertEqual(evidence["ios_runtimes"][0]["identifier"], "public-test")
+
+    def test_global_xcode_mismatch_refuses_before_sdk_download_or_build(self):
+        with patch.object(self.module.subprocess, "check_output", return_value=str(self.root / "CommandLineTools")) as query, \
+             patch.object(self.module, "run") as execute:
+            with self.assertRaisesRegex(RuntimeError, "global xcode-select"):
+                self.module.ios_prerequisites({"DEVELOPER_DIR": str(self.root)}, {})
+        self.assertEqual(query.call_count, 1)
+        self.assertNotIn("DEVELOPER_DIR", query.call_args.kwargs["env"])
+        execute.assert_not_called()
 
     def test_missing_runtime_downloads_only_arm64_and_checks_registration(self):
         calls, evidence = self.check([[], [self.available]])

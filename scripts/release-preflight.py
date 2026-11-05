@@ -29,6 +29,12 @@ def run(*arguments, environment, timeout=None):
 
 
 def ios_prerequisites(environment, evidence):
+    system_environment = {key: value for key, value in environment.items() if key != "DEVELOPER_DIR"}
+    selected = subprocess.check_output(["/usr/bin/xcode-select", "-p"],
+                                       env=system_environment, text=True, timeout=30).strip()
+    if Path(selected).resolve() != Path(environment.get("DEVELOPER_DIR", selected)).resolve():
+        raise RuntimeError("global xcode-select must match the builder Xcode before Tauri archives")
+    evidence["xcode_developer_directory"] = selected
     sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"],
                                   env=environment, text=True, timeout=30).strip()
     if not sdk or not Path(sdk).is_dir():
