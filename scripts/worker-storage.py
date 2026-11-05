@@ -31,6 +31,12 @@ if args.mode == 'ensure-budget' and before < 55 * 1024**3:
     raise SystemExit(0)
 for path in sorted(ROOT.iterdir()):
     if path.is_dir() and not path.is_symlink(): summary['directories'][path.name]=allocated(path)
+if args.mode == 'inventory':
+    summary['directory_depth_two'] = subprocess.check_output(['/usr/bin/du','-k','-d','2',str(ROOT)],text=True).splitlines()
+    summary['largest_regular_files'] = sorted(
+        ({'file':str(path),'bytes':path.stat().st_size,'links':path.stat().st_nlink}
+         for path in (ROOT/'debug/deps').iterdir() if path.is_file() and not path.is_symlink()),
+        key=lambda item:item['bytes'], reverse=True)[:30]
 deps=ROOT/'debug/deps'
 assert deps.is_dir() and not deps.is_symlink()
 groups=defaultdict(list)
