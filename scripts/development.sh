@@ -93,6 +93,8 @@ case "$DEV_TASK" in
     export KHOR_TEST_CHROME=1
     npm run list-scroll-ui --prefix apps/gui
     npm run khor-conversations-ui --prefix apps/gui
+    mkdir -p "$REPORT_DIR/appearance"
+    APPEARANCE_HEADLESS=1 APPEARANCE_SHOT="$REPORT_DIR/appearance/desktop.png" npm run appearance --prefix apps/gui 2>&1 | tee "$REPORT_DIR/appearance.log"
     python3 scripts/local_checks.py agent
     file_failed=0
     for file_gate in file-handoff quicklook; do
