@@ -38,6 +38,6 @@ subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "update-ref", 
 subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "symbolic-ref", "HEAD", "refs/heads/source"], check=True)
 # checkout's auth header belongs to its working repository; clone --bare does not copy it.
 subprocess.run(["git", "--git-dir=" + str(output / "source.git"), "remote", "remove", "origin"], check=True)
-for name in ["native.sh", "development.sh", "package-lab.py", "update-lab.py"]:
+for name in ["native.sh", "development.sh", "package-lab.py", "update-lab.py", "cli-update-lab.py"]:
     shutil.copyfile(Path(__file__).with_name(name), output / name)
 (output / "source.json").write_text(json.dumps(info, indent=2) + "\n")
