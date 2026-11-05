@@ -55,6 +55,9 @@ if [[ "$DEV_TASK" = updates ]]; then
     git diff --binary -- apps/gui/src/gen > "$REPORT_DIR/bindings.patch"
     cargo check --locked -p khor-gui --lib 2>&1 | tee "$REPORT_DIR/desktop-updates.log"
     cargo test --locked -p khor-gui --lib update -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-update-contracts.log"
+    if [[ -f apps/gui/src-tauri/src/app_companions.rs ]]; then
+      cargo test --locked -p khor-gui --lib app_companions -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-component-contracts.log"
+    fi
     export KHOR_TEST_CHROME=1
     npm run chat-drafts --prefix apps/gui
     npm run workspace-memory --prefix apps/gui
