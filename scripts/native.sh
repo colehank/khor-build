@@ -55,7 +55,7 @@ sync_swift_mirror() {
     exit 2
   fi
   git config --file "$config" "url.file://$cached.insteadOf" https://github.com/Brendonovich/swift-rs
-  env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+  env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 GIT_ALLOW_PROTOCOL=file \
     git -c credential.helper= ls-remote https://github.com/Brendonovich/swift-rs HEAD > "$REPORT_DIR/swift-global-mirror.txt"
   grep -q "$(cat "$SOURCE_PACKAGE/swift-rs-sha.txt")" "$REPORT_DIR/swift-global-mirror.txt"
   cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
