@@ -71,6 +71,22 @@ fn update_lab_start(app: tauri::AppHandle) {
         let identity = khor_update::build_identity().unwrap().release.unwrap();
         let tag = identity.tag.as_str();
         let root = control.parent().unwrap();
+        let telemetry_app = app.clone();
+        let telemetry_root = root.to_path_buf();
+        tauri::async_runtime::spawn(async move {
+            let mut previous = Vec::new();
+            loop {
+                if let Ok(status) = telemetry_app.state::<crate::app_updates::AppUpdates>().status() {
+                    let bytes = serde_json::to_vec(&status).unwrap();
+                    if bytes != previous {
+                        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+                        std::fs::write(telemetry_root.join(format!("status-{stamp}.json")), &bytes).unwrap();
+                        previous = bytes;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        });
         std::fs::write(root.join(format!("ready-{tag}-{}.json", std::process::id())),
             serde_json::to_vec(&serde_json::json!({"tag":tag,"pid":std::process::id()})).unwrap()).unwrap();
         let mut last = 0;
@@ -259,18 +275,26 @@ def build_app(app, tag, environment, label):
     return dict(program=info, program_sha256=digest(program)), primary_digest
 
 
-def interrupted_install(root, program, expected_digest, initial_ui, before_hosts, heartbeat):
+def interrupted_install(root, program, expected_digest, new_digest, initial_ui, before_hosts, heartbeat):
     receipts = root / "runtime/app-updates"
     known = set(receipts.glob("install-*/receipt.json"))
-    command(root, OLD, "install", wait_reply=False)
+    request = command(root, OLD, "install", wait_reply=False)
 
     def installing():
+        reply = root / f"reply-{request}.json"
+        if reply.exists():
+            raise AssertionError(f"install returned before the interruption boundary: {reply.read_text()}")
+        if not (root / "sdk-installed.json").exists():
+            return None
         for path in set(receipts.glob("install-*/receipt.json")) - known:
             if json.loads(path.read_text())["phase"] == "Installing":
+                if digest(program) != new_digest:
+                    raise AssertionError("SDK installation did not replace the actual App executable")
                 return path
         return None
 
-    receipt = wait_for(installing, 30, "did not observe the real SDK installation window")
+    # This includes verification and both real CLI installations before the SDK.
+    receipt = wait_for(installing, 90, "did not reach the SDK-installed interruption boundary; see status timeline")
     pid = initial_ui["pid"]
     if pid not in own_processes(root):
         raise AssertionError("the isolated parent App exited before the interruption fixture")
@@ -295,7 +319,8 @@ def interrupted_install(root, program, expected_digest, initial_ui, before_hosts
     if digest(program) != expected_digest or hosts(root) != before_hosts:
         raise AssertionError("interrupted installation retried or changed an existing host")
     return dict(ui=restored, parent_killed_during="Installing", receipt_phase=record["phase"],
-                old_bytes_restored=True, hosts_unchanged=True, task_continues=True, failed_offer_deferred=True)
+                sdk_installed_new_bytes=True, old_bytes_restored=True, hosts_unchanged=True,
+                task_continues=True, failed_offer_deferred=True)
 
 
 def main():
@@ -323,7 +348,7 @@ def main():
             key = root / "fixture.key"
             run(str(signer), "signer", "generate", "--ci", "--password", "public-lab-fixture",
                 "--write-keys", str(key), stdout=subprocess.DEVNULL)
-            for name in ["crates/update/updater.pub", "crates/update/src/feed.rs", "apps/gui/src-tauri/src/updater_package.rs", "apps/gui/src-tauri/src/updater_commands.rs", "apps/gui/src-tauri/src/app_update_install.rs"]:
+            for name in ["crates/update/updater.pub", "crates/update/src/feed.rs", "apps/gui/src-tauri/src/updater_package.rs", "apps/gui/src-tauri/src/updater_commands.rs", "apps/gui/src-tauri/src/app_update_install.rs", "apps/gui/src-tauri/src/app_updates.rs"]:
                 originals[name] = (SOURCE / name).read_bytes()
             (SOURCE / "crates/update/updater.pub").write_bytes(key.with_suffix(".key.pub").read_bytes())
             replace("crates/update/src/feed.rs", "https://api.github.com/repos/colehank/khor/releases?per_page=100", address + "/releases")
@@ -353,6 +378,14 @@ def main():
         }
         crate::off_main(crate::app_update_install::ui_ready).await?;
     }''')
+            if os.environ.get("KHOR_UPDATE_LAB_CASE") == "interrupt":
+                # Hold only after the real SDK has replaced the bundle; never delay production code.
+                replace("apps/gui/src-tauri/src/app_updates.rs", "            installation.handoff()", r'''            let root = std::path::PathBuf::from(std::env::var("KHOR_UPDATE_LAB_CONTROL").unwrap());
+            std::fs::write(root.with_file_name("sdk-installed.json"), b"installed").map_err(|e| e.to_string())?;
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            return Err("private Lab interruption controller did not terminate its owned App".into());
+            #[allow(unreachable_code)]
+            installation.handoff()''')
             commands = SOURCE / "apps/gui/src-tauri/src/updater_commands.rs"
             commands.write_text(commands.read_text() + LAB_CONTROLLER)
             diff = subprocess.check_output(["git", "diff", "--binary"], cwd=SOURCE)
@@ -445,7 +478,7 @@ def main():
                 raise AssertionError("a fresh download restarted the App during this launch")
             if os.environ.get("KHOR_UPDATE_LAB_CASE") == "interrupt":
                 evidence["interrupted_installation"] = interrupted_install(root, program, builds[OLD]["program_sha256"],
-                    evidence["initial_ui"], before_hosts, heartbeat)
+                    builds[NEW]["program_sha256"], evidence["initial_ui"], before_hosts, heartbeat)
                 print("Native interruption Lab passed: parent killed during installation, old bundle/UI restored, task survives and retry deferred", flush=True)
                 return
             failing = Path(choices["companions"][1]["id"]).parent
@@ -528,8 +561,9 @@ def main():
             for path in (root / "runtime").glob("app-updates/install-*/parent.lock"):
                 evidence["parent_lock_holders"].append(subprocess.run(
                     ["/usr/sbin/lsof", "-n", "-P", str(path)], text=True, capture_output=True, check=False).stdout)
-            for path in root.glob("reply-*.json"):
-                shutil.copyfile(path, REPORT / path.name)
+            for pattern in ["reply-*.json", "status-*.json", "sdk-installed.json"]:
+                for path in root.glob(pattern):
+                    shutil.copyfile(path, REPORT / path.name)
             if (root / "relaunch.log").is_file():
                 shutil.copyfile(root / "relaunch.log", REPORT / "update-lab-relaunch.log")
             if bootstrapped:
