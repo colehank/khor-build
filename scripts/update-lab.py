@@ -409,6 +409,8 @@ def main():
             run("launchctl", "bootstrap", domain, str(agent))
             bootstrapped = True
             evidence["initial_ui"] = wait_for(lambda: ready(root, OLD), 90, "real native App did not restore its React UI")
+            wait_for(lambda: len(command(root, OLD, "status")["companions"]) == 2, 45,
+                     "initial App discovery did not finish describing both CLI installations")
             wait_for(lambda: command(root, OLD, "status")["phase"] not in ["checking", "downloading"], 30,
                      "initial automatic check did not finish")
             preferences = dict(channel="beta", automatic_check=False, automatic_download=False, install_on_start=True)
@@ -479,9 +481,11 @@ def main():
             if digest(program) != builds[NEW]["program_sha256"]:
                 raise AssertionError("installed App bytes do not match the actual new build")
             evidence["sdk_update"] = dict(ui=new_ui, phase="Complete", host_unchanged=True, task_continues=True)
-            component_status = command(root, NEW, "status")
-            assert len(component_status["companions"]) == 2
-            assert all(entry["current"] == NEW and entry["phase"] == "complete" for entry in component_status["companions"])
+            def components_restored():
+                status = command(root, NEW, "status")
+                return status if len(status["companions"]) == 2 and all(
+                    entry["current"] == NEW and entry["phase"] == "complete" for entry in status["companions"]) else None
+            wait_for(components_restored, 45, "updated App did not restore the confirmed CLI component results")
             evidence["component_retry"] = dict(both_clis_updated=True, results_survive_app_restart=True)
             next_session = command(root, NEW, "shell", command=shell, token="native-update-lab-new")
             after_hosts = wait_for(lambda: hosts(root) if len(hosts(root)) > len(before_hosts) else None, 30,
