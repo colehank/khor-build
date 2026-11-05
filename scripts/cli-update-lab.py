@@ -8,10 +8,12 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("update_lab", Path(__file__).with_name("update-lab.py"))
 common = importlib.util.module_from_spec(spec)
@@ -46,6 +48,41 @@ def execute(program, environment, *arguments, input=None, timeout=90):
     if process.returncode:
         raise RuntimeError(f"CLI {arguments[:2]} exited {process.returncode}: {err[-4000:]}")
     return out
+
+
+def publication_fixture(program, signer, key, root):
+    sys.path.insert(0, str(SOURCE / "scripts"))
+    sys.path.insert(0, str(SOURCE / "scripts/tests"))
+    import release_updates
+    from test_release_updates import update_candidate
+    candidate = root / "publisher-fixture"
+    record, _ = update_candidate(candidate)
+    rc = root / "publisher-rc"
+    stable = root / "publisher-stable"
+    with patch.dict(os.environ, {"GITHUB_REPOSITORY": "colehank/khor",
+                                "TAURI_SIGNING_PRIVATE_KEY": key.read_text(),
+                                "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "public-lab-fixture"}):
+        release_updates.create(candidate, rc, record["tag"], signer, program)
+        original = json.loads((rc / release_updates.MANIFEST).read_text())
+        rc.rename(candidate / "update-publication")
+        release_updates.create(candidate, stable, "v" + record["version"], signer, program)
+        promoted = json.loads((stable / release_updates.MANIFEST).read_text())
+        assert promoted["artifacts"] == original["artifacts"]
+        archive = candidate / "khor-macos-arm64/khor-macos-arm64.gz"
+        before = archive.read_bytes()
+        archive.write_bytes(before[:-1] + bytes([before[-1] ^ 1]))
+        rejected = False
+        try:
+            release_updates.verify_native(candidate, stable, program)
+        except ValueError:
+            rejected = True
+        finally:
+            archive.write_bytes(before)
+        assert rejected, "native verification accepted a changed publisher archive"
+    return dict(official_tauri_signer=True, native_trust_root=True,
+                stable_reuses_original_archives_and_signatures=True, changed_archive_rejected=True,
+                six_archives="synthetic fixtures; no claim of six native builds or Apple notarization",
+                formal_credentials="never read or transferred")
 
 
 def main():
@@ -156,6 +193,8 @@ def main():
             assert not Path(readonly["KHOR_HOME"]).exists()
             assert not Path(readonly["KHOR_RUNTIME_DIR"]).exists()
             evidence["readonly_publication_verification"] = True
+            if (SOURCE / "scripts/release_updates.py").is_file():
+                evidence["publisher_crypto_fixture"] = publication_fixture(package["program"], signer, key, root)
             for name in ("alpha", "beta"):
                 package = packages[OLD]
                 execute(package["program"], environments[name], "_install_cli", str(bin), OLD,
