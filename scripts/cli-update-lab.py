@@ -21,11 +21,31 @@ OLD, NEW, STABLE = common.OLD, common.NEW, "v0.2.0"
 
 
 def execute(program, environment, *arguments, input=None, timeout=90):
-    result = subprocess.run([str(program), *arguments], env=environment, input=input, text=True,
-                            capture_output=True, timeout=timeout)
-    if result.returncode:
-        raise RuntimeError(f"CLI {arguments[:2]} exited {result.returncode}: {result.stderr[-4000:]}")
-    return result.stdout
+    process = subprocess.Popen([str(program), *arguments], env=environment, text=True,
+                               stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = process.communicate(input, timeout=timeout)
+    except subprocess.TimeoutExpired as problem:
+        # Every timed operation here executes a binary inside this fixture's owned directory.
+        prefix = REPORT / ("cli-timeout-" + arguments[0].strip("_").replace("/", "-"))
+        subprocess.run(["/usr/bin/sample", str(process.pid), "1", "-file", str(prefix) + ".sample.txt"],
+                       check=False, capture_output=True, timeout=10)
+        (Path(str(prefix) + ".processes.txt")).write_text(subprocess.run(
+            ["/bin/ps", "-axo", "pid=,ppid=,lstart=,stat=,command="], text=True, capture_output=True, check=False).stdout)
+        subprocess.run(["/usr/sbin/lsof", "-n", "-P", "-p", str(process.pid)], text=True,
+                       stdout=Path(str(prefix) + ".files.txt").open("w"), stderr=subprocess.DEVNULL, check=False, timeout=10)
+        process.kill()
+        try:
+            out, err = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            out, err = problem.stdout or b"", problem.stderr or b""
+        for name, value in [("stdout", out), ("stderr", err)]:
+            Path(str(prefix) + "." + name + ".txt").write_text(value.decode(errors="replace") if isinstance(value, bytes) else value)
+        raise RuntimeError(f"owned CLI {arguments[:2]} timed out; native stack/handles/output saved") from problem
+    if process.returncode:
+        raise RuntimeError(f"CLI {arguments[:2]} exited {process.returncode}: {err[-4000:]}")
+    return out
 
 
 def main():
@@ -34,6 +54,8 @@ def main():
     original_key = (SOURCE / "crates/update/updater.pub").read_bytes()
     original_feed = (SOURCE / "crates/update/src/feed.rs").read_bytes()
     original_wire = (SOURCE / "crates/node/src/update_wire.rs").read_bytes()
+    original_bootstrap = (SOURCE / "crates/node/src/cli_bootstrap.rs").read_bytes()
+    original_install = (SOURCE / "crates/update/src/install.rs").read_bytes()
     last_primary = None
     with tempfile.TemporaryDirectory(prefix="khor-cli-update-lab-") as temporary:
         root = Path(temporary)
@@ -118,6 +140,10 @@ def main():
             common.replace("crates/update/src/feed.rs", "https://github.com/colehank/khor/releases/download/", address + "/assets/")
             common.replace("crates/node/src/update_wire.rs", "write(send, &Response::Upload).await?;",
                            'eprintln!("private CLI Lab receiving verified transfer");\n                    write(send, &Response::Upload).await?;')
+            for marker in ["let release = trust.authenticate(&manifest, &signature)?;", "updates::verify_program(&crate::self_exe()?, &offer)?;", "let download = Download::import(offer, &trust, archive, &installation.staging())?;", "updates::install_cli(&installation, &download, channel, None)?;", "installation.publish_launcher()?;"]:
+                common.replace("crates/node/src/cli_bootstrap.rs", marker, 'eprintln!("private CLI bootstrap before: ' + marker.replace('"', '\\"') + '");\n    ' + marker)
+            for marker in ["let program = download.unpack_cli()?;", "let _lock = self.lock()?;", "check(&program, previous.as_deref(), offer)?;", "self.point(&relative)?;", "store.select(&image).map_err(|e| e.to_string())?;"]:
+                common.replace("crates/update/src/install.rs", marker, 'eprintln!("private CLI installation before: ' + marker.replace('"', '\\"') + '");\n        ' + marker)
             (REPORT / "cli-lab-boundary.patch").write_bytes(subprocess.check_output(["git", "diff", "--binary"]))
             last_primary = build(OLD)
             for name in ("alpha", "beta"):
@@ -193,6 +219,8 @@ def main():
             (SOURCE / "crates/update/updater.pub").write_bytes(original_key)
             (SOURCE / "crates/update/src/feed.rs").write_bytes(original_feed)
             (SOURCE / "crates/node/src/update_wire.rs").write_bytes(original_wire)
+            (SOURCE / "crates/node/src/cli_bootstrap.rs").write_bytes(original_bootstrap)
+            (SOURCE / "crates/update/src/install.rs").write_bytes(original_install)
             if last_primary and primary.is_file() and common.digest(primary) == last_primary: primary.unlink()
             server.shutdown()
             evidence["feed_requests"] = common.Feed.requests
