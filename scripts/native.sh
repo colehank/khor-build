@@ -37,13 +37,40 @@ run_tests() {
   cargo test --locked "$@" -- --test-threads=1 2>&1 | tee "$REPORT_DIR/$name.log"
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
+sync_swift_mirror() {
+  local prepared="$SOURCE_PACKAGE/swift-rs.git"
+  local cached=/Users/z13/khor-builder/cache/git-mirrors/swift-rs.git
+  local config=/Users/z13/.gitconfig
+  test "$(git --git-dir="$prepared" rev-parse --is-bare-repository)" = true
+  mkdir -p "$(dirname "$cached")"
+  if [[ -d "$cached" ]]; then
+    git -c protocol.file.allow=always --git-dir="$cached" fetch --force --prune "$prepared" '+refs/*:refs/*'
+  else
+    git -c protocol.file.allow=always clone --mirror "$prepared" "$cached"
+  fi
+  git --git-dir="$cached" symbolic-ref HEAD "$(git --git-dir="$prepared" symbolic-ref HEAD)"
+  test "$(git --git-dir="$cached" rev-parse HEAD)" = "$(cat "$SOURCE_PACKAGE/swift-rs-sha.txt")"
+  if [[ -L "$config" || ( -e "$config" && ( ! -f "$config" || ! -O "$config" ) ) ]]; then
+    echo 'Preserving an unexpected global Git configuration' >&2
+    exit 2
+  fi
+  git config --file "$config" "url.file://$cached.insteadOf" https://github.com/Brendonovich/swift-rs
+  env -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \
+    git -c credential.helper= ls-remote https://github.com/Brendonovich/swift-rs HEAD > "$REPORT_DIR/swift-global-mirror.txt"
+  grep -q "$(cat "$SOURCE_PACKAGE/swift-rs-sha.txt")" "$REPORT_DIR/swift-global-mirror.txt"
+  cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
+}
 case "${CHECK:-full}" in
+  dependencies)
+    sync_swift_mirror
+    exit 0
+    ;;
   release-preflight|ios-release-preflight)
     if [[ "$CHECK" = ios-release-preflight ]]; then
       export KHOR_PREFLIGHT_PHASE=ios
     fi
     test "$(git --git-dir="$SOURCE_PACKAGE/swift-rs.git" rev-parse --is-bare-repository)" = true
-    cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
+    sync_swift_mirror
     export GIT_CONFIG_COUNT=1
     export GIT_CONFIG_KEY_0="url.file://$SOURCE_PACKAGE/swift-rs.git.insteadOf"
     export GIT_CONFIG_VALUE_0=https://github.com/Brendonovich/swift-rs
