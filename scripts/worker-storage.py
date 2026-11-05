@@ -81,6 +81,10 @@ def main():
         if guard.stat().st_size > 64 * 1024:
             raise RuntimeError('unexpected builder admission script size')
         (report/'run-build.txt').write_bytes(guard.read_bytes())
+        admission = guard.with_name('build_guard.py')
+        if admission.stat().st_size > 64 * 1024:
+            raise RuntimeError('unexpected builder admission implementation size')
+        (report/'build_guard.py.txt').write_bytes(admission.read_bytes())
         summary['directory_depth_two'] = subprocess.check_output(['/usr/bin/du','-k','-d','2',str(ROOT)],text=True).splitlines()
         summary['largest_regular_files'] = sorted(
             ({'file':str(path),'bytes':path.stat().st_size,'links':path.stat().st_nlink}
