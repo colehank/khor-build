@@ -1,5 +1,6 @@
 """Isolated native updater Lab. Its fixture trust/feed patch is never a release artifact."""
 import hashlib
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -92,6 +93,10 @@ fn update_lab_start(app: tauri::AppHandle) {
                     Err(e) => Err(e.to_string()),
                 },
                 "check" => state.check(&app).await.and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
+                "companions" => match serde_json::from_value(request["ids"].clone()) {
+                    Ok(ids) => state.select_companions(&app,ids).await.and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
+                    Err(e) => Err(e.to_string()),
+                },
                 "download" => state.download(&app).await.and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
                 "install" => state.install(&app,false).await.and_then(|s| serde_json::to_value(s).map_err(|e| e.to_string())),
                 "shell" => async {
@@ -147,7 +152,7 @@ def sign(signer, key, path):
     return Path(str(path) + ".sig").read_text().strip()
 
 
-def publish_fixture(root, signer, key, app, info, address):
+def publish_fixture(root, signer, key, app, info, address, cli=None):
     tag = info["build"]["release"]["tag"]
     directory = root / tag
     directory.mkdir()
@@ -162,7 +167,7 @@ def publish_fixture(root, signer, key, app, info, address):
                  sha256=digest(archive), signature=signature, contract=info["contract"])
     manifest = directory / "khor-release.json"
     manifest.write_text(json.dumps(dict(schema=1, identity=info["build"]["release"],
-        built_from=tag, notes="Private native updater Lab; never publish", artifacts=[asset])))
+        built_from=tag, notes="Private native updater Lab; never publish", artifacts=[asset] + ([cli] if cli else []))))
     manifest_signature = sign(signer, key, manifest)
     prefix = f"/assets/{tag}/"
     Feed.routes.update({prefix + archive.name: archive, prefix + manifest.name: manifest,
@@ -170,6 +175,34 @@ def publish_fixture(root, signer, key, app, info, address):
                        prefix + "khor-tauri-update.json": json.dumps(dict(version=tag[1:],
                            platforms={"darwin-aarch64": dict(url=url, signature=signature)})).encode()})
     return dict(tag=tag, archive_sha256=asset["sha256"], bytes=asset["bytes"])
+
+
+def build_cli(root, tag, environment, signer, key, address):
+    environment.update(KHOR_RELEASE_TAG=tag, KHOR_RELEASE_BUILD=tag.rsplit(".", 1)[1])
+    run("cargo", "build", "--locked", "-p", "khor-cli", "--bin", "khor", env=environment)
+    directory = root / "cli-assets" / tag
+    directory.mkdir(parents=True)
+    program = directory / "khor"
+    primary = Path(environment["CARGO_TARGET_DIR"]) / "debug/khor"
+    shutil.copyfile(primary, program)
+    program.chmod(0o755)
+    info = json.loads(subprocess.check_output([str(program), "_release_info"], env=environment))
+    assert info["component"] == "cli" and info["build"]["release"]["tag"] == tag and info["build"]["source"] == SHA
+    archive = directory / "khor-macos-arm64.gz"
+    with program.open("rb") as source, gzip.GzipFile(filename=str(archive), mode="wb", compresslevel=1, mtime=0) as output:
+        shutil.copyfileobj(source, output)
+    asset = dict(component="cli", platform=info["platform"], file=archive.name,
+                 url=f"{address}/assets/{tag}/{archive.name}", bytes=archive.stat().st_size,
+                 unpacked_bytes=program.stat().st_size, sha256=digest(archive),
+                 signature=sign(signer, key, archive), contract=info["contract"])
+    manifest = directory / "khor-release.json"
+    manifest.write_text(json.dumps(dict(schema=1, identity=info["build"]["release"], built_from=tag,
+                                        notes="Private App companion CLI fixture", artifacts=[asset])))
+    signature_file = directory / "khor-release.json.sig"
+    signature_file.write_text(sign(signer, key, manifest))
+    Feed.routes[f"/assets/{tag}/{archive.name}"] = archive
+    return dict(program=program, info=info, asset=asset, archive=archive, manifest=manifest,
+                signature_file=signature_file, primary_sha256=digest(primary))
 
 
 def wait_for(check, seconds, detail):
@@ -280,6 +313,7 @@ def main():
         domain = f"gui/{os.getuid()}"
         bootstrapped = False
         lab_binary_digest = None
+        cli_binary_digest = None
         originals = {}
         evidence = {"source": SHA, "mode": "native SDK installation and health rollback", "published": False,
                     "formal_signing_key": "never read or transferred"}
@@ -358,6 +392,15 @@ def main():
                 raise AssertionError("retired Hook initialized the native App or its profile")
             evidence["retired_hook"] = {"code": code, "elapsed_ms": round((time.monotonic()-before)*1000),
                                         "stdin": "kept open until process exit", "profile_created": False}
+            old_cli = build_cli(root, OLD, environment, signer, key, address)
+            cli_binary_digest = old_cli["primary_sha256"]
+            evidence["cli_builds"] = {OLD: old_cli["info"]}
+            for name in ["one", "two"]:
+                bin = root / ("managed-cli-" + name) / "bin"
+                bin.mkdir(parents=True)
+                subprocess.run([str(old_cli["program"]), "_install_cli", str(bin), OLD,
+                                str(old_cli["manifest"]), str(old_cli["signature_file"]), str(old_cli["archive"])],
+                               env=hook_environment, check=True, capture_output=True, text=True, timeout=90)
             # A short-lived LaunchAgent gives a daemon runner the logged-in user's Aqua bootstrap.
             agent = root / "launch.plist"
             agent.write_bytes(plistlib.dumps({"Label": label, "ProgramArguments": [str(program)],
@@ -378,13 +421,20 @@ def main():
             evidence["old_host"] = dict(session=session, processes=before_hosts)
             new_app = root / "packages" / NEW / app.name
             record, lab_binary_digest = build_app(new_app, NEW, environment, label)
-            record.update(publish_fixture(root, signer, key, new_app, record["program"], address))
+            new_cli = build_cli(root, NEW, environment, signer, key, address)
+            cli_binary_digest = new_cli["primary_sha256"]
+            evidence["cli_builds"][NEW] = new_cli["info"]
+            record.update(publish_fixture(root, signer, key, new_app, record["program"], address, new_cli["asset"]))
             builds[NEW] = record
             print("Native Lab: checking, downloading and installing the new App", flush=True)
             Feed.routes["/releases"] = json.dumps([dict(tag_name=NEW, draft=False, prerelease=True)]).encode()
             checked = command(root, OLD, "check")
             if checked["available"] != NEW:
                 raise AssertionError(f"manual native discovery failed: {checked}")
+            if len(checked["companions"]) != 2 or any(entry["selected"] for entry in checked["companions"]):
+                raise AssertionError("App must discover both registered CLIs without silently selecting them")
+            choices = command(root, OLD, "companions", ids=[entry["id"] for entry in checked["companions"]])
+            assert all(entry["selected"] for entry in choices["companions"])
             downloaded = command(root, OLD, "download")
             if downloaded["phase"] != "ready":
                 raise AssertionError(f"actual SDK download did not become ready: {downloaded}")
@@ -396,6 +446,22 @@ def main():
                     evidence["initial_ui"], before_hosts, heartbeat)
                 print("Native interruption Lab passed: parent killed during installation, old bundle/UI restored, task survives and retry deferred", flush=True)
                 return
+            failing = Path(choices["companions"][1]["id"]).parent
+            assert failing.is_relative_to(runtime.resolve())
+            mode = failing.stat().st_mode & 0o777
+            try:
+                failing.chmod(0o500)
+                partial = command(root, OLD, "install")
+            finally:
+                failing.chmod(mode)
+            if partial["phase"] != "failed" or [entry["phase"] for entry in partial["companions"]] != ["complete", "failed"]:
+                raise AssertionError(f"native partial component failure was not reported separately: {partial}")
+            if digest(program) != builds[OLD]["program_sha256"] or hosts(root) != before_hosts:
+                raise AssertionError("partial CLI failure replaced the App or an existing Shell")
+            evidence["component_partial_failure"] = dict(first_cli_complete=True, second_cli_failed=True,
+                app_still_old=True, old_hosts_unchanged=True, no_overall_success=True)
+            downloaded = command(root, OLD, "download")
+            assert downloaded["phase"] == "ready"
             command(root, OLD, "install", wait_reply=False)
             new_ui = wait_for(lambda: ready(root, NEW), 135, "installed native App did not restore its React UI")
             if new_ui["pid"] == evidence["initial_ui"]["pid"]:
@@ -413,6 +479,10 @@ def main():
             if digest(program) != builds[NEW]["program_sha256"]:
                 raise AssertionError("installed App bytes do not match the actual new build")
             evidence["sdk_update"] = dict(ui=new_ui, phase="Complete", host_unchanged=True, task_continues=True)
+            component_status = command(root, NEW, "status")
+            assert len(component_status["companions"]) == 2
+            assert all(entry["current"] == NEW and entry["phase"] == "complete" for entry in component_status["companions"])
+            evidence["component_retry"] = dict(both_clis_updated=True, results_survive_app_restart=True)
             next_session = command(root, NEW, "shell", command=shell, token="native-update-lab-new")
             after_hosts = wait_for(lambda: hosts(root) if len(hosts(root)) > len(before_hosts) else None, 30,
                                    "new Shell did not start after update")
@@ -491,6 +561,9 @@ def main():
                 with primary.open("rb") as stream:
                     if hashlib.file_digest(stream, "sha256").hexdigest() == lab_binary_digest:
                         primary.unlink()  # Keep dependency caches, never a fake-root primary executable.
+            cli_primary = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/khor"
+            if cli_binary_digest and cli_primary.is_file() and digest(cli_primary) == cli_binary_digest:
+                cli_primary.unlink()
             server.shutdown()
             (REPORT / "update-lab.json").write_text(json.dumps(evidence, indent=2) + "\n")
 
