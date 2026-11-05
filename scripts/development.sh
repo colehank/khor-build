@@ -41,6 +41,8 @@ if [[ "$DEV_TASK" = updates ]]; then
   cargo test --locked -p khor-update -p khor-runtime 2>&1 | tee "$REPORT_DIR/updates.log"
   python3 -m unittest discover -s scripts/tests -p test_install_activation.py 2>&1 | tee "$REPORT_DIR/install-activation.log"
   python3 scripts/check-release-install.py 2>&1 | tee "$REPORT_DIR/release-install.log"
+  python3 -m unittest discover -s scripts/tests -p test_onset_build.py 2>&1 | tee "$REPORT_DIR/ssh-release-install.log"
+  python3 scripts/check-onset-uninstall.py 2>&1 | tee "$REPORT_DIR/onset-uninstall.log"
   cargo test --locked -p khor-node --lib update_wire -- --test-threads=1 2>&1 | tee "$REPORT_DIR/update-wire.log"
   python3 -m unittest discover -s scripts/tests -p test_release_mirror.py 2>&1 | tee "$REPORT_DIR/release-mirror.log"
   cargo test --locked -p khor-commands --lib 2>&1 | tee "$REPORT_DIR/commands.log"

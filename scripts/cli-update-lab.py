@@ -17,7 +17,7 @@ spec = importlib.util.spec_from_file_location("update_lab", Path(__file__).with_
 common = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(common)
 SOURCE, REPORT, SHA = common.SOURCE, common.REPORT, common.SHA
-OLD, NEW, STABLE = common.OLD, common.NEW, "v0.2.0"
+OLD, NEW, FAILED, STABLE = common.OLD, common.NEW, common.FAILED, "v0.2.0"
 
 
 def execute(program, environment, *arguments, input=None, timeout=90):
@@ -54,8 +54,7 @@ def main():
     original_key = (SOURCE / "crates/update/updater.pub").read_bytes()
     original_feed = (SOURCE / "crates/update/src/feed.rs").read_bytes()
     original_wire = (SOURCE / "crates/node/src/update_wire.rs").read_bytes()
-    original_bootstrap = (SOURCE / "crates/node/src/cli_bootstrap.rs").read_bytes()
-    original_install = (SOURCE / "crates/update/src/install.rs").read_bytes()
+    original_link = (SOURCE / "crates/node/src/link.rs").read_bytes()
     last_primary = None
     with tempfile.TemporaryDirectory(prefix="khor-cli-update-lab-") as temporary:
         root = Path(temporary)
@@ -140,10 +139,8 @@ def main():
             common.replace("crates/update/src/feed.rs", "https://github.com/colehank/khor/releases/download/", address + "/assets/")
             common.replace("crates/node/src/update_wire.rs", "write(send, &Response::Upload).await?;",
                            'eprintln!("private CLI Lab receiving verified transfer");\n                    write(send, &Response::Upload).await?;')
-            for marker in ["let release = trust.authenticate(&manifest, &signature)?;", "updates::verify_program(&crate::self_exe()?, &offer)?;", "let download = Download::import(offer, &trust, archive, &installation.staging())?;", "updates::install_cli(&installation, &download, channel, None)?;", "installation.publish_launcher()?;"]:
-                common.replace("crates/node/src/cli_bootstrap.rs", marker, 'eprintln!("private CLI bootstrap before: ' + marker.replace('"', '\\"') + '");\n    ' + marker)
-            for marker in ["let program = download.unpack_cli()?;", "let _lock = self.lock()?;", "check(&program, previous.as_deref(), offer)?;", "self.point(&relative)?;", "store.select(&image).map_err(|e| e.to_string())?;"]:
-                common.replace("crates/update/src/install.rs", marker, 'eprintln!("private CLI installation before: ' + marker.replace('"', '\\"') + '");\n        ' + marker)
+            common.replace("crates/node/src/link.rs", "let mut shutdown_reply = None;",
+                           'if option_env!("KHOR_RELEASE_TAG") == Some("' + FAILED + '") { return Err("private CLI Lab startup failure".into()); }\n        let mut shutdown_reply = None;')
             (REPORT / "cli-lab-boundary.patch").write_bytes(subprocess.check_output(["git", "diff", "--binary"]))
             last_primary = build(OLD)
             for name in ("alpha", "beta"):
@@ -192,6 +189,23 @@ def main():
             assert common.hosts(root) == old_hosts
             evidence["paired_fallback"] = dict(outcome=paired, verified_transfer=True, other_tasks_unchanged=True)
 
+            previous_pid = endpoint("alpha")["pid"]
+            previous_program = Path(json.loads(installed("alpha", "_runtime_info"))["executable"])
+            last_primary = build(FAILED)
+            installed("alpha", "upgrade", "--version", FAILED, "--channel", "beta", "--json")
+            installation = previous_program.parent.parent.parent
+            def rolled_back():
+                receipt = json.loads((installation / "update.json").read_text())
+                return receipt if receipt["state"] == "rolled-back" else None
+            receipt = common.wait_for(rolled_back, 60, "actual resident startup failure did not roll back the node selection")
+            common.wait_for(lambda: endpoint("alpha")["pid"] != previous_pid, 45, "previous resident did not return after rollback")
+            assert json.loads(installed("alpha", "_release_info"))["build"]["release"]["tag"] == NEW
+            assert common.hosts(root) == old_hosts
+            size = heartbeat.stat().st_size
+            common.wait_for(lambda: heartbeat.stat().st_size > size, 10, "old task stopped during failed resident startup")
+            assert "private CLI Lab startup failure" in (root / "alpha.log").read_text()
+            evidence["resident_failure_rollback"] = dict(receipt=receipt, actual_previous_build=NEW, old_hosts_unchanged=True, heartbeat_continues=True)
+
             publish(STABLE, packages[NEW], NEW)
             promoted = json.loads(installed("alpha", "upgrade", "--version", STABLE, "--json"))
             assert promoted["installed"] and promoted["target"]["tag"] == STABLE
@@ -219,8 +233,7 @@ def main():
             (SOURCE / "crates/update/updater.pub").write_bytes(original_key)
             (SOURCE / "crates/update/src/feed.rs").write_bytes(original_feed)
             (SOURCE / "crates/node/src/update_wire.rs").write_bytes(original_wire)
-            (SOURCE / "crates/node/src/cli_bootstrap.rs").write_bytes(original_bootstrap)
-            (SOURCE / "crates/update/src/install.rs").write_bytes(original_install)
+            (SOURCE / "crates/node/src/link.rs").write_bytes(original_link)
             if last_primary and primary.is_file() and common.digest(primary) == last_primary: primary.unlink()
             server.shutdown()
             evidence["feed_requests"] = common.Feed.requests
