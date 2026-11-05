@@ -56,7 +56,11 @@ jobs:
           PREVIEW_DIR: ${{ runner.temp }}/preview
         run: |
           set -euo pipefail
-          npm run session-navigation
+          failures=0
+          for script in scripts/check-session-follow.mjs scripts/session-navigation/fan-{state,many,motion,gears,cancel}.mjs; do
+            node "$script" || failures=1
+          done
+          test "$failures" = 0
           npx tsc --project lab/mobile-navigation.tsconfig.json
           npx vite build --config lab/mobile-navigation.vite.ts --outDir "$PREVIEW_DIR"
           git -C ../../.. log -1 --format=%B > "$PREVIEW_DIR/source.txt"
