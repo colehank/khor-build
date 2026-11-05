@@ -51,7 +51,7 @@ if args.mode=='prune-test-programs':
     for offset in range(0,len(candidates),20):
         batch=candidates[offset:offset+20]
         opened=subprocess.run(['/usr/sbin/lsof','-n','-P','-F','n','--',*[str(row[1]) for row in batch]],text=True,capture_output=True)
-        if opened.returncode not in (0,1): raise RuntimeError('cannot establish active cache-file users: '+opened.stderr[:400])
+        if opened.returncode not in (0,1) or opened.stderr.strip(): raise RuntimeError('cannot establish active cache-file users: '+opened.stderr[:400])
         active={line[1:] for line in opened.stdout.splitlines() if line.startswith('n')}
         for _,path,size,inode in batch:
             if str(path) in active:
