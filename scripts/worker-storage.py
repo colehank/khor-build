@@ -1,6 +1,9 @@
 """Inspect the owned builder cache; prune only inactive superseded test programs."""
 import argparse
+import ast
 from collections import defaultdict
+import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,12 +11,52 @@ import re
 import subprocess
 import shutil
 import time
+import tempfile
 
 ROOT = Path('/Users/z13/khor-builder/cache/target')
 CACHE_BUDGET_GIB = 100
 CACHE_MAINTENANCE_GIB = 90
 MINIMUM_FREE_GIB = 40
 MAGIC = {b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\x7fELF'}
+
+def configure_guard(path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise RuntimeError('unexpected installed admission implementation')
+    original = path.read_text()
+    replacements = [
+        ('START_RESERVE = 35 * 2**30', f'START_RESERVE = {MINIMUM_FREE_GIB + 10} * 2**30'),
+        ('STOP_RESERVE = 20 * 2**30', f'STOP_RESERVE = {MINIMUM_FREE_GIB} * 2**30'),
+        ('TARGET_LIMIT = 60 * 2**30', f'TARGET_LIMIT = {CACHE_BUDGET_GIB} * 2**30'),
+        ('less than 35 GiB free', f'less than {MINIMUM_FREE_GIB + 10} GiB free'),
+        ('target cache reached 60 GiB', f'target cache reached {CACHE_BUDGET_GIB} GiB'),
+        ('free space dropped below 20 GiB', f'free space dropped below {MINIMUM_FREE_GIB} GiB'),
+    ]
+    if all(new in original and old not in original for old, new in replacements):
+        return {'changed': False, 'sha256': hashlib.sha256(original.encode()).hexdigest()}
+    if not all(original.count(old) == 1 and new not in original for old, new in replacements):
+        raise RuntimeError('installed admission changed; preserve it for review before changing the policy')
+    updated = original
+    for old, new in replacements:
+        updated = updated.replace(old, new)
+    ast.parse(updated)
+    before = hashlib.sha256(original.encode()).hexdigest()
+    backup = path.with_name('build_guard.before-policy-' + before[:12] + '.py')
+    if backup.is_symlink() or (backup.exists() and backup.read_text() != original):
+        raise RuntimeError('preserving an unexpected admission-policy backup')
+    if not backup.exists():
+        with backup.open('x') as stream:
+            stream.write(original)
+        backup.chmod(0o600)
+    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        stream.write(updated)
+        stream.flush(); os.fsync(stream.fileno())
+    try:
+        temporary.chmod(path.stat().st_mode & 0o777)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {'changed': True, 'before_sha256': before, 'sha256': hashlib.sha256(updated.encode()).hexdigest(), 'backup': str(backup)}
 
 def allocated(path):
     return int(subprocess.check_output(['/usr/bin/du','-sk',str(path)],text=True).split()[0])*1024
@@ -66,9 +109,19 @@ def main():
     args = parser.parse_args()
     assert ROOT.is_dir() and not ROOT.is_symlink() and ROOT.resolve() == ROOT
     report = Path(os.environ['REPORT_DIR']); report.mkdir(parents=True, exist_ok=True)
+    admission = None
+    if args.mode != 'inventory':
+        lock = (ROOT.parent/'build.lock').open('a')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('another build is active; preserve its caches and policy')
+        if args.mode == 'ensure-budget':
+            admission = configure_guard(ROOT.parents[1]/'bin/build_guard.py')
     before = allocated(ROOT)
     summary = {'mode':args.mode,'root':str(ROOT),'target_allocated_before':before,'free_before':free(), 'directories':{}}
     summary['policy'] = {'cache_budget_gib': CACHE_BUDGET_GIB, 'maintenance_gib': CACHE_MAINTENANCE_GIB, 'minimum_free_gib': MINIMUM_FREE_GIB}
+    summary['admission'] = admission
     if args.mode == 'ensure-budget' and before < CACHE_MAINTENANCE_GIB * 1024**3 and free() >= MINIMUM_FREE_GIB * 1024**3:
         summary.update(target_allocated_after=before, free_after=summary['free_before'], removed=[], reason='below maintenance threshold')
         (report/'storage.json').write_text(json.dumps(summary,indent=2)+'\n')

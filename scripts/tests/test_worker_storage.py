@@ -13,6 +13,24 @@ spec.loader.exec_module(storage)
 
 
 class IncrementalRetentionTest(unittest.TestCase):
+    def test_admission_policy_change_is_atomic_idempotent_and_preserves_unknown_edits(self):
+        original = '\n'.join(['START_RESERVE = 35 * 2**30', 'STOP_RESERVE = 20 * 2**30',
+                              'TARGET_LIMIT = 60 * 2**30', 'message = "less than 35 GiB free; target cache reached 60 GiB; free space dropped below 20 GiB"'])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'build_guard.py'
+            path.write_text(original)
+            result = storage.configure_guard(path)
+            self.assertTrue(result['changed'])
+            self.assertEqual(Path(result['backup']).read_text(), original)
+            self.assertIn('TARGET_LIMIT = 100 * 2**30', path.read_text())
+            self.assertIn('STOP_RESERVE = 40 * 2**30', path.read_text())
+            self.assertFalse(storage.configure_guard(path)['changed'])
+            changed = path.read_text().replace('TARGET_LIMIT = 100', 'TARGET_LIMIT = 101')
+            path.write_text(changed)
+            with self.assertRaisesRegex(RuntimeError, 'preserve it for review'):
+                storage.configure_guard(path)
+            self.assertEqual(path.read_text(), changed)
+
     def test_newest_eight_and_recent_variants_and_unknown_paths_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
