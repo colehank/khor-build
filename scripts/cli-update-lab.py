@@ -193,10 +193,11 @@ def main():
             evidence["paired_fallback"] = dict(outcome=paired, verified_transfer=True, other_tasks_unchanged=True)
 
             previous_pid = endpoint("alpha")["pid"]
-            previous_program = Path(json.loads(installed("alpha", "_runtime_info"))["executable"])
+            origins = list(Path(environments["alpha"]["KHOR_RUNTIME_DIR"]).glob("cli/*/*/origin.json"))
+            assert len(origins) == 1 and json.loads(origins[0].read_text()) == str(bin.resolve())
+            installation = origins[0].parent
             last_primary = build(FAILED)
             installed("alpha", "upgrade", "--version", FAILED, "--channel", "beta", "--json")
-            installation = previous_program.parent.parent.parent
             def rolled_back():
                 receipt = json.loads((installation / "update.json").read_text())
                 return receipt if receipt["state"] == "rolled-back" else None
@@ -223,6 +224,9 @@ def main():
             for name in ("alpha", "beta"):
                 path = root / (name + ".log")
                 if path.is_file(): shutil.copyfile(path, REPORT / ("cli-lab-" + name + ".log"))
+                receipts = Path(environments[name]["KHOR_RUNTIME_DIR"]).glob("cli/*/*/update.json")
+                for receipt in receipts:
+                    shutil.copyfile(receipt, REPORT / ("cli-lab-" + name + "-receipt.json"))
             for pid in common.own_processes(root):
                 try:
                     if pid in common.own_processes(root): os.kill(pid, signal.SIGTERM)
