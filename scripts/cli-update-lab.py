@@ -213,12 +213,15 @@ def main():
             publish(STABLE, packages[NEW], NEW)
             promoted = json.loads(installed("alpha", "upgrade", "--version", STABLE, "--json"))
             assert promoted["installed"] and promoted["target"]["tag"] == STABLE
+            common.wait_for(lambda: json.loads((installation / "update.json").read_text())["service_ready"],
+                            45, "promoted resident did not confirm its startup")
             assert old_program.is_file(), "occupied old runtime was collected"
             installed("alpha", "close", session)
             common.wait_for(lambda: not common.hosts(root), 30, "closed Lab task did not leave")
-            installed("alpha", "version")
-            assert not old_program.parent.exists(), "released old generation was not collected"
-            evidence["promotion_and_gc"] = dict(same_rc_archive_promoted=True, occupied_old_retained=True, released_old_collected=True)
+            common.wait_for(lambda: not old_program.parent.exists(), 75,
+                            "released old generation was not collected by resident maintenance")
+            evidence["promotion_and_gc"] = dict(same_rc_archive_promoted=True, occupied_old_retained=True,
+                                                released_old_collected=True, automatic_collection_without_another_command=True)
             evidence["builds"] = {tag: dict(program_sha256=p["sha256"], info=p["info"]) for tag, p in packages.items()}
         finally:
             for name in ("alpha", "beta"):
