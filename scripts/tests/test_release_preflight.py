@@ -38,7 +38,7 @@ class RuntimeAdmission(unittest.TestCase):
              patch.object(self.module, "run") as execute:
             evidence = {}
             self.executed = execute
-            self.module.ios_prerequisites({}, evidence)
+            self.module.ios_prerequisites({"DEVELOPER_DIR": str(self.root), "GITHUB_TOKEN": "fixture-only"}, evidence)
             return execute.call_args_list, evidence
 
     def test_available_runtime_does_not_download_again(self):
@@ -50,7 +50,9 @@ class RuntimeAdmission(unittest.TestCase):
         calls, evidence = self.check([[], [self.available]])
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].args,
-                         ("sudo", "-n", "xcodebuild", "-downloadPlatform", "iOS", "-architectureVariant", "arm64"))
+                         ("sudo", "-n", "/usr/bin/env", f"DEVELOPER_DIR={self.root}", "/usr/bin/xcodebuild",
+                          "-downloadPlatform", "iOS", "-architectureVariant", "arm64"))
+        self.assertFalse(any("GITHUB_TOKEN" in argument for argument in calls[0].args))
         self.assertEqual(calls[0].kwargs["timeout"], 2700)
         self.assertTrue(evidence["ios_runtimes"][0]["isAvailable"])
 

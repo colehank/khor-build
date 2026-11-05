@@ -48,7 +48,13 @@ def ios_prerequisites(environment, evidence):
         if free < 60 * 1024 ** 3:
             raise RuntimeError("preserving cache: runtime installation requires60GiB free, including40GiB reserve")
         # Tauri2.12.1 checks simctl even for a device-only archive. Only the renter gets this public runtime.
-        run("sudo", "-n", "xcodebuild", "-downloadPlatform", "iOS", "-architectureVariant", "arm64",
+        developer = environment.get("DEVELOPER_DIR") or subprocess.check_output(
+            ["xcode-select", "-p"], env=environment, text=True, timeout=30).strip()
+        if not Path(developer).is_absolute() or not Path(developer).is_dir():
+            raise RuntimeError("runtime installation requires the selected Xcode developer directory")
+        # sudo drops DEVELOPER_DIR; forward this one selection, not the job's credential environment.
+        run("sudo", "-n", "/usr/bin/env", f"DEVELOPER_DIR={developer}", "/usr/bin/xcodebuild",
+            "-downloadPlatform", "iOS", "-architectureVariant", "arm64",
             environment=environment, timeout=2700)
         installed = runtimes()
     if not installed:
