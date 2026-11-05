@@ -38,6 +38,15 @@ run_tests() {
   grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$REPORT_DIR/$name.log"
 }
 case "${CHECK:-full}" in
+  release-preflight)
+    test "$(git --git-dir="$SOURCE_PACKAGE/swift-rs.git" rev-parse --is-bare-repository)" = true
+    cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
+    export GIT_CONFIG_COUNT=1
+    export GIT_CONFIG_KEY_0="url.file://$SOURCE_PACKAGE/swift-rs.git.insteadOf"
+    export GIT_CONFIG_VALUE_0=https://github.com/Brendonovich/swift-rs
+    python3 "$SOURCE_PACKAGE/release-preflight.py"
+    exit 0
+    ;;
   cli-update-lab)
     npm ci --prefix apps/agent
     node apps/agent/build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE"

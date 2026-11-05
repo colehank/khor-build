@@ -13,7 +13,7 @@ on:
         required: true
         default: full
         type: choice
-        options: [full, approval, close, contracts, files, pair, keeper, startup, ssh-evidence, ssh, update-lab, update-lab-interrupt, cli-update-lab]
+        options: [full, approval, close, contracts, files, release-preflight, pair, keeper, startup, ssh-evidence, ssh, update-lab, update-lab-interrupt, cli-update-lab]
 
 permissions:
   contents: read
@@ -48,9 +48,10 @@ jobs:
           cp scripts/native.sh "$package_dir/native.sh"
           cp scripts/update-lab.py "$package_dir/update-lab.py"
           cp scripts/cli-update-lab.py "$package_dir/cli-update-lab.py"
+          cp scripts/release-preflight.py "$package_dir/release-preflight.py"
           cp scripts/worker-storage.py "$package_dir/worker-storage.py"
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
-          if [[ "$CHECK" = files ]]; then
+          if [[ "$CHECK" = files || "$CHECK" = release-preflight ]]; then
             git -c credential.helper= clone --mirror https://github.com/Brendonovich/swift-rs "$package_dir/swift-rs.git"
             git --git-dir="$package_dir/swift-rs.git" update-ref refs/khor/source HEAD
             git --git-dir="$package_dir/swift-rs.git" rev-parse HEAD > "$package_dir/swift-rs-sha.txt"
