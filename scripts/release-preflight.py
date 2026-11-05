@@ -38,7 +38,7 @@ def main():
                    if not key.startswith(("APPLE_", "IOS_CERTIFICATE", "TAURI_SIGNING_", "MAC_CERTIFICATE"))
                    and key not in {"IOS_PROFILE", "GH_TOKEN", "GITHUB_TOKEN"}}
     environment.update(KHOR_BUILD_SOURCE=SHA, KHOR_RELEASE_TAG=TAG,
-                       KHOR_RELEASE_BUILD=os.environ["GITHUB_RUN_ID"])
+                       KHOR_RELEASE_BUILD=os.environ["GITHUB_RUN_ID"], CARGO_INCREMENTAL="0")
     if CACHE != Path("/Users/z13/khor-builder/cache/target"):
         raise RuntimeError("release preflight requires the admitted shared target cache")
     link = SOURCE / "target"
