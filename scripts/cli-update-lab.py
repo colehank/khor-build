@@ -142,6 +142,9 @@ def main():
             common.replace("crates/node/src/link.rs", "let mut shutdown_reply = None;",
                            'if option_env!("KHOR_RELEASE_TAG") == Some("' + FAILED + '") { return Err("private CLI Lab startup failure".into()); }\n        let mut shutdown_reply = None;')
             (REPORT / "cli-lab-boundary.patch").write_bytes(subprocess.check_output(["git", "diff", "--binary"]))
+            prepared = dict(environment, KHOR_RELEASE_TAG=OLD, KHOR_RELEASE_BUILD=OLD.rsplit(".", 1)[1])
+            subprocess.run(["npm", "run", "gen", "--prefix", "apps/gui"], env=prepared, check=True)
+            subprocess.run(["npm", "run", "build", "--prefix", "apps/gui"], env=prepared, check=True)
             last_primary = build(OLD)
             for name in ("alpha", "beta"):
                 package = packages[OLD]
