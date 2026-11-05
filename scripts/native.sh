@@ -107,7 +107,8 @@ PYSSH
     ;;
   ssh)
     test -x "$KHOR_AGENT_BUNDLE"
-    KHOR_TEST_KEEP=1 run_tests ssh-install -p khor-cli --test add_ssh
+    npm ci --prefix apps/gui
+    python3 scripts/check-ssh-install.py --output "$REPORT_DIR/ssh-native"
     exit 0
     ;;
   startup)
@@ -279,5 +280,6 @@ run_tests terminal-io -p khor-gui-core --lib term::io_tests::
 run_tests terminal-current -p khor-gui-core --test terminal_current
 run_tests account-registration -p khor-gui-core --test account_registration
 run_tests keeper -p khor-cli --test serve_keeper
-KHOR_TEST_KEEP=1 run_tests ssh-install -p khor-cli --test add_ssh
+npm ci --prefix apps/gui
+python3 scripts/check-ssh-install.py --output "$REPORT_DIR/ssh-native"
 printf '%s\n' 'Khor native development checks passed.' >> "$GITHUB_STEP_SUMMARY"
