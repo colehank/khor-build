@@ -46,6 +46,7 @@ if [[ "$DEV_TASK" = updates ]]; then
   cargo test --locked -p khor-node --lib update_wire -- --test-threads=1 2>&1 | tee "$REPORT_DIR/update-wire.log"
   python3 -m unittest discover -s scripts/tests -p test_release_mirror.py 2>&1 | tee "$REPORT_DIR/release-mirror.log"
   cargo test --locked -p khor-commands --lib 2>&1 | tee "$REPORT_DIR/commands.log"
+  cargo test --locked -p khor-gui-core --test command_tables 2>&1 | tee "$REPORT_DIR/native-command-boundary.log"
   cargo test --locked -p khor-cli --test runtime_image activation_check_and_incompatible_local_runtime_never_open_user_data -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/update-activation.log"
   if [[ -f apps/gui/src-tauri/src/app_updates.rs ]]; then
     npm ci --prefix apps/gui
