@@ -48,6 +48,7 @@ jobs:
           cp scripts/native.sh "$package_dir/native.sh"
           cp scripts/update-lab.py "$package_dir/update-lab.py"
           cp scripts/cli-update-lab.py "$package_dir/cli-update-lab.py"
+          cp scripts/worker-storage.py "$package_dir/worker-storage.py"
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
           if [[ "$CHECK" = files ]]; then
             git -c credential.helper= clone --mirror https://github.com/Brendonovich/swift-rs "$package_dir/swift-rs.git"
@@ -77,7 +78,10 @@ jobs:
           CHECK: ${{ inputs.check }}
           SOURCE_PACKAGE: ${{ runner.temp }}/source-package
           REPORT_DIR: ${{ runner.temp }}/native-evidence
-        run: /Users/z13/khor-builder/bin/run-build /bin/bash "$SOURCE_PACKAGE/native.sh"
+        run: |
+          mkdir -p "$REPORT_DIR"
+          REPORT_DIR="$REPORT_DIR/cache-maintenance" /usr/bin/python3 "$SOURCE_PACKAGE/worker-storage.py" ensure-budget
+          /Users/z13/khor-builder/bin/run-build /bin/bash "$SOURCE_PACKAGE/native.sh"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

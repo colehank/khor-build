@@ -10,7 +10,7 @@ import subprocess
 ROOT = Path('/Users/z13/khor-builder/cache/target')
 MAGIC = {b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\x7fELF'}
 parser = argparse.ArgumentParser()
-parser.add_argument('mode', choices=['inventory', 'prune-test-programs'])
+parser.add_argument('mode', choices=['inventory', 'prune-test-programs', 'ensure-budget'])
 args = parser.parse_args()
 report = Path(os.environ['REPORT_DIR']); report.mkdir(parents=True, exist_ok=True)
 assert ROOT.is_dir() and not ROOT.is_symlink() and ROOT.resolve() == ROOT
@@ -24,6 +24,11 @@ def free():
 
 before = allocated(ROOT)
 summary = {'mode':args.mode,'root':str(ROOT),'target_allocated_before':before,'free_before':free(), 'directories':{}}
+if args.mode == 'ensure-budget' and before < 55 * 1024**3:
+    summary.update(target_allocated_after=before, free_after=summary['free_before'], removed=[], reason='below maintenance threshold')
+    (report/'storage.json').write_text(json.dumps(summary,indent=2)+'\n')
+    print('Cache below maintenance threshold; preserving all build artifacts')
+    raise SystemExit(0)
 for path in sorted(ROOT.iterdir()):
     if path.is_dir() and not path.is_symlink(): summary['directories'][path.name]=allocated(path)
 deps=ROOT/'debug/deps'
@@ -47,7 +52,7 @@ summary['candidate_logical_bytes']=sum(row[2] for row in candidates)
 summary['largest_candidates']=[{'file':str(row[1]),'bytes':row[2]} for row in sorted(candidates,key=lambda row:row[2],reverse=True)[:40]]
 summary['groups']={name:len(entries) for name,entries in sorted(groups.items()) if len(entries)>2}
 summary['removed']=[];summary['preserved_active']=[]
-if args.mode=='prune-test-programs':
+if args.mode in ('prune-test-programs', 'ensure-budget'):
     for offset in range(0,len(candidates),20):
         batch=candidates[offset:offset+20]
         opened=subprocess.run(['/usr/sbin/lsof','-n','-P','-F','n','--',*[str(row[1]) for row in batch]],text=True,capture_output=True)
