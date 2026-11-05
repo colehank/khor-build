@@ -146,6 +146,16 @@ def main():
             subprocess.run(["npm", "run", "gen", "--prefix", "apps/gui"], env=prepared, check=True)
             subprocess.run(["npm", "run", "build", "--prefix", "apps/gui"], env=prepared, check=True)
             last_primary = build(OLD)
+            readonly = dict(environment, KHOR_HOME=str(root / "readonly-home"),
+                            KHOR_RUNTIME_DIR=str(root / "readonly-runtime"))
+            package = packages[OLD]
+            identity = json.loads(execute(package["program"], readonly, "_verify_release",
+                                         str(package["manifest"]), str(package["signature_file"]),
+                                         str(package["archive"].parent)))
+            assert identity == package["info"]["build"]["release"]
+            assert not Path(readonly["KHOR_HOME"]).exists()
+            assert not Path(readonly["KHOR_RUNTIME_DIR"]).exists()
+            evidence["readonly_publication_verification"] = True
             for name in ("alpha", "beta"):
                 package = packages[OLD]
                 execute(package["program"], environments[name], "_install_cli", str(bin), OLD,
