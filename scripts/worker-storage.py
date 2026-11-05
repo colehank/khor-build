@@ -10,6 +10,9 @@ import shutil
 import time
 
 ROOT = Path('/Users/z13/khor-builder/cache/target')
+CACHE_BUDGET_GIB = 100
+CACHE_MAINTENANCE_GIB = 90
+MINIMUM_FREE_GIB = 40
 MAGIC = {b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\x7fELF'}
 
 def allocated(path):
@@ -65,7 +68,8 @@ def main():
     report = Path(os.environ['REPORT_DIR']); report.mkdir(parents=True, exist_ok=True)
     before = allocated(ROOT)
     summary = {'mode':args.mode,'root':str(ROOT),'target_allocated_before':before,'free_before':free(), 'directories':{}}
-    if args.mode == 'ensure-budget' and before < 55 * 1024**3:
+    summary['policy'] = {'cache_budget_gib': CACHE_BUDGET_GIB, 'maintenance_gib': CACHE_MAINTENANCE_GIB, 'minimum_free_gib': MINIMUM_FREE_GIB}
+    if args.mode == 'ensure-budget' and before < CACHE_MAINTENANCE_GIB * 1024**3 and free() >= MINIMUM_FREE_GIB * 1024**3:
         summary.update(target_allocated_after=before, free_after=summary['free_before'], removed=[], reason='below maintenance threshold')
         (report/'storage.json').write_text(json.dumps(summary,indent=2)+'\n')
         print('Cache below maintenance threshold; preserving all build artifacts')
@@ -73,6 +77,10 @@ def main():
     for path in sorted(ROOT.iterdir()):
         if path.is_dir() and not path.is_symlink(): summary['directories'][path.name]=allocated(path)
     if args.mode == 'inventory':
+        guard = Path('/Users/z13/khor-builder/bin/run-build')
+        if guard.stat().st_size > 64 * 1024:
+            raise RuntimeError('unexpected builder admission script size')
+        (report/'run-build.txt').write_bytes(guard.read_bytes())
         summary['directory_depth_two'] = subprocess.check_output(['/usr/bin/du','-k','-d','2',str(ROOT)],text=True).splitlines()
         summary['largest_regular_files'] = sorted(
             ({'file':str(path),'bytes':path.stat().st_size,'links':path.stat().st_nlink}
