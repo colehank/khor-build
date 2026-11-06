@@ -1,0 +1,64 @@
+name: Verify local Lab builder
+run-name: Local Lab builder ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      snapshot_sha:
+        required: true
+        type: string
+      request_id:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  local-builder:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.snapshot_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22.19.0
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Materialize a normal developer checkout
+        env:
+          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args): return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('rev-parse', 'HEAD') == os.environ['SNAPSHOT_SHA']
+          info = json.loads(git('show', '-s', '--format=%B', 'HEAD').split('\n\n', 1)[1])
+          assert info['tree'] == git('rev-parse', 'HEAD:source')
+          pathlib.Path('source/.git').mkdir(exist_ok=True)
+          subprocess.run(['git', 'init', '-q', 'source'], check=True)
+          subprocess.run(['git', '-C', 'source', 'add', '--force', '--all'], check=True)
+          subprocess.run(['git', '-C', 'source', '-c', 'user.name=Lab', '-c', 'user.email=lab@localhost', 'commit', '-qm', 'Local builder verification'], check=True)
+          PY
+      - name: Run the real local frontend builder
+        working-directory: source
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          from khor_lab.config import load
+          from khor_lab.builders import local
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'local-lab/versions/one'
+          output.mkdir(parents=True)
+          result = local(load(pathlib.Path.cwd()), output, lambda kind, manifest, info: print(kind, info['tree']), lambda: False)
+          print(result)
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: local-builder-receipt
+          path: ${{ runner.temp }}/local-lab/versions/one/lab-manifest.json
+          if-no-files-found: warn
+          retention-days: 3
