@@ -65,6 +65,13 @@ jobs:
           npx vite build --config lab/mobile-navigation.vite.ts --outDir "$PREVIEW_DIR"
           git -C ../../.. log -1 --format=%B > "$PREVIEW_DIR/source.txt"
           printf '%s\n' 'Generated contracts: colehank/khor 42077223682 / 0f643908283d925efeae8dd850bdd5de29313ed6' >> "$PREVIEW_DIR/source.txt"
+      - name: Attach the compiled Lab for review while browser checks continue
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: mobile-navigation-bundle
+          path: ${{ runner.temp }}/preview
+          if-no-files-found: error
+          retention-days: 7
       - name: Exercise the bundled Lab in Chromium
         working-directory: snapshot/source/apps/gui
         env:
