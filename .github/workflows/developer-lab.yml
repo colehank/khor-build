@@ -74,8 +74,8 @@ jobs:
           python3 - <<'PY'
           import os, pathlib, sys
           sys.path.insert(0, 'snapshot/source/scripts')
-          from khor_lab.contract import digest
-          same = digest(pathlib.Path('snapshot/source')) == digest(pathlib.Path('generated-baseline'))
+          from khor_lab.contract import generated_digest
+          same = generated_digest(pathlib.Path('snapshot/source')) == generated_digest(pathlib.Path('generated-baseline'))
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out: out.write('reuse=' + str(same).lower() + '\n')
           PY
       - name: Reuse compatible generated contracts from the trusted release
