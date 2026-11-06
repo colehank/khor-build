@@ -168,6 +168,9 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts/tests -p test_developer_lab.py -v
           python3 -m unittest discover -s scripts/tests -p test_lab_development.py -v
+      - name: Validate source workflow changes
+        working-directory: snapshot/source
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Exercise production App paths in Chromium
         working-directory: snapshot/source/apps/gui
         env:
