@@ -9,7 +9,7 @@ const frames=page=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(
 async function pan(page){const cdp=await page.context().newCDPSession(page),trace=[];try{for(const [type,y] of [['touchStart',280],...[300,330,360,390,420,390,360,330,300,270,240,210,180].map(y=>['touchMove',y]),['touchEnd',180]]){await cdp.send('Input.dispatchTouchEvent',{type,touchPoints:type==='touchEnd'?[]:[{x:200,y}]});await page.waitForTimeout(30);trace.push(await page.locator('[data-pane-body]').evaluate(el=>el.scrollTop));}await cdp.send('Input.synthesizeScrollGesture',{x:200,y:280,yDistance:-150,gestureSourceType:'touch',preventFling:true});return {trace,synthesized:await page.locator('[data-pane-body]').evaluate(el=>el.scrollTop)};}finally{await cdp.detach();}}
 try{
  for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:23918/lab/status')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
- for(const [name,engine] of [['chromium',chromium],['webkit',webkit]]){
+ for(const [name,engine] of [['chromium',chromium]]){
   const browser=await engine.launch({headless:true}),context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true}),page=await context.newPage();
   const row={engine:name};try{
    if(name==='chromium'){

@@ -41,7 +41,7 @@ jobs:
           LAB_REPORT: ${{ runner.temp }}/probe
         run: |
           npm ci --no-audit --no-fund
-          npx playwright-core install --with-deps chromium webkit
+          npx playwright-core install chromium
           cp ../../../control/diagnostics/probe-list-scroll.mjs dev/lab/probe-list-scroll.mjs
           node dev/lab/probe-list-scroll.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
