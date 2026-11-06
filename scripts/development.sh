@@ -82,6 +82,9 @@ install_dependencies agent
 install_dependencies gui
 case "$DEV_TASK" in
   ios-lab-prepare|ios-lab)
+    if ! command -v pod >/dev/null; then
+      HOMEBREW_NO_AUTO_UPDATE=1 brew install cocoapods
+    fi
     phase=verify
     if [[ "$DEV_TASK" = ios-lab-prepare ]]; then phase=prepare; fi
     python3 scripts/khor_lab/ios_probe.py "$phase" --report "$REPORT_DIR/ios"
