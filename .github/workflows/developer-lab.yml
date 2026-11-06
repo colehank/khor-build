@@ -148,6 +148,13 @@ jobs:
           ref: ${{ inputs.snapshot_sha }}
           path: snapshot
           persist-credentials: false
+      - name: Materialize the normal developer Git root
+        run: |
+          expected=$(git -C snapshot rev-parse HEAD:source)
+          git -C snapshot/source init -q
+          git -C snapshot/source add --force --all
+          git -C snapshot/source -c user.name=Lab -c user.email=lab@localhost commit -qm 'Exact developer source'
+          test "$(git -C snapshot/source rev-parse 'HEAD^{tree}')" = "$expected"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22.19.0
