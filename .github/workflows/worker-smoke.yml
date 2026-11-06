@@ -29,6 +29,8 @@ jobs:
           xcodebuild -checkFirstLaunchStatus
           xcrun --sdk macosx --show-sdk-version
           xcrun --sdk iphoneos --show-sdk-version
+          df -h /
+          xcrun simctl list devices available --json
           probe_dir=$(mktemp -d "$TMPDIR/actions-smoke.XXXXXX")
           trap 'rm -rf "$probe_dir"' EXIT
           printf '%s\n' '#include <stdio.h>' 'int main(void) { puts("Khor worker ready"); return 0; }' > "$probe_dir/probe.c"
