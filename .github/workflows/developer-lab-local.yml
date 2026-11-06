@@ -62,3 +62,22 @@ jobs:
           path: ${{ runner.temp }}/local-lab/versions/one/lab-manifest.json
           if-no-files-found: warn
           retention-days: 3
+  retire-snapshot:
+    needs: local-builder
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Retire this request snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
+        run: |
+          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
+          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          ref="heads/dev-snapshots/$REQUEST_ID"
+          actual=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$ref" --jq .object.sha) || exit 0
+          test "$actual" = "$SNAPSHOT_SHA"
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/$ref"
