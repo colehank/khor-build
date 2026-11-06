@@ -184,6 +184,10 @@ jobs:
           LAB_BUNDLE: ${{ runner.temp }}/frontend
           LAB_REPORT: ${{ runner.temp }}/checks
         run: |
+          npm run test:types
+          npm run deck-scrub
+          npm run session-navigation
+          npm run session-follow
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
           sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=2 install --no-install-recommends -y fonts-noto-cjk
           npx playwright-core install chromium
