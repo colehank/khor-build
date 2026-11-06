@@ -1,0 +1,37 @@
+[package]
+name = "khor-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "khor"
+path = "src/main.rs"
+
+[dependencies]
+khor-commands = { path = "../commands" }
+khor-catalog.workspace = true
+# Native hosts supply the web listener to the shared command engine.
+khor-web = { path = "../web" }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+khor-runtime.workspace = true
+khor-node.workspace = true
+khor-core.workspace = true
+khor-acp = { path = "../acp" }
+khor-net.workspace = true
+khor-sync.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+iroh.workspace = true
+# Relay HTTPS tests generate certificates for their own local servers.
+rcgen = "0.14"
+
+# The Linux network lab starts relay servers inside patchbay namespaces.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+iroh-relay = { version = "1.2.0", features = ["server"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+patchbay = "0.7"
+ctor = "1.0"

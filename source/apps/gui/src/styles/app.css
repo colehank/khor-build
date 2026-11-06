@@ -1,0 +1,2998 @@
+/* **The two fonts khor ships** (F7.6), the terminal stack's last
+   families. Nerd Fonts' "Symbols Only" mono face, v3.5.1, MIT (its
+   licence and the icon sets' table beside it, `assets/fonts/NerdFonts-*`)
+   for a prompt's icons; and a subset of Noto Sans Symbols, OFL
+   (`assets/fonts/Noto-*`), for the text symbols a program prints (`⏺ ●
+   ✔ ✗ ⚠`) that the monospace faces lack — without it a phone, which has
+   no Apple Symbols, falls back to the colour emoji face and draws them
+   as emoji (the owner's iPhone, 2026-10-03). */
+@font-face {
+  font-family: "khor-symbols";
+  src: url("../assets/fonts/SymbolsNerdFontMono-Regular.ttf") format("truetype");
+  font-display: block;
+}
+@font-face {
+  font-family: "khor-symbols-text";
+  src: url("../assets/fonts/NotoSansSymbols-subset.ttf") format("truetype");
+  font-display: block;
+}
+
+/* Only what utilities cannot say: keyframes, the two-density icon rule,
+ * and reduced-motion guards. Layout and looks live as utilities in the
+ * components, on the theme in tokens.css. */
+
+/* Two densities, one color (mandala's rail discipline): the solid piece
+   fills at a fraction of the line so the two read as depths, not as
+   colors; selection pushes it solid.
+
+   The fraction is `--icon-body` rather than a number written here,
+   because it is only half of what reaches the screen — the other half
+   is whatever alpha the ink already carries, and the two multiply. That
+   product, and the contrast each factor was chosen to land on, are
+   recorded together in `tokens.css`; a number sitting here would be the
+   one place a reader could find it and still be wrong. */
+/* **Not scoped to the rail.** The filled half is the icon FAMILY's
+   density rule, not a rail state: the marks in the「…」menu (设置,
+   安全, 网络, 诊断) carry one too, and scoped here they drew hollow —
+   `fill` defaults to none, so a `[data-body]` outside a rail item got
+   no fill at all. The rail state is the rule directly below, which
+   pushes that same fill to solid; keeping the two apart is what lets
+   「two densities」and「open」stay two different claims. */
+svg [data-body] {
+  fill: currentColor;
+  fill-opacity: var(--icon-body);
+  transition: fill-opacity var(--dur-180) var(--ease-out);
+}
+
+/* ── 选字与手: chrome is not text (2026-09-28) ─────────────────────
+   **A Mac app's chrome does not select.** Dragging across Finder's
+   sidebar paints no blue, and a double-click on a row's name opens the
+   row, never selects a word. So the page's default is `none`, and text
+   selects where a person reads or copies it — **marked one way,
+   `data-selectable`**, on the reading surface itself:
+
+     the conversation (`ChatView`'s column), Markdown wherever it is
+     drawn, a file / a diff / code, the machine's own messages, and the
+     values people copy — a fact's value (an id, a version, a path),
+     the web key, a relay's address, a check's detail and its error.
+
+   A field is always text (it would not take a caret otherwise — WebKit
+   stops typing into an input under a `none` ancestor), and the terminal
+   is xterm's: it selects on its own canvas and needs nothing here.
+   **Inside a reading surface a button is still chrome** — a copy button's
+   word is not part of the paragraph — except a link in the prose, which
+   is the paragraph's own words.
+
+   In `@layer base`, so a `select-none` utility still wins inside a
+   reading surface (line numbers beside code), and a `select-text` one
+   inside chrome. `check-face` §11a reads the computed value on both
+   sides. */
+@layer base {
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input,
+  textarea,
+  [contenteditable]:not([contenteditable="false"]),
+  [data-selectable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  [data-selectable] :is(button, [role="button"]):not([data-md-link], [data-link]) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+[data-rail-item][data-on="true"] svg [data-body],
+[data-seat-item][data-on="true"] svg [data-body],
+:is([data-nav-item], [data-nav-more])[data-on="true"] svg [data-body] {
+  fill-opacity: 1;
+}
+
+/* **A list scrolls out from under the floating navigation** (the
+   redesign, 2026-10-02): its foot keeps the capsule's room, so the last
+   row can be brought up clear of the glass. A page's own scroller that
+   the navigation floats over says so with `data-nav-clear`. */
+[data-nav-shown] :is([data-pane-body], [data-nav-clear], [data-machine-files] [data-files-list]) {
+  padding-bottom: var(--nav-room);
+}
+/* …and a page a landing opens has no bar over it (`navShown`, 2026-10-03):
+   its scroller keeps only the home indicator's room and a breath. */
+[data-nav-host]:not([data-nav-shown]) :is([data-pane-body], [data-nav-clear], [data-machine-files] [data-files-list]) {
+  padding-bottom: calc(var(--safe-bottom) + var(--gap-base));
+}
+
+/* **A kind mark painted on a face is one density** (类型标记「浮现」,
+   2026-10-02). Its ink is the one the face was given — `--mark-ink-dark`
+   on a bright face, `--mark-ink-light` on a dark one, over whatever veil
+   the face needed (`Avatar.mark`), measured at 3:1 per face
+   (`check-palette`「a mark on a face」); a body at `icon-body` 0.7 would
+   be ink thinned back toward the face it is meant to stand off — 2.3
+   for white on a white face. So it takes the rail's open rule: the body
+   filled to 1.0, the family's cuts still separating the pieces. */
+[data-mark-at="face"] svg [data-body] {
+  fill-opacity: 1;
+}
+
+/* **Tombstone: the open item used to wear a block, and it does not now.**
+ *
+ * It was `background-color: var(--rail-on)` — the brand green, thinned —
+ * and the reasoning was sound as far as it went: green cannot be an
+ * icon's colour on the light theme (measured 2026-08-31, `--lq3` on
+ * `--background` is **2.22**, under the 3.0 that SC 1.4.11 asks of a
+ * graphic), while a *block* only has to be noticed, not read, so the
+ * block could carry the colour that the glyph could not.
+ *
+ * What that reasoning did not weigh is which of the two a person reads
+ * as the answer to「我在哪一页」. The person using this app said it
+ * plainly: the icon should change, not the icon's background. So the
+ * signal is now entirely on the glyph, where it was already half
+ * living — `--rail-ink` → `--foreground` (6.59 → 13.60 light,
+ * 8.76 → 15.17 dark) **and** the body filling from `--icon-body` to
+ * solid, which is the rule directly above.
+ *
+ * **The brand green is now nowhere in the rail**, and that is the cost:
+ * an earlier instruction on this same rail was「侧边栏还是高亮品牌绿好了」.
+ * It cannot be both — green is legible as a plate and not as a mark,
+ * and only one of those is a background. If it is missed, mandala's own
+ * answer is a hairline bar down the open item's edge (`.nav-item.on`,
+ * `box-shadow: inset`), which is a graphic rather than a ground.
+ *
+ * Hover keeps its wash and needs no rule to outrank: the two facts now
+ * live on different channels — being pointed at paints the ground,
+ * being open paints the glyph — so neither can be mistaken for the
+ * other and neither has to win a specificity fight. */
+
+
+/* A reading turns over.
+ *
+ * The arc says roughly how full, the middle says exactly how much, and
+ * the sentence khor's own terminal prints — with the denominator, the
+ * core count, the bytes — is on the back. Three facts, two faces, and
+ * the front stays a gauge rather than a paragraph.
+ *
+ * **Why `visibility` and not only `backface-visibility`.** A rotated
+ * backface stops being *seen*, but its text is still text: it stays in
+ * `innerText`, it stays in the accessibility tree, and anything reading
+ * the unit gets both faces concatenated. So the away face is also made
+ * `hidden`, on a delay of half the turn so it disappears behind the edge
+ * rather than blinking out in the open.
+ *
+ * That is not only tidiness — `smoke.mjs` compares this card's sentence
+ * against `khor devices` word for word, and a unit that reports both of
+ * its faces at once says something neither face says. */
+[data-metric] {
+  perspective: var(--flip-depth);
+}
+
+[data-metric-faces] {
+  display: grid;
+  transform-style: preserve-3d;
+  transition: transform var(--dur-420) var(--ease-move);
+}
+
+[data-metric][data-flipped="true"] [data-metric-faces] {
+  transform: rotateY(180deg);
+}
+
+[data-metric-face] {
+  grid-area: 1 / 1;
+  backface-visibility: hidden;
+  transition: visibility 0s linear calc(var(--dur-420) / 2);
+}
+
+[data-metric-face="back"] {
+  transform: rotateY(180deg);
+}
+
+[data-metric][data-flipped="false"] [data-metric-face="back"],
+[data-metric][data-flipped="true"] [data-metric-face="front"] {
+  visibility: hidden;
+}
+
+/* `type=search` is the right semantics — screen readers announce it, and
+   Escape clears — but WebKit hangs its own clear glyph inside the box.
+   That glyph belongs to no family we drew, which is the one thing the
+   icon rule forbids; the box already clears by selecting and deleting. */
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+  appearance: none;
+}
+
+/* The scrollbar — the one thing on the list this app had never drawn,
+ * and the loudest thing on it.
+ *
+ * Measured on the sessions pane in the dark theme before this landed: a
+ * 15-wide strip whose track came back rgb(250,250,250) and whose thumb
+ * came back rgb(193,193,193), against a rgb(25,25,23) list — 16.87 and
+ * 9.78 against it, where the body text beside it measures 13.92. The
+ * light theme returned the identical pixels, and that is the tell:
+ * nothing was following the theme because nothing had told the engine
+ * there were two of them (`color-scheme`, tokens.css).
+ *
+ * ── two mechanisms, and why the standard one ──────────
+ *
+ * There are two ways to reach a scrollbar and they are not two spellings
+ * of one thing. Measured on this page as `offsetWidth - clientWidth`,
+ * under both of the scrollbar styles macOS hands out — the always-
+ * visible one it picks when a mouse is plugged in, and the overlay one
+ * it picks for a trackpad:
+ *
+ *                                 always-visible   overlay
+ *   nothing                                  15         0
+ *   ::-webkit-scrollbar { width }             8         8
+ *   scrollbar-width: thin                    11         0
+ *
+ * **The pseudo-element buys a narrower bar by taking the overlay one
+ * away.** A width there switches the engine to a custom scrollbar, and
+ * a custom scrollbar is never an overlay one — so on every machine that
+ * had no gutter at all (trackpad Macs, iPads, phones) it creates one.
+ * That trades the thing that was asked for, on most machines, for a few
+ * units of width on this one.
+ *
+ * The pseudo-elements are not merely unneeded here, they are inert:
+ * with these two properties set, a `::-webkit-scrollbar-thumb {
+ * background: red }` laid on top painted no red at all — the same bytes
+ * as without it. A rule that provably does nothing is worse than no
+ * rule, because the next reader believes it.
+ *
+ * ── where it holds, where it degrades ─────────────────
+ *
+ *   Chrome / Blink    both honoured; 15 → 11, thumb painted
+ *                     rgb(196,196,192) light and rgb(72,72,69) dark
+ *   macOS WKWebView   the desktop app's own engine: both supported,
+ *                     17 → 13, computed value is ours. **The paint was
+ *                     not captured there** — `takeSnapshot` on an
+ *                     offscreen web view returns without the scroller —
+ *                     so that row is geometry and capability, not pixels
+ *   iOS Safari        both supported, and the gutter measures 0 with
+ *                     `thin` and without it: the indicator never took
+ *                     room, so `thin` costs nothing there. **Whether
+ *                     the colour reaches that indicator is untested** —
+ *                     it fades before a screenshot lands — and the
+ *                     honest floor for iOS is the `color-scheme` line
+ *   engines with      ignore both and draw the platform indicator,
+ *   neither property  which `color-scheme` has by then already told to
+ *                     be the dark one — that fallback is the whole
+ *                     reason `color-scheme` is its own line
+ *
+ * **What it does not fix**: an always-visible bar still takes room, 11
+ * of the list instead of 15. Nothing in CSS takes that to zero while
+ * leaving a bar you can see — the mechanisms that reach zero
+ * (`scrollbar-width: none`, a zero-width pseudo-element) reach it by
+ * removing the bar. Reserving room is the platform's call, and on a
+ * machine with a mouse attached it reserves it.
+ *
+ * **What it cannot say**: hover. `scrollbar-color` has no `:hover`
+ * form, so the thumb does not answer the pointer the way a hand-drawn
+ * one would. The overlay platforms still widen theirs natively; the
+ * always-visible ones now just have a quiet bar. Buying that back means
+ * the pseudo-element, and the table above is what that costs. */
+:root {
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+/* **The file's scroller wears the git overview ruler over its scrollbar**
+   (`FileView`'s `Ruler`, 2026-09-16:「可以透过滑动条颜色浮上来」), so its
+   thumb is a wash rather than a solid: a mark under the thumb still
+   reads through it, the way VS Code's slider sits over its decorations.
+   The track was already transparent above. Only this scroller — the
+   rest of the app keeps the thumb it measured. */
+[data-file-scroll] {
+  /* **Its own ink, not a fraction of the app's** (2026-09-16:「文件右侧
+     的滑动按钮还是在状态条下看不清, 透明度再低一点」). This was 80% of
+     `--scroll-thumb`, which is α 0.2 — a wash that a coloured mark
+     underneath simply swallowed. `--scroll-thumb-strong` is half ink,
+     and the mark still reads through it because the mark is what moved
+     instead (`FileView`'s `Ruler`, opacity 50). */
+  scrollbar-color: var(--scroll-thumb-strong) transparent;
+}
+
+/* **A tab strip draws no scrollbar** (docs/SHELL.md 第三轮 第 2 条:
+   「多标签页的时候, 标签会被移动条顶出窗口. 且此条无法拖动」). On a
+   machine with a mouse the bar took room under the tabs and pushed them
+   up out of the band, and at `thin` it was too narrow to drag. The ways
+   past the edge are the strip's own: a vertical wheel turned sideways,
+   a fade on the cut side, the count and its switcher (`TabStrip`).
+   Both spellings: the property for engines that read it, the
+   pseudo-element for WebKit builds that only read that. `check-wk`
+   lifts these two blocks verbatim. */
+[data-tab-strip] {
+  scrollbar-width: none;
+}
+[data-tab-strip]::-webkit-scrollbar {
+  display: none;
+}
+
+/* Portal seats stay mounted, but an empty seat must not reserve a gap. */
+[data-tab-extras]:has(> :only-child:empty) {
+  display: none;
+}
+
+/* The keys a soft keyboard lacks (`views/TermKeys`, 2026-10-02) scroll
+   sideways the same way and for the same reason: a thumb swipes them,
+   and a bar under a row of keys is one more thing between the keys and
+   the keyboard. */
+[data-term-keys-scroll] {
+  scrollbar-width: none;
+}
+[data-term-keys-scroll]::-webkit-scrollbar {
+  display: none;
+}
+
+/* 导入's machine chips scroll sideways the same way (IMPORT-BRIEF).
+   ⚠️ 墓碑 (UX-42 row 13 → sb-a): the browser's chips over the keyboard. */
+[data-import-chips] {
+  scrollbar-width: none;
+}
+[data-import-chips]::-webkit-scrollbar {
+  display: none;
+}
+
+/* Dialog bounds are shared, not a per-page guess. Long forms opt into
+   one shrinking body; the fallback scrolls the whole dialog. The visible
+   viewport matters when a keyboard covers the layout viewport. */
+[data-slot="dialog-content"] {
+  --dialog-visible-height: 100dvh;
+  --dialog-visible-top: 0%;
+  max-height: calc(var(--dialog-visible-height) - 2 * var(--gap-pane));
+}
+[data-slot="dialog-content"]:not([data-overlay-task]):not([data-action-sheet]) {
+  top: calc(var(--dialog-visible-top) + var(--dialog-visible-height) / 2);
+}
+[data-slot="dialog-content"][data-overlay-task] {
+  align-content: start;
+  top: calc(var(--dialog-visible-top) + var(--dialog-visible-height) * 0.16);
+  max-height: calc(var(--dialog-visible-height) * 0.84 - var(--gap-pane));
+}
+[data-slot="dialog-content"][data-scrollable] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+[data-slot="dialog-content"][data-scrollable] > :not([data-slot="dialog-body"]):not([hidden]) {
+  flex: none;
+}
+/* Inline completions must contribute their height inside a bounded form;
+   otherwise the absolute menu is clipped by the dialog's scroller. */
+[data-slot="dialog-content"] [data-path-suggestions] > [data-menu-frame] {
+  position: static;
+}
+/* Selection tasks keep a stable workspace while filtering. The phone's
+   initial/maximum heights are resolved by useTaskOverlay, not by each page. */
+[data-slot="dialog-content"][data-overlay-presentation="dialog"][data-overlay-task][data-overlay-initial="medium"]:not([data-overlay-max="fit"]) {
+  height: calc(var(--dialog-visible-height) * 0.6);
+}
+[data-slot="dialog-content"][data-overlay-presentation="dialog"][data-overlay-task][data-overlay-initial="large"] {
+  height: calc(var(--dialog-visible-height) * 0.8);
+}
+[data-slot="dialog-content"][data-overlay-presentation="dialog"][data-overlay-purpose="preview"][data-overlay-initial="large"] {
+  top: calc(var(--dialog-visible-top) + var(--dialog-visible-height) * 0.1);
+  height: calc(var(--dialog-visible-height) * 0.8);
+}
+[data-slot="dialog-content"][data-overlay-presentation="actions"] {
+  top: auto;
+  bottom: calc(var(--sheet-kb) + var(--safe-bottom) + var(--gap-in));
+  width: calc(100% - 2 * var(--gap-in));
+  max-width: none;
+  translate: -50% 0;
+  transform: none;
+  gap: var(--gap-in);
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+/* **Chrome never pans the screen** (the owner, 2026-10-05, iPhone build
+   5: 「只要在输入框往上滑，就会抖动」). A drag that starts on something that
+   cannot scroll that way was handed to the webview's own scroll view,
+   which rubber-banded the whole face. The deck, the bar it stands in, the
+   top strip and the landings' capsule decline a pan; taps, the pill's
+   sideways swipe and the joystick are pointer events of their own and
+   are untouched. A scroller inside (the tab strip, the key row, the box)
+   is a scroll container, where WebKit starts the count again, so it keeps
+   its own: the key row pans sideways and nothing else. The box keeps a
+   drag at its end to itself (`overscroll-behavior`, the rule every inner
+   scroller already has by its overflow utility, further down). The
+   native half is `hold_the_face_still` (lib.rs); `check-face` bar l. */
+:is([data-session-bar], [data-session-top], [data-float-nav]) {
+  touch-action: none;
+}
+/* **The address editor is a text field, not chrome** (UX-38 §3, the
+   owner 2026-10-06: the address could not be seen whole and the caret
+   could not be moved). A `touch-action` is the meet of the element's and
+   every ancestor's up to a scroller, so the bar's `none` reached the
+   field: a drag in it never got to WebKit (measured on the simulator: no
+   `touchmove` at all). While the pill edits, the bar gives the field its
+   finger back. */
+[data-session-bar]:has([data-deck-editing]) {
+  touch-action: auto;
+}
+[data-term-keys-scroll] {
+  touch-action: pan-x;
+}
+[data-composer-text] {
+  overscroll-behavior: contain;
+}
+
+/* **A selected row: a grey block, not the brand** (2026-09-27, the
+   owner: 选中行「太亮」; and 额度's rings vanished on the solid — their
+   pale track has nothing to stand on over `--brand-strong`). This
+   supersedes D6's 「实心品牌深绿、白字」: a sidebar is navigation, and
+   the Finder draws its selection as a neutral block. The brand stays
+   where it marks a state the eye must find — the rail's open glyph, an
+   open switch, the focus ring, a dialog's one act.
+
+   Every list is `SideList`, selected by `data-selected`. Its grey block
+   and ordinary text stay full-value. State words and their dots retain
+   their hue (2026-10-13): the quiet light-theme inks have selected-row
+   variants that clear 4.5 on fill-strong. The avatar keeps its own halo.
+   Unread badges keep their badge ink and belong beside the name. */
+/* (The redesign: wide only — a narrow list has no picked state.)
+   **The narrow posture is an ancestor's, not the window's** (UX-30): the
+   shell stamps `data-narrow` on the root for a narrow window, and a
+   `NarrowBox` (`hooks/use-narrow.ts`) stamps it on itself for the narrow
+   face mounted inside a wide one — the session's 附栏. So a narrow rule
+   is keyed `[data-narrow] …` and a wide-only one `…:not([data-narrow] *)`;
+   never `:root[data-narrow]`, which would see only the window. */
+[data-side-row][data-selected="true"]:not([data-narrow] *) {
+  background-color: var(--fill-strong);
+}
+[data-side-row][data-selected="true"]:not([data-narrow] *) > :not([data-side-open]),
+[data-side-row][data-selected="true"]:not([data-narrow] *) [data-side-open] [data-side-text] {
+  --muted-foreground: var(--foreground);
+  --tertiary: var(--foreground);
+}
+[data-status-word] {
+  color: var(--status-ink);
+}
+[data-side-row][data-selected="true"]:not([data-narrow] *) [data-status-word] {
+  color: var(--status-selected-ink);
+}
+/* **The hairlines touching a selected or pressed row are not drawn**
+   (UX-24, the owner 2026-10-05, UITableView's rule): its own foot and the
+   foot of the row above it. The grey block then stands between rows, not
+   between two lines that run past it. */
+[data-side-row][data-selected="true"]:not([data-narrow] *) [data-side-text],
+[data-side-row]:not([data-narrow] *):has(+ [data-side-row][data-selected="true"]) [data-side-text],
+[data-side-row]:active [data-side-text],
+[data-side-row]:has(+ [data-side-row]:active) [data-side-text] {
+  border-bottom-color: transparent;
+}
+
+/* **A picked row in a floating list is a chosen row, and wears one ink
+   too** (2026-09-30). The ⌘K hits, a box's completions, the slash
+   commands and the import list mark the picked row with the same
+   `--fill-strong` a selected list row wears — and kept their second
+   line in `--muted-foreground` on it. That read 4.52 on the dark
+   popover when the popover was #242422; one step lighter, to float over
+   the grey frame, it read 4.11. The rule a selected row already keeps
+   (README 颜色「选中的行上没有…第二、三层墨」) is the fix, not a lighter
+   block: `check-palette` reads a picked hit's every line against it. */
+:is([data-search-row], [data-omni-item], [data-slash-item], [data-import-row])[data-on="true"] {
+  --muted-foreground: var(--foreground);
+  --tertiary: var(--foreground);
+}
+/* ⚠️ 墓碑 (the audit fix plan F2.1; W09): in front, a picked row's title
+   stepped up to `headline`'s weight. Every title is `headline` now, and a
+   picked row shows by its block alone. */
+
+/* ⚠️ Tombstone (the redesign, 2026-10-02): on the macOS app the left
+   block's ground went clear under `:root[data-material="sidebar"]`, over
+   AppKit's sidebar material behind a transparent window (docs/SHELL.md
+   round 15 item 7, D4). One ground now: the window is opaque and the
+   page paints `--background` everywhere. */
+
+/* **The camera behind the page** (加入网络's 扫码, docs/IOS.md 第三步).
+   The scan is windowed: the plugin puts the camera under the webview and
+   clears the webview, so the picture shows exactly where the page paints
+   nothing. While it runs (`ScanLayer` stamps the root) the grounds go
+   clear and everything in `body` but the scanner's own layer is hidden —
+   the app, the dialog that asked, its scrim. Hidden, not unmounted: the
+   field the scan fills is in that dialog. **`html:root`, not `:root`**:
+   `index.html`'s first frame paints the dark ground with
+   `:root[data-theme="dark"] body`, the same weight as `:root[…] body`,
+   and in the built page it comes later than this stylesheet's `<link>`
+   — measured 2026-10-02 on `vite build`: the plain spelling left the
+   body `rgb(36, 36, 34)` on the dark theme, the camera behind an opaque
+   page; this one leaves it clear. (Under the dev server the stylesheet
+   is injected after the page and the plain spelling wins too, so
+   `check-face` cannot see the difference; it reads the result.) */
+html:root[data-scanning],
+html:root[data-scanning] body {
+  background: transparent;
+}
+:root[data-scanning] body > :not([data-scanner]) {
+  visibility: hidden;
+}
+
+/* **The left block's width, from one number** (docs/SHELL.md 第十五轮
+   第 4 条, 挂账 2:「设置侧边栏宽度的时候, 背后的背景没有跟着变」).
+   The rail, the line beside it, and the list's width — `--list-w`, which
+   `App` sets on this element from the one seam's state (0 where there is
+   no list column, or it is put away). Its first row, its list and its
+   ground are this box, so they are one width by construction; before,
+   the block took its widest child's width and the search box's own
+   minimum held the ground out past a list dragged narrow. The narrow face
+   has no block (one screen at a time), so no rule for it. */
+/* `aside`, not a bare `[data-side]`: Radix stamps `data-side="right"`
+   on every tooltip, menu and popover it places, and the bare attribute
+   gave each of them the left block's width (2026-09-26: the rail's
+   「机器」 hint drawn 353 wide). */
+aside[data-side] {
+  /* The list column and its hairline (the redesign, 方案 B: no rail). */
+  width: calc(var(--list-w) + var(--hair));
+  min-width: var(--wide-column-min);
+}
+
+/* **No window buttons, no room for them** (the owner, 2026-10-04, an
+   iPhone in landscape: the first row's capsule and 「更多」 stood ~30
+   right of the title row's 筛选 / ＋ and search, 「更多」 past the column's
+   hairline). The first row keeps `--wide-lead-start` (80) at its start for
+   the Mac's three buttons — a browser keeps it so the two faces match —
+   and right-aligns the strip; under a finger the strip is 44 tall, the
+   80 plus the strip plus its end inset came to 370 in a 340 column, and
+   the overflow pushed the strip right. A touch face has no window
+   buttons (`data-traffic` is the Mac app's stamp), so its first row
+   starts at the row inset the title row ends with: the strip fits, its
+   right edge on the title row's, 「更多」 over the search circle — folded
+   or not. */
+/* UX-19: wherever there are no window buttons — a finger, the web face,
+   a Mac window in fullscreen (the stamp is dropped there) — the first row
+   starts where the title under it does (the list's 20, `SideHead`).
+   ⚠️ 墓碑: under a finger only, at the row inset. */
+:root:not([data-traffic]) :is([data-wide-top], [data-folded-lead]) {
+  padding-inline-start: var(--gap-group);
+}
+
+/* ⚠️ 墓碑 (the redesign, 2026-10-02): the narrow face took the board's
+   margin and corner off here. The board has neither at any width now
+   (`Region`, one ground). */
+
+/* **The shell is as tall as what the keyboard leaves** (2026-10-02,
+   `lib/viewport`): while a soft keyboard is up the root carries the
+   visual viewport's height, and the whole app lays out in it — the
+   session bar lands on the keys and the terminal refits to what is left
+   above it. Nothing changes where the two viewports agree. */
+:root[data-keyboard] #root {
+  height: var(--app-h);
+}
+
+/* **The top of a session page on the narrow face** (2026-10-02): no head,
+   the content runs to the top of the glass — kept clear only of what the
+   platform puts there. A phone says its status bar (`--safe-top`); a Mac
+   window dragged narrow has macOS's three buttons in that corner, so the
+   strip is the first row's height there, and it moves the window (the
+   shell marks it, `components/SessionBar`). Same rule as L0's: the
+   corner is the platform's, the page only keeps out of it. */
+:root[data-traffic] [data-session-top] {
+  height: var(--pane-head);
+}
+
+/* **The file page in a Mac window dragged narrow** (UX-6): in the
+   window's corner the first row is the platform's (as `[data-session-top]`
+   above), so the text starts below it. ⚠️ 墓碑 (UX-14): the name pill sat
+   on that row's centre; the name is the deck's now. */
+:root[data-traffic] [data-file-page] :is([data-file-scroll], [data-file-preview], [data-diff-tab]) {
+  padding-top: calc(var(--pane-head) + var(--gap-in));
+  scroll-padding-top: calc(var(--pane-head) + var(--gap-in));
+}
+
+/* Two selectors because the two properties inherit differently:
+   `scrollbar-color` inherits, so the root reaches every pane;
+   `scrollbar-width` does not, so it has to be said everywhere. */
+* {
+  scrollbar-width: thin;
+}
+
+/* The press. Every control this app draws answers a finger the same
+ * way, so it is one rule on shadcn's own slot rather than a class each
+ * caller remembers to add.
+ *
+ * **Two channels, and that is what makes the reduced-motion case an
+ * equivalent rather than a removal**: the give is motion and the dim is
+ * not. Under `reduce` the scale goes and the dim stays, so a press is
+ * still answered — a control that acknowledged nothing would be the
+ * 做了但没变化 failure docs/UX.md forbids, arrived at by way of an
+ * accessibility setting.
+ *
+ * `:not(:disabled)` because a control that cannot act must not look
+ * like it did.
+ */
+[data-slot="button"] {
+  transition:
+    transform var(--dur-120) var(--ease-out),
+    opacity var(--dur-120) var(--ease-out);
+}
+
+[data-slot="button"]:active:not(:disabled) {
+  transform: scale(var(--press));
+  opacity: 0.86;
+}
+
+/* A list row is pressable too, and it is the most-pressed thing here —
+ * but it gets the dim without the give. A full-width strip scaling by
+ * three percent does not read as a press, it reads as the layout
+ * slipping: the give is legible because a control is small enough for
+ * its whole outline to move at once. Same tokens, same timing, one
+ * channel instead of two — the vocabulary is shared, the amount is not.
+ */
+[data-row-open]:active {
+  opacity: 0.86;
+  transition: opacity var(--dur-120) var(--ease-out);
+}
+
+/* **The chosen piece travels** (`lib/travel`, F7.2): while its stand-in
+   runs over from the old item, the new item does not paint its own. */
+[data-sel-arriving] {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+[data-sel-arriving]::before {
+  opacity: 0 !important;
+}
+
+/* **A pulled list moves its parts, not its box** (`ListPane`,
+ * `use-pull-refresh`, the audit fix plan F6.5). The head and the list
+ * ride `--pull` down by transform, so nothing below is laid out again,
+ * and the spinner (`[data-pull]`) stands in the room left above the
+ * title. Narrow, the screen's title row (`[data-side-l0]`) rides with
+ * them, marked on the nav host (`data-pull-on`). Under the finger they follow it at once; let go, they ease to
+ * the spinner's room and back. The host is marked only while a pull is
+ * on (`ListPane`), so at rest nothing here applies. */
+[data-pull-host] > :not([data-pull]),
+[data-pull-on] [data-side-l0] {
+  transform: translateY(var(--pull));
+  transition: height var(--dur-240) var(--ease-out);
+}
+[data-pull-host][data-pull-drag] > :not([data-pull]),
+[data-pull-drag] [data-side-l0] {
+  transition: none;
+}
+/* Over the pane, which is positioned while it pulls and comes later
+   (and is under it: the head is a band, `[data-band]`). */
+[data-pull-on] [data-side-l0] {
+  position: relative;
+  z-index: 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pull-host] > :not([data-pull]),
+  [data-pull-on] [data-side-l0] {
+    transition: none;
+  }
+}
+
+/* Where a row's FLIP lands (`SessionsList` `useRowFlip`). The rule
+ * lives here rather than in the inline style the hook writes, because
+ * the hook's job is to say *where a row came from* and this says *how
+ * long it takes to get back* — one is a measurement, the other is the
+ * app's motion vocabulary, and the reduced-motion guard below only has
+ * one place to reach. `ease-move` rather than `ease-out`: this is an
+ * object changing places, not a thing arriving.
+ */
+[data-row] {
+  transition: transform var(--dur-240) var(--ease-move);
+}
+
+/* The narrow face is one screen at a time, so moving between the list
+ * and a detail is a place change and gets said as one. The incoming
+ * screen comes from the side it conceptually lies on: a detail is
+ * "further in" and enters from the right, the list is "back out" and
+ * enters from the left. Percentages, not pixels — the distance is a
+ * fraction of the screen that is moving, at any width.
+ *
+ * Only the arriving screen animates. The leaving one is already gone
+ * (the shell swaps them, `App`), and faking an exit would mean keeping
+ * a dead pane mounted — on this pane that means a live terminal or a
+ * chat attachment held open to be looked at while it slides away. */
+/* **No empty frame** (the audit fix plan F4.12; N24): the arriving
+   screen starts half there, not at nothing — at 0 the first frames were
+   the bare ground. The two pages moving together is the edge swipe's
+   (F7.3). */
+@keyframes screen-in-from-right {
+  from {
+    transform: translateX(4%);
+    opacity: 0.5;
+  }
+}
+
+@keyframes screen-in-from-left {
+  from {
+    transform: translateX(-4%);
+    opacity: 0.5;
+  }
+}
+
+[data-screen="detail"] {
+  animation: screen-in-from-right var(--dur-240) var(--ease-out);
+}
+
+[data-screen="list"] {
+  animation: screen-in-from-left var(--dur-240) var(--ease-out);
+}
+
+/* **A row slid left** (`components/SwipeRow`, F7.5; UX-44 §3): the row's
+   face moves left by `--row-reveal` and the actions open from the right
+   edge by as much — the pin on the fill, the delete on the destructive
+   red. On a row a full swipe acts on, the red takes all that is
+   revealed, as iOS's does, and carries the row off its end. */
+[data-row-swipe] {
+  position: relative;
+  overflow: hidden;
+}
+[data-row-face] {
+  transform: translateX(calc(-1 * var(--row-reveal)));
+  transition: transform var(--dur-240) var(--ease-out);
+}
+[data-row-actions] {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  display: flex;
+  justify-content: flex-end;
+  width: var(--row-reveal);
+  overflow: hidden;
+  transition: width var(--dur-240) var(--ease-out);
+}
+[data-row-swiping] :is([data-row-face], [data-row-actions]) {
+  transition: none;
+}
+[data-row-action] {
+  background: var(--fill-strong);
+  color: var(--foreground);
+}
+[data-row-action][data-destructive] {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+[data-row-full-swipe] [data-row-actions-inner] {
+  min-width: 100%;
+}
+[data-row-full-swipe] [data-row-action][data-destructive] {
+  flex: 1 0 auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  :is([data-row-face], [data-row-actions]) {
+    transition: none;
+  }
+}
+
+/* **Every bottom sheet is one sheet of paper** (UX-44 §1, the owner
+   2026-10-07: 「整个app的底栏风格一致，底栏颜色、布局等向点击药丸弹出的底栏
+   一致」). The 附栏's (UX-39 §1, 「展开了就是 app 的颜色，不要额外颜色」)
+   is the pattern, written here once for it and for every form that is a
+   sheet on the phone — the tabs sheet, the key row editor, 新会话, 文件
+   历史, 加入网络, 导入, the machine editor, the directory picker, the
+   relay, the map's card: the app's own ground, no surface of its own, and
+   every page or row inside reads the same ground (a list's `side`, a
+   page's `card`, a sticky row's `popover`); a top rim and the sheet's
+   corners, no side or foot rim; the grabber inside the paper (each draws
+   its own from `--grabber-*`). The scrim is `DialogOverlay`'s one
+   (UX-44 §2). A question stays a centred alert, and the wide face's
+   dialogs keep `popover` (`ui/dialog`). ⚠️ 墓碑 (UX-37 → UX-44): a form
+   sheet wore `popover` grey with a hairline on three sides. */
+:is([data-place-sheet], [data-narrow] [data-slot="dialog-content"][data-overlay-task]) {
+  --card: var(--background);
+  --side: var(--background);
+  --popover: var(--background);
+  background: var(--background);
+  border-width: var(--hair) 0 0;
+  border-radius: var(--menu-r) var(--menu-r) 0 0;
+  box-shadow: var(--shadow-float);
+}
+
+/* **On a phone a form is a sheet** (`ui/dialog` `useSheet`, F7.4; narrow
+   P-E): the whole width, standing on the bottom edge and riding the soft
+   keyboard (`--sheet-kb`), its top corners round, a grabber at its top,
+   rising in and sinking out. A pull on the grabber moves it down
+   (`--sheet-pull`). Wide keeps the centred dialog. */
+[data-sheet-grabber] {
+  display: none;
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task] {
+  top: auto;
+  left: 0;
+  right: 0;
+  bottom: var(--sheet-kb);
+  width: 100%;
+  max-width: none;
+  max-height: calc(var(--dialog-visible-height) - var(--safe-top) - var(--gap-pane));
+  overflow-y: auto;
+  translate: none;
+  transform: none;
+  height: var(--task-sheet-height, auto);
+  padding-top: calc(var(--gap-row) + var(--grabber-h));
+  padding-bottom: calc(var(--page-inset) + var(--safe-bottom));
+  transition: transform var(--dur-240) var(--ease-out);
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task][data-scrollable] {
+  overflow: hidden;
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task][data-sheet-pulling] {
+  transition: none;
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task][data-state="open"] {
+  animation: sheet-up var(--dur-240) var(--ease-out);
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task][data-state="closed"] {
+  animation: sheet-down var(--dur-180) var(--ease-out) forwards;
+}
+[data-narrow] [data-sheet-grabber] {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--touch);
+  height: var(--touch);
+  margin-left: calc(var(--touch) / -2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  z-index: 1;
+}
+[data-narrow] [data-sheet-grabber] > span {
+  display: block;
+  position: absolute;
+  top: var(--grabber-top);
+  left: 50%;
+  width: var(--grabber-w);
+  height: var(--grabber-h);
+  margin-left: calc(var(--grabber-w) / -2);
+  border-radius: var(--radius-full);
+  background: var(--tertiary);
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes sheet-down {
+  to {
+    transform: translateY(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-narrow] [data-slot="dialog-content"][data-overlay-task] {
+    animation: none !important;
+    transition: none;
+  }
+}
+
+/* **The session's 附栏 on the phone** (UX-37 §3–4, `SessionPlaceSheet`):
+   the whole width, standing on the bottom edge at one of two detents,
+   rising in like the form sheet; the drag paints its height inline and
+   the release lets it glide to the detent. The pages keep the safe area
+   at their scrollers' foot (`[data-nav-shown]` above). ⚠️ 墓碑 (UX-37 §4
+   → UX-39 §2): the seats row of flat glass at its foot. */
+[data-place-sheet] {
+  height: calc(var(--place-sheet-half) * 100dvh);
+  transition: height var(--dur-240) var(--ease-out);
+  animation: sheet-up var(--dur-240) var(--ease-out);
+  --nav-room: var(--safe-bottom);
+}
+[data-place-sheet][data-detent="full"] {
+  height: calc(var(--place-sheet-full) * 100dvh);
+}
+[data-place-sheet][data-sheet-pulling] {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-place-sheet] {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Task sheets use the same title → content → actions order as dialogs.
+   Do not stack footer and header into one grid cell: translated actions
+   and long names otherwise overlap. Long tasks keep only the body scrolling. */
+[data-narrow] [data-slot="dialog-content"][data-overlay-task] > :is([data-slot="dialog-header"], [data-slot="dialog-footer"]) {
+  grid-column: 1;
+  margin: 0;
+  align-self: stretch;
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task] > [data-slot="dialog-footer"] {
+  justify-content: space-between;
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task] > [data-slot="dialog-footer"] > [data-footer-trailing]:only-child {
+  margin-inline-start: auto;
+}
+[data-narrow] [data-slot="dialog-content"][data-overlay-task] > [data-slot="dialog-header"] [data-slot="dialog-title"] {
+  font-size: var(--text-headline);
+  line-height: var(--text-headline--line-height);
+}
+
+/* **A back swipe** (`hooks/use-edge-swipe`, F7.3; V01): the page —
+   its first row and its screen — follows the finger (`--swipe`) over
+   the page it came from, which is drawn whole under it
+   (`[data-screen-under]`: its own first row and bottom bar, at their own
+   y) and comes in from a third of the way out, iOS's parallax. On
+   letting go both ease to where they are going, and the screen that then
+   arrives does not play its own entrance (`:root[data-swiped]`). A file
+   is the exception: only the file moves, over its listing, and the head
+   both share stays put (`data-swipe-kind="file"`). */
+[data-screen-under] {
+  visibility: hidden;
+  /* Its own stack: the bottom bar it draws stays under the page that is
+     being pulled away. */
+  z-index: 0;
+}
+:root[data-swiping]:not([data-swipe-kind="file"]) [data-screen-under] {
+  visibility: visible;
+}
+/* The page under comes in from a third of the way out; its bottom bar
+   stays put, as a tab bar does. */
+:root[data-swiping]:not([data-swipe-kind="file"]) [data-screen-under] > :not([data-float-nav]) {
+  transform: translateX(calc((var(--swipe) - 100vw) * 0.3));
+}
+:root[data-settling]:not([data-swipe-kind="file"]) [data-screen-under] > :not([data-float-nav]) {
+  transition: transform var(--dur-240) var(--ease-out);
+}
+:root[data-swiping]:not([data-swipe-kind="file"]) :is([data-side-l0], [data-swipe-host]) {
+  position: relative;
+  z-index: 1;
+}
+/* The head stays over the screen pulled up under it (`[data-band]`). */
+:root[data-swiping]:not([data-swipe-kind="file"]) [data-side-l0][data-band] {
+  z-index: 3;
+}
+:root[data-swiping]:not([data-swipe-kind="file"]) [data-side-l0] {
+  transform: translateX(var(--swipe));
+}
+:root[data-settling]:not([data-swipe-kind="file"]) [data-side-l0] {
+  transition: transform var(--dur-240) var(--ease-out);
+}
+:root[data-swiping]:not([data-swipe-kind="file"]) [data-swipe-host] > [data-screen] {
+  transform: translateX(var(--swipe));
+  box-shadow: var(--shadow-swipe);
+}
+:root[data-settling]:not([data-swipe-kind="file"]) [data-swipe-host] > [data-screen] {
+  transition: transform var(--dur-240) var(--ease-out);
+}
+/* The screen is opaque, so the page under never shows through it. */
+[data-swipe-host] > [data-screen] {
+  position: relative;
+  background: var(--background);
+}
+/* A file: only the file moves; its listing is under it. */
+:root[data-swiping][data-swipe-kind="file"] [data-files-under] {
+  visibility: visible !important;
+}
+:root[data-swiping][data-swipe-kind="file"] [data-files-page] {
+  transform: translateX(var(--swipe));
+  box-shadow: var(--shadow-swipe);
+}
+:root[data-settling][data-swipe-kind="file"] [data-files-page] {
+  transition: transform var(--dur-240) var(--ease-out);
+}
+:root[data-swiped] [data-screen],
+[data-swipe-host] > [data-screen][data-arrived] {
+  animation: none;
+}
+/* **A list stays under the page it opens, fading** (V19): the arriving
+   page comes in over it instead of over the empty ground. */
+[data-screen-under][data-leaving] {
+  visibility: visible;
+  animation: under-leave var(--dur-240) var(--ease-out) forwards;
+}
+@keyframes under-leave {
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-screen-under][data-leaving] {
+    visibility: hidden;
+    animation: none;
+  }
+}
+
+/* A line arriving in the corner comes from the corner it lives in —
+ * the same keyframe the narrow detail uses, because it is the same
+ * statement (something arrived from over there) and a second set of
+ * frames would be a second vocabulary for one idea. Shorter than a
+ * place change: this is a notice, not a journey.
+ */
+[data-status-item] {
+  animation: screen-in-from-right var(--dur-180) var(--ease-out);
+}
+
+/* The state of a session, drawn around the face of the machine it is on.
+ *
+ * **One channel, one thing.** The corner mark says *what* this session
+ * is and nothing else now; this says *how it is*; the word at the row's
+ * end says it in letters. That last one is not optional — state may
+ * never be colour alone — and it is why this can be a colour at all.
+ *
+ * The mark used to carry both at once, shape and state together. It read
+ * fine and it was wrong for the same reason a brand green that also
+ * meant "press me" was wrong: one signal answering two questions cannot
+ * be changed for one of them without lying about the other.
+ *
+ * Its own element rather than a shadow on the face's box, because the
+ * halo has to be able to breathe on its own — see below — and opacity is
+ * applied to that one element, without fading the face beneath it. */
+/* **The ring is outside the face** (the owner, 2026-10-02): the face's
+   box stands on the left line like every other face, and the state ring
+   reaches out past it the way a chosen block does. ⚠️ 墓碑 (F2.7, one
+   commit): the ring drawn inside the box to put its ink on the line —
+   on a tab's face it left 8 of face, and the owner could not read it. */
+/* One stroked circle gives both edges the same centre. Two rounded
+   masks rasterized separately can leave an uneven 1.5px ring at tab size.
+   Keep the SVG's viewport aligned with the face: WebKit rasterizes a
+   separately expanded fractional viewport on a different pixel origin,
+   even when both DOM centres agree. Only the circle extends outwards.
+   Neither the artwork nor the clear gap is repainted on a transparent window. */
+[data-halo-ring] {
+  position: absolute;
+  overflow: visible;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: var(--halo-color);
+  stroke-width: var(--halo-w);
+}
+[data-halo-ring] > circle {
+  r: calc(50% + var(--halo-gap) + var(--halo-w) / 2);
+  vector-effect: non-scaling-stroke;
+}
+
+/* Small tab faces keep their original 1.5px stroke and clear gap. */
+[data-tab-bar] {
+  /* A tab's face is small: its ring and the gap inside it are 1.5 each,
+     so the face stays readable and the state still shows (the owner's
+     choice, 2026-10-02: 「我都要」). */
+  --halo-gap: var(--halo-tab);
+  --halo-w: var(--halo-tab);
+}
+
+/* The breath, and why it outlived the argument that put it here.
+ *
+ * **Tombstone: this comment read「Busy takes no hue — it breathes」.**
+ * That was the whole justification: 忙碌 had no colour, so it needed
+ * some other channel to be told apart from 空闲, and motion was it.
+ * On 2026-08-30 忙碌 was given a hue (`tokens.css`, `--state-busy`), and
+ * the premise is gone.
+ *
+ * **It stays, on a different reason.** Hue answers「which word」; the
+ * breath answers something no colour can — **that this is happening
+ * right now**. A session that is 忙碌 has a process running in it, and
+ * that is the one fact on this screen with a tense. The other five words
+ * describe a state that will sit there until something changes; this one
+ * is the only one where the thing is in motion while you look at it.
+ *
+ * **What it is not**: a second way of saying which word. If the hue ever
+ * failed to arrive, the breath would not rescue the identification — a
+ * moving grey word is not「忙碌」, it is「some word, moving」. The colour
+ * carries identity alone, which is why `check-palette` asserts the hue
+ * and not this.
+ *
+ * The reduced-motion guard below already leaves the word standing still
+ * and legible, and that was true before this change and stays true: the
+ * breath is never load-bearing. */
+@keyframes breath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+[data-word="busy"] [data-word-text],
+[data-halo="busy"] {
+  animation: breath calc(var(--dur-420) * 6) var(--ease-move) infinite;
+}
+
+/* **A tool line breathes on its mark, not on its words.**
+   The line carries `data-word="busy"` because that is the fact, and
+   the rule above would then pulse the title — a title people are
+   reading, and a moving one is harder to read than a still one. The
+   mark beside it (`ToolDot`) is what the motion is for: it says
+   nothing but "still going", so it costs nothing to animate. */
+[data-chat-tool][data-word="busy"] [data-word-text] {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Busy stops breathing and stays exactly as legible: it still has no
+     hue, the ring is still there, and the word at the row's end still
+     says 忙碌. The breath was never the thing carrying the fact. */
+  [data-word="busy"] [data-word-text],
+  [data-halo="busy"] {
+    animation: none;
+  }
+
+  /* Menus, popovers and tooltips appear without their zoom; a switch
+     flips and a chevron turns without travel (F1.8; SYS-11). */
+  [data-slot$="-content"] {
+    animation: none !important;
+  }
+  [role="switch"],
+  [role="switch"] *,
+  .transition-transform {
+    transition: none !important;
+  }
+
+  /* The give goes, the dim stays — see the press rule above for why
+     that split is the point rather than a leftover. */
+  [data-slot="button"] {
+    transition: none;
+  }
+  [data-slot="button"]:active:not(:disabled) {
+    transform: none;
+  }
+
+  /* A place change with no travel. The screen still swaps; what goes is
+     the sliding, and there is nothing to replace it with — arriving
+     somewhere else *is* the feedback here, and it is already visible. */
+  [data-screen] {
+    animation: none;
+  }
+
+  /* Rows take their new places without walking there. The measuring in
+     `SessionsList` is skipped outright rather than given a zero
+     duration: a transform applied and then removed is still two
+     paints, and the row would flicker. */
+  [data-row] {
+    transition: none;
+  }
+
+  /* The corner line still appears — it is the whole point — it just
+     does not travel to get there. */
+  [data-status-item] {
+    animation: none;
+  }
+
+  /* A reading still turns over — that is the whole affordance — it just
+     swaps instead of rotating. The face swap has to become instant too,
+     or the delay that used to hide it mid-turn would leave half a second
+     of neither face showing. */
+  [data-metric-faces] {
+    transition: none;
+  }
+  [data-metric-face] {
+    transition: none;
+  }
+}
+
+/* Code colour: **Shiki's, in whichever of GitHub's two themes the page
+   is in.** Every painted token carries both colours as custom
+   properties on its own span (`--shiki-light` / `--shiki-dark`,
+   `lib/highlight.ts`), and these two rules are the whole of the theme
+   switch: the light one by default, the dark one under the same media
+   query `tokens.css` keys its own palette on. No colour is chosen here
+   — the values are `github-light-default` / `github-dark-default` as
+   Shiki ships them, which is what github.com paints (user, 2026-09-15:
+   「做到 gh web 预览代码的那种高亮」). Scoped to the rendered turn and the
+   rendered Markdown; the file itself is CodeMirror's, below. */
+/* File-kind icons (`components/FileKindIcon`): Seti's colour for the
+   theme the page is in, the two values carried on the icon itself the
+   way a painted token carries its two. **Same switch as the palette's**
+   — `:root[data-theme]`, stamped by the face (批 D2, `src/theme.ts`),
+   which is what keeps 「显式选了浅色」 from leaving these two rules
+   still asking the desktop. No colour chosen here. */
+[data-file-kind] {
+  color: var(--kind-light);
+}
+:root[data-theme="dark"] [data-file-kind] {
+  color: var(--kind-dark);
+}
+
+:is([data-md], [data-nb-input]) span[style*="--shiki"] {
+  color: var(--shiki-light);
+  text-decoration: var(--shiki-light-text-decoration, inherit);
+}
+/* **Weight and slope reach the rendered turn only, never the sheet**
+   (2026-09-16:「编辑时的光标没有和任何文字对齐」). The sheet is a painted
+   `<pre>` under a transparent `<textarea>` that must agree letter for
+   letter, and a theme that bolds a markdown heading or slants a comment
+   widens the painted copy where the editor's plain text does not — the
+   caret then sits a few glyphs past its letter on every such line.
+   Colour costs no width; these two do. */
+:is([data-md], [data-nb-input]) span[style*="--shiki"] {
+  font-style: var(--shiki-light-font-style, inherit);
+  font-weight: var(--shiki-light-font-weight, inherit);
+}
+
+:root[data-theme="dark"] :is([data-md], [data-nb-input]) span[style*="--shiki"] {
+  color: var(--shiki-dark);
+  text-decoration: var(--shiki-dark-text-decoration, inherit);
+}
+:root[data-theme="dark"] :is([data-md], [data-nb-input]) span[style*="--shiki"] {
+  font-style: var(--shiki-dark-font-style, inherit);
+  font-weight: var(--shiki-dark-font-weight, inherit);
+}
+
+/* **The file's code, in the same two GitHub themes** (cm-a, CM-BRIEF):
+   CodeMirror tags each token with a class (`lib/code/theme.ts`), and these
+   are the values `github-light-default` / `github-dark-default` give the
+   TextMate scope each class stands for — the colours the Shiki sheet
+   painted until 2026-10-10. No colour is chosen here. The default ink is
+   the app's `foreground`, as it was. Weight and slope are back for the
+   few tokens GitHub sets them on: the editor lays out what it paints, so
+   a bold heading no longer pushes the caret off its letter.
+   `data-code-view`, not `data-code`: that is the VS Code circle's (cm-b). */
+[data-code-view] .tok-keyword { color: #cf222e; }
+[data-code-view] .tok-comment { color: #6e7781; }
+[data-code-view] .tok-string { color: #0a3069; }
+[data-code-view] .tok-constant { color: #0550ae; }
+[data-code-view] .tok-function { color: #8250df; }
+[data-code-view] .tok-entity { color: #953800; }
+[data-code-view] .tok-tag { color: #116329; }
+[data-code-view] .tok-heading { color: #0550ae; font-weight: var(--font-weight-title); }
+[data-code-view] .tok-link { color: #0a3069; text-decoration: underline; }
+[data-code-view] .tok-emphasis { font-style: italic; }
+[data-code-view] .tok-strong { font-weight: var(--font-weight-title); }
+[data-code-view] .tok-strike { text-decoration: line-through; }
+[data-code-view] .tok-inserted { color: #116329; }
+[data-code-view] .tok-deleted { color: #82071e; }
+[data-code-view] .tok-changed { color: #953800; }
+[data-code-view] .tok-invalid { color: #82071e; font-style: italic; }
+:root[data-theme="dark"] [data-code-view] .tok-keyword { color: #ff7b72; }
+:root[data-theme="dark"] [data-code-view] .tok-comment { color: #8b949e; }
+:root[data-theme="dark"] [data-code-view] .tok-string { color: #a5d6ff; }
+:root[data-theme="dark"] [data-code-view] .tok-constant { color: #79c0ff; }
+:root[data-theme="dark"] [data-code-view] .tok-function { color: #d2a8ff; }
+:root[data-theme="dark"] [data-code-view] .tok-entity { color: #ffa657; }
+:root[data-theme="dark"] [data-code-view] .tok-tag { color: #7ee787; }
+:root[data-theme="dark"] [data-code-view] .tok-heading { color: #79c0ff; }
+:root[data-theme="dark"] [data-code-view] .tok-link { color: #a5d6ff; }
+:root[data-theme="dark"] [data-code-view] .tok-inserted { color: #7ee787; }
+:root[data-theme="dark"] [data-code-view] .tok-deleted { color: #ffa198; }
+:root[data-theme="dark"] [data-code-view] .tok-changed { color: #ffa657; }
+:root[data-theme="dark"] [data-code-view] .tok-invalid { color: #ffa198; }
+
+/* Side by side (`components/CodeDiff`): the two halves parted by the
+   hairline every column in the app is parted by. */
+[data-code-view] .cm-mergeViewEditor + .cm-mergeViewEditor {
+  border-inline-start: var(--hair) solid var(--border);
+}
+
+/* A preview on a ground of its own (预览背景, round UX-4) paints its code
+   in that ground's colours, whatever the app's theme. */
+:root:is([data-theme]) [data-ground="light"] :is([data-md], [data-nb-input]) span[style*="--shiki"] {
+  color: var(--shiki-light);
+  text-decoration: var(--shiki-light-text-decoration, inherit);
+  font-style: var(--shiki-light-font-style, inherit);
+  font-weight: var(--shiki-light-font-weight, inherit);
+}
+:root:is([data-theme]) [data-ground="dark"] :is([data-md], [data-nb-input]) span[style*="--shiki"] {
+  color: var(--shiki-dark);
+  text-decoration: var(--shiki-dark-text-decoration, inherit);
+  font-style: var(--shiki-dark-font-style, inherit);
+  font-weight: var(--shiki-dark-font-weight, inherit);
+}
+
+/* The parts under a dial: one grid for every row in the drawer, so the
+   bar's two edges are one value each down the whole list. Rows join the
+   grid with `display: contents` rather than being boxes of their own —
+   a row that is its own box is a row whose bar starts wherever that box
+   happens to start (`Parts` was two blocks with two layouts once, and
+   「很容易对不齐」 is what came of it). */
+[data-parts] {
+  display: grid;
+  grid-template-columns: var(--part-name) minmax(0, 1fr) var(--part-num);
+  column-gap: var(--gap-row);
+  align-items: center;
+  row-gap: 0;
+}
+[data-parts] [data-part] {
+  display: contents;
+}
+[data-parts] [data-part] > * {
+  height: var(--drawer-row);
+  display: flex;
+  align-items: center;
+  scroll-snap-align: start;
+}
+
+/* **A drawer's rows keep one pitch** (2026-09-04 wanted no hole under
+   the last row: the GPU drawer's last row had sat 152px above the floor
+   with one card). ⚠️ **Retired 2026-09-28**: `min-height: 100%; grid-auto-rows:
+   minmax(var(--drawer-row), 1fr)` — the rows shared the slot's height.
+   It spread two volumes 43 apart against CPU's 29 and pushed the disk
+   drawer (rows + the watch editor) past its slot. Every drawer now keeps
+   one pitch and its block is centred in the slot (`data-drawer-body`,
+   `MachineCard`), which still leaves no hole under the last row. */
+
+/* **A tight drawer drops the shared grid entirely.** Keyed off the
+   drawer's *own* width (`use-tight.ts`), not the window's: the card has
+   a rail and a list beside it, so it is far narrower than the viewport,
+   and a window breakpoint left a 106px overflow band from 720 to 830 —
+   measured by the full-bandwidth scan, invisible to any two-point
+   check.
+
+   Keeping the
+   rows wrap turns every row into one cell of the outer grid, and then
+   each bar is as wide as its own cell — measured on the prototype as
+   three bars of 178.75 / 320 / 170.91, which is the alignment this
+   whole structure exists to guarantee, gone. So the rows become their
+   own two-column grids and the bar takes a line of its own. */
+[data-drawer][data-tight] [data-parts] {
+  display: block;
+}
+[data-drawer][data-tight] [data-parts] [data-part] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--gap-row);
+  align-items: center;
+}
+[data-drawer][data-tight] [data-parts] [data-part] > [data-part-bar] {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+/* **The slot under the four rings: one height, two things it can show.**
+   ⚠️ Named `data-ring-slot` and not `data-slot`: **`data-slot` is
+   Radix's own**, on every primitive in `components/ui/`, so a rule
+   written for it reaches the whole app. Measured — `[data-slot]
+   { height: 224px }` made the files listing's rows 224 tall and the
+   face gate caught it as one listing with three rhythms.
+   2026-09-04:「上环下趋势,合成一个模块」— 「点一个环,下面换成那个环的
+   抽屉;再点同一个环,回到趋势」.
+
+   The height is fixed (`--slot-h`) and the first line inside it is a
+   fixed row (`--slot-head-h`). That pair is the whole of 「不许一切一
+   跳」: whichever of the two is showing, its heading sits on the same
+   line at the same height, and the body under it starts at the same
+   pixel. **The reading words do not disappear and come back when a ring
+   is pressed — they are replaced**, by the drawer's own heading.
+
+   Both children are `height: 100%` rather than free-standing blocks, so
+   neither of them decides the card's height any more. The one that is
+   not showing is `hidden`, **never unmounted**: `smoke.mjs` counts this
+   card's readings against what `khor devices` prints, and a slot that
+   dropped its rows would make the card disagree with the terminal —
+   which reads as a broken backend rather than as a closed drawer. */
+[data-ring-slot] {
+  height: var(--slot-h);
+  margin-top: var(--gap-row);
+  padding-top: var(--gap-row);
+  border-block-start: var(--hair) solid var(--border);
+}
+[data-ring-slot] > [data-drawer],
+[data-ring-slot] > [data-load-day] {
+  height: 100%;
+  min-height: 0;
+}
+[data-ring-slot] > [data-load-day] {
+  display: flex;
+  flex-direction: column;
+}
+[data-ring-slot] [data-drawer-head] {
+  flex: none;
+  height: var(--slot-head-h);
+  margin-bottom: 0;
+}
+
+/* The process table: one grid, so every column edge is one line down
+   the whole list. Rows join it with `display: contents` — a row that is
+   its own box is a row whose columns start wherever that box does. */
+/* **Every track has a ceiling and none of them is `1fr`.** The `1fr`
+   used to sit on the command line, so every pixel the fixed columns did
+   not want went to it — on a wide card that is most of the table, while
+   the process names beside it were still clipping at thirteen
+   characters.
+
+   The slack goes to the right of the last column rather than into any
+   of them. **Putting it inside a track is the mistake with a history
+   here**: on the command line it makes one column most of the table; on
+   the name it opened 799px between a process's name and its CPU; and
+   moving it onto the first quantity — the shape this replaced, on the
+   real face for one deploy — opens the same hole one column further
+   along (measured at a 1100 window: the 时长 track held 123px for a
+   column whose content wants 78). A table narrower than its pane reads
+   as a table; a table with a canyon down the middle reads as broken. */
+/* ⚠️ **The track list is built where the columns are built, not here.**
+   There were four hand-written variants — the full set, `data-nogpu`,
+   `data-norun`, and both — and they were a combinatorial claim that the
+   markup had to keep agreeing with. On 2026-09-05 it stopped agreeing:
+   the two card columns became two independent latches (a machine can
+   have per-process 显存 and no per-process GPU, which is exactly
+   turing), and there is no variant here for that pair. The row then had
+   six cells against five declared tracks, the sixth fell into an
+   implicit auto column, and **the 「命令」 track collapsed to 55px**.
+
+   `Top` composes the list from the same flags that decide which heads
+   and cells it renders, so the two cannot drift. Every value in it is
+   a `--cw-*` token; nothing but the *order* lives in the component. */
+[data-load-top] {
+  display: grid;
+  column-gap: var(--gap-in);
+}
+[data-load-top] [data-top-row] { display: contents; }
+/* A real header/body box keeps one material and fade per section.
+   Subgrid retains the parent tracks; the rows themselves still use contents. */
+[data-load-top] :is([data-top-heads], [data-top-body]) {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  column-gap: inherit;
+}
+[data-load-top] [data-top-heads] {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+/* WK once painted clipped row slivers above the scroll port despite
+   overflow clipping; retain its explicit paint boundary. */
+[data-load-top-box] { clip-path: inset(0); }
+[data-load-top] [data-top-heads] > * {
+  color: var(--foreground);
+  font-weight: var(--font-weight-title);
+  background: transparent;
+  box-shadow: none;
+}
+
+/* **Nothing in this table wraps.** 2026-09-04:「表的内容,比如"内存"是不
+   允许换行的」. A cell that runs out of room truncates and puts up the
+   bordered mark; it does not become two lines.
+
+   Wrapping is worse here than a fold, and not by taste: **a table is
+   read by scanning down a column**, and one cell taller than the rest
+   moves every value in that row off the line its neighbours are on. It
+   also breaks the one number this window is sized by — nine rows in a
+   fixed box (`--top-h`), which is what makes 「who is eating this
+   machine」 answerable at a glance.
+
+   Written on the cells and the heads rather than left to whichever
+   utility each of them happens to wear. Most of them do carry
+   `whitespace-nowrap` or `truncate` today; **that is the incidental
+   version of this rule, and the next cell somebody adds will not have
+   it.** `check-face` walks 390→1200 and measures every cell's ink
+   against one line.
+
+   **The one exception is the cell that exists to unfold.** 「命令」
+   opens in place, and open it wraps — that is the whole affordance,
+   and it is exactly what the mark promised. */
+[data-load-top] [data-top-heads] > *,
+/* **The row a scatter point asked for, marked for a moment**
+   (2026-09-06:「点击散点要定位到表格的行,并高亮一瞬」).
+
+   ⚠️ **On the cells, not the row.** A row is `display: contents` and
+   has no box, so a background on it paints nothing — the same trap the
+   sticky heads fell into a few rules above, and it is silent: the rule
+   is there, it is valid, and the screen never changes.
+
+   `--accent` is the token whose whole definition is 「a tint to lie
+   behind something」, so no new colour is invented for one moment of
+   one row.
+
+   **Reduced motion keeps the mark and drops the fade.** The component
+   holds it longer in that case (see `Top`): what the setting asks to
+   remove is the movement, not the answer. */
+[data-load-top] [data-top-row] > * {
+  transition: background-color var(--dur-420) var(--ease-out);
+}
+[data-load-top] [data-top-row][data-hot] > * {
+  background-color: var(--accent);
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-load-top] [data-top-row] > * {
+    transition: none;
+  }
+}
+[data-load-top] [data-top-row] > * {
+  white-space: nowrap;
+}
+
+/* **The same moment, on the 額度 card's usage table** (2026-09-08).
+   Same token, same duration, same reduced-motion rule — because it is
+   the same gesture, and a gesture that looked different on the second
+   screen is what 「看起来是两个产品」 was about.
+
+   ⚠️ **On the row here, not on the cells.** The machine card's rows are
+   `display: contents` and have no box of their own, which is why that
+   rule reaches for `> *`; these are ordinary `<tr>`s. **Copying the
+   `> *` across would have painted nothing and looked like a correct
+   rule** — the exact trap the note above this describes, met from the
+   other side. */
+[data-usage-half] [data-usage-row] {
+  transition: background-color var(--dur-420) var(--ease-out);
+}
+[data-usage-half] [data-usage-row][data-hot] {
+  background-color: var(--accent);
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-usage-half] [data-usage-row] {
+    transition: none;
+  }
+}
+[data-load-top] [data-c="cmd"][data-open],
+[data-load-top] [data-c="cmd"][data-open] > * {
+  white-space: normal;
+}
+
+/* ⚠️ **Tombstone: the two halves of 「命令」 used to each have a width,
+   and that is what put a `▪` where a process name should be.**
+
+   There was a ceiling on the name (`--cw-name-max`), a floor under the
+   word (`--cw-cmd-arg-min`), and `flex-shrink: 100` on the word so it
+   gave way first. Every one of those numbers was argued for, and
+   together they did the one thing the cell may never do: on a narrow
+   enough cell the name was squeezed past its own text and out, leaving
+   a single glyph standing for it. 2026-09-04:「这俩就是俩字符串,放一列
+   是有原因的,干嘛还要单独显示宽度呢?他俩加一块共享列宽」.
+
+   **A cell that cannot say what the process is has not truncated, it
+   has deleted the answer** — and the identifying word left beside it
+   then identifies nothing.
+
+   So there are no rules here any more: one flowing line, one `truncate`
+   on it, the name first (`Cut`). The two inks remain, and they cost no
+   width. `--cw-cmd-arg-min` went with this; `--cw-name-max` is gone
+   too. */
+
+
+/* Tight: the eight columns stop fitting long before the window does, so
+   each row becomes three lines of its own — identity, then the command
+   line, then the quantities. Same reasoning as the drawer's rows, and
+   the same mechanism: the table's own width decides, not the window's. */
+/* ⚠️ 墓碑 (F4.3): the tight table had a height of its own to scroll in;
+   it flows in the page now, the top rows and 显示全部. */
+[data-tight] > [data-load-top] {
+  display: block;
+}
+[data-tight] > [data-load-top] [data-top-heads] {
+  display: none;
+}
+[data-tight] > [data-load-top] [data-top-body] { display: block; }
+[data-tight] > [data-load-top] [data-top-row] {
+  /* **Three lines, and the quantities share the third.** A two-column
+     grid put every quantity on a line of its own — measured: a row 89
+     tall, five grid rows where three were meant. Flex with wrapping
+     lets the short numbers sit together and only the command line take
+     a whole line of its own, which is what it needs. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--gap-in);
+  padding-block: calc(var(--gap-in) / 2);
+  border-block-start: var(--hair) solid var(--border);
+}
+/* **Two lines a row** (the audit fix plan F4.3; N06): the command, then
+   the quantities with their units in columns — CPU, GPU, memory, card
+   memory, each one fixed width and right-aligned, tabular, so they line
+   up down the list. The identifiers and the times stay in the wide
+   table; a phone row that wrapped them was three lines of numbers with
+   no head. */
+[data-tight] > [data-load-top] [data-top-row] > :is([data-c="pid"], [data-c="status"], [data-c="user"], [data-c="time"], [data-c="cputime"], [data-c="io"]) {
+  display: none;
+}
+[data-tight] > [data-load-top] [data-top-row] > [data-c="cmd"] {
+  flex: 1 0 100%;
+  order: -1;
+}
+/* **Each number says what it is, at a fixed x** (F4 review): the
+   second line starts on the page's line, every field its name in the
+   muted ink then its value, tabular, each field one width so the four
+   stand in columns down the list. ⚠️ 墓碑: right-aligned 5.5em boxes
+   with no names, floating at an indent nothing explained. */
+[data-tight] > [data-load-top] [data-top-row] > :is([data-c="cpu"], [data-c="gpu"]) {
+  flex: 0 0 6.5em;
+  text-align: left;
+}
+[data-tight] > [data-load-top] [data-top-row] > :is([data-c="mem"], [data-c="vram"]) {
+  flex: 0 0 8.5em;
+  text-align: left;
+}
+[data-tight] > [data-load-top] [data-top-row] > [data-label]:not(:empty)::before {
+  content: attr(data-label) "\00a0";
+  color: var(--muted-foreground);
+}
+/* No head row on a phone, so no rule for one: the first row's own
+   hairline would stand under the seam's, an empty band between two
+   lines (F4 review). */
+[data-tight] > [data-load-top] [data-top-body] > [data-top-row]:first-child {
+  border-block-start: 0;
+}
+/* Wide: a gutter before 命令, so a right-aligned number never runs into
+   the command beside it (F4.3; W15). */
+:not([data-tight]) > [data-load-top] :is([data-c="cmd"], [data-top-head="cmd"]) {
+  padding-inline-start: var(--gap-group);
+}
+/* An empty quantity takes no room narrow: a machine with no cards would
+   otherwise carry two invisible gaps on every row. */
+[data-tight] > [data-load-top] [data-top-row] > [data-c]:empty {
+  display: none;
+}
+
+/* The cut edge of a sideways scroller (用户 2026-09-10 选「丁」).
+ *
+ * **A table wider than the screen says nothing about it.** The stats
+ * table on the account detail has nine columns and a phone shows three;
+ * until now the other six were simply absent, with no mark of any kind
+ * — a reader had no way to tell 「there is more over there」 from 「this
+ * is all there is」, which is the same pair of facts `usage-no-cache`
+ * exists to keep apart one line below.
+ *
+ * The user chose the wordless answer over the three that spoke. What is
+ * built into it here are the two things a plain gradient would have got
+ * wrong:
+ *
+ * - **It is only there when something is actually cut off**, and it
+ *   goes on the side it is cut off on (`SideCut` measures; this file
+ *   only draws). A veil that stayed after the last column had scrolled
+ *   into view would be saying there is more when there is not.
+ * - **Under `prefers-contrast: more` it stops being a gradient.** A
+ *   fade has no single contrast to answer for — its L* difference from
+ *   the ground is a different number at every pixel — so on a face
+ *   asking for contrast it becomes a hairline, which does have one.
+ *   That is the whole of the objection raised against this option, and
+ *   it is answered here rather than argued.
+ */
+[data-side-cut] {
+  position: relative;
+  min-width: 0;
+}
+
+[data-side-cut]::before,
+[data-side-cut]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--cut-wide);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-120) var(--ease-out);
+}
+
+/* The veil blends into whatever the scroller is sitting on. Both of
+   this app's surfaces are named, so the caller says which rather than
+   this file guessing: `--cut-into` defaults to the paper, since a table
+   is content and content is on the board (2026-09-30, 板是纸底是框; it
+   defaulted to the page's `background`, the frame round the board). */
+[data-side-cut]::after {
+  right: 0;
+  background: linear-gradient(to left, var(--cut-into, var(--card)), transparent);
+}
+
+[data-side-cut]::before {
+  left: 0;
+  background: linear-gradient(to right, var(--cut-into, var(--card)), transparent);
+}
+
+[data-side-cut][data-cut-right]::after,
+[data-side-cut][data-cut-left]::before {
+  opacity: 1;
+}
+
+@media (prefers-contrast: more) {
+  [data-side-cut]::before,
+  [data-side-cut]::after {
+    width: var(--hair);
+    background: var(--border);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-side-cut]::before,
+  [data-side-cut]::after {
+    transition: none;
+  }
+}
+
+/* A rendered document (工作区批6): markdown, or a Word/Excel/PowerPoint
+ * file that became markdown on the way (`khor_node::preview`).
+ *
+ * **Written here rather than as utilities**, and this is the exception
+ * the file's own head allows for: the HTML is generated in Rust and
+ * this side never sees the elements, so there is no call site to put a
+ * class on. Tailwind's typography plugin would do the same job and
+ * bring its own scale; every length below is a token this app already
+ * has, which is the reason not to.
+ *
+ * Sized off `--text-read`, not `--text-mono`: this is prose, and the
+ * measure and leading a person reads paragraphs at are the ones
+ * `check-read` already measures on the conversation. */
+.prose-khor {
+  font-size: var(--text-read);
+  line-height: var(--text-read--line-height);
+  color: var(--foreground);
+}
+.prose-khor > * + * {
+  margin-top: 0.75em;
+}
+.prose-khor :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-title);
+  font-weight: var(--font-weight-title);
+  line-height: 1.3;
+}
+/* The step between levels is lightness and weight, never a size ladder
+   with six rungs: a document rendered from somebody's Word file uses
+   whatever depth it likes, and a scale that shrank to 0.8em by h6 would
+   be unreadable exactly where the nesting is deepest. */
+.prose-khor h1 { font-size: var(--text-doc-h1); margin-top: 1.4em; }
+.prose-khor h2 { font-size: var(--text-doc-h2); margin-top: 1.3em; }
+.prose-khor h3 { font-size: var(--text-doc-h3); margin-top: 1.2em; }
+.prose-khor h4,
+.prose-khor h5,
+.prose-khor h6 { font-size: var(--text-read); margin-top: 1.1em; }
+.prose-khor :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.prose-khor ul { list-style: disc; padding-left: 1.4em; }
+.prose-khor ol { list-style: decimal; padding-left: 1.4em; }
+.prose-khor li + li { margin-top: 0.25em; }
+.prose-khor a { color: var(--foreground); text-decoration: underline; }
+.prose-khor code {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.3em;
+}
+.prose-khor pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  line-height: var(--text-mono--line-height);
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+}
+.prose-khor pre code { background: none; padding: 0; }
+.prose-khor blockquote {
+  /* Twice the hairline, because this one is a mark rather than a
+     seam — a quoted block has to be visible as a block. */
+  border-left: calc(var(--hair) * 2) solid var(--border);
+  padding-left: 0.8em;
+  color: var(--muted-foreground);
+}
+.prose-khor hr { border-top: var(--hair) solid var(--border); }
+/* A spreadsheet arrives as one of these and can be very wide, so the
+   table scrolls inside the document rather than widening it — the same
+   rule the file view's code column follows. */
+.prose-khor table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: var(--text-callout);
+}
+.prose-khor :is(th, td) {
+  border: var(--hair) solid var(--border);
+  padding: 0.3em 0.6em;
+  text-align: left;
+  white-space: nowrap;
+}
+.prose-khor th { font-weight: var(--font-weight-title); background: var(--muted); }
+.prose-khor img { max-width: 100%; }
+
+/* ── what GitHub draws that plain markdown does not (lane md-render) ──
+ *
+ * Both faces: the conversation's `[data-md]` and the file page's. Every
+ * length is the reading size's (`em`) or a token; every colour is a
+ * token, so the preview's own ground (预览背景) re-colours all of it the
+ * way it re-colours the prose. Not github-markdown-css: that sheet is a
+ * second type scale and a second palette.
+ *
+ * An alert (`lib/md/alerts`) is a passage set apart, so it keeps the
+ * quote's rule; it is not a quotation, so its words keep the body ink.
+ * Its kind is the title word, not a colour (colour has its jobs). */
+[data-md] [data-alert] {
+  margin: 0.5em 0;
+  border-left: calc(var(--hair) * 2) solid var(--border);
+  padding-left: 0.8em;
+}
+[data-md] [data-alert-title] {
+  font-weight: var(--font-weight-title);
+}
+[data-md] [data-alert] > :is(p, ul, ol):first-of-type { margin-top: 0.25em; }
+
+/* Footnotes: under a hairline, a step down in size and ink — notes, not
+   text. The number in the line is the link (`Markdown`'s `Link`). */
+[data-md] [data-footnotes] {
+  margin-top: 1.5em;
+  border-top: var(--hair) solid var(--border);
+  padding-top: 0.5em;
+  font-size: var(--text-callout);
+  line-height: var(--text-callout--line-height);
+  color: var(--muted-foreground);
+}
+[data-md] [data-footnotes] ol { list-style: decimal; padding-left: 1.4em; }
+[data-md] sup { line-height: 0; }
+
+/* A task list: the box stands where the bullet would. */
+[data-md] ul.contains-task-list { list-style: none; padding-left: 1.4em; }
+[data-md] .task-list-item > input[type="checkbox"] {
+  margin: 0 0.4em 0 -1.4em;
+  vertical-align: middle;
+}
+
+/* A key, the way the app draws its own key caps: `radius-xs`, a hairline
+   with a heavier foot. */
+[data-md] kbd {
+  font-family: var(--font-sans);
+  font-size: var(--text-callout);
+  line-height: 1;
+  padding: 0.15em 0.4em;
+  border: var(--hair) solid var(--border);
+  border-bottom-width: calc(var(--hair) * 2);
+  border-radius: var(--radius-xs);
+  background: var(--fill);
+}
+
+/* A formula wider than the column scrolls inside itself, like a table.
+   KaTeX draws in `currentColor`, so its ink is the text's. */
+[data-md] .katex-display {
+  margin: 0.5em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* A drawn diagram leaves the code block's frame: it is a picture now.
+   Its labels are prose, not code. */
+[data-md] pre:has(> [data-mermaid="drawn"]) {
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+}
+[data-md] [data-mermaid="drawn"] {
+  display: flex;
+  justify-content: center;
+  white-space: normal;
+  font-family: var(--font-sans);
+}
+[data-md] [data-mermaid="drawn"] svg { max-width: 100%; height: auto; }
+
+[data-md] img { max-width: 100%; height: auto; }
+[data-md] details { margin: 0.5em 0; }
+[data-md] summary { font-weight: var(--font-weight-title); }
+
+/* 暂停 (docs/MORE.md): the rail's face, dimmed and drained, while this
+   machine is not talking to the network. **Not a badge**: the mark is
+   this machine's own face and anything laid over it would be a second
+   thing to learn. Greyed and faded is what every surface here already
+   means by 「不在」, and it is legible in both themes because it changes
+   neither colour. */
+[data-rail-mark][data-paused] {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+/* ── a pane that has scrolled to its end stops there ────────────────
+ *
+ * 「整个app是不允许随滑轮变化的」 — the user, 2026-09-20
+ * (docs/SHELL.md 第 1 条). The root's half of that rule is in
+ * `tokens.css`'s base layer; this is the other half.
+ *
+ * **One selector, not a class somebody has to remember to add.** The
+ * ruling's own words are 「做成一个类 / 一个组件,别在十几处各写一遍」,
+ * and a class would have been forty-eight call sites the day it was
+ * written and forty-nine the next time anybody makes a scroller. What
+ * a scroller has in common is already written down at every one of
+ * those sites — it is the overflow utility itself — so that is what
+ * this reaches for. A pane added tomorrow is contained without anybody
+ * being told.
+ *
+ * ⚠️ **It is the utility class, so it cannot outlive the utility.** If
+ * these names ever stop being what tailwind emits for
+ * `overflow-y-auto`, every one of these panes silently goes back to
+ * chaining — which is exactly the failure that has no symptom until
+ * somebody flicks a trackpad. `check-wk` therefore measures the
+ * computed `overscroll-behavior` on a real pane rather than trusting
+ * this file to have matched.
+ *
+ * Unlayered on purpose: tailwind's utilities sit in `@layer utilities`
+ * and unlayered rules beat layered ones whatever the specificity, so
+ * this wins without an `!` and without counting classes. Nothing else
+ * in this app sets `overscroll-behavior`, so there is nothing for it
+ * to fight.
+ *
+ * `contain`, not `none`: a pane may still bounce on its own — that is
+ * WebKit telling a finger it has reached the end of *this* list, which
+ * is information. What it may not do is hand the rest to whatever is
+ * behind it.
+ *
+ * **A box that scrolls sideways contains only sideways** (2026-10-21).
+ * `overflow-x: auto` computes `overflow-y` to auto too, so a code block,
+ * a wide table or a formula frame is a vertical scroll container of no
+ * height to scroll; contained on both axes it swallowed the wheel, and a
+ * preview stopped dead wherever the pointer rested on a table — 642 of
+ * 6418 px in Chromium, 1092 of 8715 in the content sheet in both
+ * engines. Vertically it hands the wheel to the document it sits in. */
+.overflow-auto,
+.overflow-scroll,
+.overflow-y-auto,
+.overflow-y-scroll {
+  overscroll-behavior: contain;
+}
+.overflow-x-auto,
+.overflow-x-scroll {
+  overscroll-behavior-x: contain;
+}
+
+/* ── settings groups (docs/design-system components/SettingsGroup) ──
+   A card on the page's canvas; one hairline between rows, starting at
+   `gap-row` from the left the way macOS starts it at the text. Rows
+   bring their own padding; anything else set in a card (a warning, a
+   PIN field, a key) gets a row's padding so it stands on the same
+   left edge. */
+[data-settings-card] {
+  /* Inset-grouped since UX-11 (`--grouped`): the one place a card is
+     drawn on the one ground. */
+  background: var(--grouped);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+[data-settings-card] > :not([data-setting-row], [data-nav-order]) {
+  padding: var(--gap-in) var(--gap-row);
+}
+/* 外观's navigation rows are rows of the card: inset like its rows, and
+   their hairlines the card's — from the words to the card's edge
+   (the audit fix plan F4.9; W21). */
+[data-nav-order-row] {
+  position: relative;
+  padding-inline: var(--gap-row);
+}
+[data-nav-order] > * + * [data-nav-order-row]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--gap-row);
+  right: var(--gap-row);
+  height: var(--hair);
+  background: var(--border);
+}
+/* **One height for every one-line row, whatever it holds**: a control
+   (`ctl-md`) and the row's padding above and below it. A switch, a fact
+   and a line of text are as tall as a row with a popup or a button in
+   it; only a note under the title grows a row (`check-face` 4I).
+   ⚠️ 墓碑 (2026-09-28): rows were as tall as what they held — 44 with a
+   button, 34 with a switch or a value, 24 for the interface list — so
+   one group's rows could be three heights. */
+[data-settings-card] > :is([data-setting-row], [data-more-row]) {
+  min-height: calc(var(--ctl-md) + 2 * var(--gap-in));
+}
+/* ⚠️ 墓碑 (2026-09-28): a rule here set a bare button in a card on the
+   text's left edge with no line over it — the act of the row above.
+   Every such act became a row's own trailing button (`ActionRow`), and
+   the rule and the two `button` exceptions beside it had no user left
+   (every 「…」 page walked: no card has a button for a child). */
+[data-settings-card] > * + * {
+  position: relative;
+}
+/* A row's hairline runs from its words to where its controls end
+   (W-V10), not past them to the card's edge. */
+[data-settings-card] > * + *::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--gap-row);
+  right: var(--gap-row);
+  height: var(--hair);
+  background: var(--border);
+}
+
+/* **A colour well is its colour, edge to edge** (FaceSettings
+   `ColorWell`): the engines draw `<input type=color>` as a swatch inset
+   in a bordered box — a square in a square. The inset and the swatch's
+   own border go; the input's `avatar-edge` hairline is the one edge. */
+[data-color-slot]::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: var(--radius-full);
+}
+[data-color-slot]::-webkit-color-swatch {
+  border: 0;
+  border-radius: var(--radius-full);
+}
+[data-color-slot]::-moz-color-swatch {
+  border: 0;
+  border-radius: var(--radius-full);
+}
+
+/* **The page's name is said once** (components/Toolbar「身份只出现一次」):
+   inside a board, R0 already carries it and the way back, so the
+   frame's own head is only for the narrow face, where there is no R0. */
+[data-board] [data-more-head] {
+  display: none;
+}
+
+/* ⚠️ 墓碑 (the redesign, 2026-10-02): the tab in front joined the
+   board's top-left corner here. The board has no corner now, and the
+   session tabs are glass pills (`TabStrip` `glass`). */
+
+/* **外观's sliders** (the redesign, 2026-10-02): a native range input, so
+   the keyboard, a screen reader and a finger all work as the platform
+   makes them; only its knob is drawn here. The track, its filled part
+   and the ticks are the component's own (`settings/Slider`), under the
+   input, whose own track is clear. */
+[data-slider] input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  margin: 0;
+}
+[data-slider] input[type="range"]::-webkit-slider-runnable-track {
+  background: transparent;
+}
+[data-slider] input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--slider-knob);
+  height: var(--slider-knob);
+  border-radius: var(--radius-full);
+  background: var(--knob);
+  box-shadow: var(--shadow-knob);
+}
+[data-slider] input[type="range"]::-moz-range-thumb {
+  width: var(--slider-knob);
+  height: var(--slider-knob);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--knob);
+  box-shadow: var(--shadow-knob);
+}
+[data-slider] input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: var(--ring-w) solid var(--ring);
+}
+
+/* **A list's search field is glass** (the redesign, 2026-10-02): the
+   column's box on the wide face, the head's on the narrow one. The box
+   keeps its anatomy (`Omnibox`, `PaneBar`); the material, the height and
+   the round ends are the glass controls'. Unlayered, so it wins over the
+   field's own utilities. */
+[data-search-glass] :is(div[data-search-field], button[data-search-field], [data-search-wrap]) {
+  position: relative;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-in), var(--glass-shadow);
+  border-radius: calc(var(--glass-btn) / 2);
+  min-height: var(--glass-btn);
+  height: auto;
+}
+/* Its rim, the glass utility's ring (round 7). A plain box's glass is on
+   its wrapper (`data-search-wrap`): an input draws no pseudo-element, so
+   the input itself goes clear inside it. */
+[data-search-glass] :is(div[data-search-field], button[data-search-field], [data-search-wrap])::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--hair);
+  background: var(--glass-rim);
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+[data-search-glass] [data-search-wrap] input[data-search-field] {
+  background: transparent;
+  min-height: var(--glass-btn);
+}
+
+/* **The glass is the rim's containing block** — made `relative` here
+   unless it is already placed (the floating navigation is `absolute`),
+   so its own position is never overridden. */
+.glass:not(.absolute, .fixed, .sticky) {
+  position: relative;
+}
+
+/* The narrow face's page edge: its head starts after the platform's
+   corner at the list's own 20, and the page under it matches. */
+[data-narrow] {
+  --page-inset: var(--gap-group);
+  /* The lines set in from it follow it (tokens.css): a custom property
+     takes its `var()`s where it is declared, so on a narrow box inside a
+     wide window (the Mac's 附栏 column) the root's would still stand on
+     the wide page's 24 — the tree 4 off the find row above it (UX-40). */
+  --files-inset: calc(var(--page-inset) - var(--gap-base));
+  --rows-inset: calc(var(--page-inset) - var(--gap-group));
+  --tree-inset: calc(var(--page-inset) - var(--tree-slot) / 2 + var(--affordance) * 0.113);
+}
+
+/* ⚠️ 墓碑: the wide left column re-derived the glass sizes from the
+   strip's (`aside[data-side]`), so the title row's controls matched the
+   strip's and nothing else did. They are one size everywhere now
+   (tokens.css, F1.4). */
+
+/* **A glass control's glyph** (2026-10-02, the owner: 「icon在不同的地方
+   大小要一样」). Whatever glyph sits in a glass control is `--ctl-glyph`
+   (`tokens.css`), sized here on the seat and never at a call site: the
+   circles and the capsules' buttons (`components/Glass`), the landings
+   strip and its 更多 (`[data-rail-item]`), and the three that are plain
+   buttons in a glass circle — the folded 「…」 and VS Code (`[data-code]`).
+   Unlayered, so it wins over the glyph's own default box. The floating
+   bottom bar is not here: its seats carry a word and keep `--nav-glyph`. */
+:is([data-glass-circle], [data-glass-item], [data-rail-item], [data-verbs-more], [data-code]) > svg {
+  width: var(--ctl-glyph);
+  height: var(--ctl-glyph);
+}
+/* **One answer for every glass control** (the audit fix plan F1.1–F1.2;
+   SYS-01, SYS-09, W12). Circles, capsule items, the landings strip, the
+   bottom bar, the head's verbs and VS Code, the capsule's seats: under
+   the pointer the same thin fill, pressed the same give and dim. Keyed on
+   what each *is* (its glass attribute), not on the wrapper a call site
+   happened to use — a Tooltip trigger renames `data-slot` and took the
+   press away from the head's verbs.
+
+   **The chosen one keeps its look under the pointer**: hover touches only
+   what is not chosen (`data-on`, an open menu, anything inside a chosen
+   pill). The fill is a background *image* laid over whatever the control
+   wears, so a glass circle keeps its tint under it. */
+:is([data-glass-circle], [data-glass-item], [data-rail-item], [data-verbs-more], [data-code], [data-nav-item], [data-glass-hit]) {
+  transition:
+    background-color var(--dur-120) var(--ease-out),
+    transform var(--dur-120) var(--ease-out),
+    opacity var(--dur-120) var(--ease-out);
+}
+@media (hover: hover) {
+  :is([data-glass-circle], [data-glass-item], [data-rail-item], [data-verbs-more], [data-code], [data-nav-item], [data-glass-hit]):hover:not([data-on="true"], [data-state="open"], .glass-sel, .glass-sel *, :disabled) {
+    background-image: linear-gradient(var(--fill), var(--fill));
+  }
+}
+:is([data-glass-circle], [data-glass-item], [data-rail-item], [data-verbs-more], [data-code], [data-nav-item], [data-glass-hit]):active:not(:disabled) {
+  transform: scale(var(--press));
+  opacity: 0.86;
+}
+@media (prefers-reduced-motion: reduce) {
+  :is([data-glass-circle], [data-glass-item], [data-rail-item], [data-verbs-more], [data-code], [data-nav-item], [data-glass-hit]):active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* **Under a finger, nothing to press is smaller than 44 × 44** (the
+   audit fix plan F1.5; N02, SYS-16). The drawing keeps its size; what
+   grows is the hit box, a transparent `::after` at least 44 each way
+   centred on the control. Capsule items, the strip, the verbs and their
+   「…」, VS Code, the capsule's seats, a tab's third seat (UX-33; ⚠️ 墓碑
+   its ×), every shadcn button,
+   and a glass circle drawn smaller than its 44 (the terminal deck's
+   reload at 38, UX-9 I12; a list head's circle is 44 already). A
+   control that is already placed (`absolute`, `fixed`, `sticky`) is its
+   own containing block; a static one is made one. */
+@media (pointer: coarse) {
+  :is([data-glass-item], [data-glass-circle], [data-rail-item], [data-verbs-more], [data-code], [data-glass-hit], [data-tab-act], [data-chat-send], [data-chat-stop], [data-slot="button"], [data-term-key], [data-search-clear], [data-tab-open], [data-term-font]):not([class*="absolute"], [class*="fixed"], [class*="sticky"], .glass-sel) {
+    position: relative;
+  }
+  :is([data-glass-item], [data-glass-circle], [data-rail-item], [data-verbs-more], [data-code], [data-glass-hit], [data-tab-act], [data-chat-send], [data-chat-stop], [data-slot="button"], [data-term-key], [data-search-clear], [data-tab-open], [data-term-font])::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: max(100%, var(--touch));
+    height: max(100%, var(--touch));
+    translate: -50% -50%;
+  }
+  /* The terminal's keys fill their row: no dead gap between two caps
+     (V04: the box was only widened, and with no `content` it was never
+     drawn — every key hit 37, with 5 dead between). */
+  [data-term-key]::after {
+    width: calc(100% + var(--term-key-reach));
+    height: max(100%, var(--touch));
+  }
+  /* ⚠️ 墓碑 (V03): the range input alone was made 44 here, so its thumb
+     sat 8 below the 28 track drawn beside it; the slider's drawing box
+     is the hit's height now (`settings/Slider`). */
+}
+
+/* **Under a finger an in-content control is 44 as drawn** (V02, V03,
+   V13): a popup's chip, the font picker, a dialog's or a sheet's
+   buttons — one height with the fields and segments beside them, not a
+   28 or 32 drawing inside a 44 hit. */
+@media (pointer: coarse) {
+  [data-popup-button] > div,
+  [data-term-font],
+  [data-slot="dialog-footer"] [data-slot="button"] {
+    height: var(--touch);
+  }
+}
+
+/* A menu cut by its height fades at the cut edge (V15). */
+[data-menu-viewport][data-cut-bottom] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-menu)), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-menu)), transparent);
+}
+[data-menu-viewport][data-cut-top]:not([data-cut-bottom]) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-menu));
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-menu));
+}
+[data-menu-viewport][data-cut-top][data-cut-bottom] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-menu), #000 calc(100% - var(--fade-menu)), transparent);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-menu), #000 calc(100% - var(--fade-menu)), transparent);
+}
+
+/* **A listing's hairline starts at its names** (V17), the text column,
+   as every list's does: 16 of inset, the 20 kind box and its 8. */
+[data-files-list] :is(div:has(> [data-dir]), div:has(> button > [data-dir]), [data-file], [data-files-here-row]) {
+  background-image: linear-gradient(var(--border), var(--border));
+  background-size: calc(100% - var(--files-hair-start)) var(--hair);
+  background-position: right bottom;
+  background-repeat: no-repeat;
+}
+
+/* **No key equivalents under a finger** (V10): a phone has no ⌘. */
+@media (pointer: coarse) {
+  [data-menu-key] {
+    display: none;
+  }
+}
+
+/* **No tooltips under a finger** (2026-10-03): a tooltip is the pointer's
+   help tag, and a finger has no hover. Radix opens one on focus too, so
+   on the phone a closing menu handed the focus back to ＋ and left 「新建」
+   floating under it (measured in the simulator app, `ux-94`). The name
+   stays for a screen reader; only the bubble is not drawn. */
+@media (pointer: coarse) {
+  [data-slot="tooltip-content"] {
+    display: none;
+  }
+}
+
+/* The workspace's sessions column stands at the pane's right edge: its
+   head's glass ends on the content's right line (W-V5). */
+[data-ws-sessions]:not([data-narrow] *) [data-pane-bar] {
+  padding-inline-end: var(--page-inset);
+}
+
+/* **A right-clicked row is ringed while its menu is open** (the audit fix
+   plan F3.6; W23): Finder's target ring, so the row the menu acts on is
+   never in doubt. */
+[data-side-row]:has([data-side-open][data-state="open"]) {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: calc(-1 * var(--ring-off));
+}
+
+/* **A conversation a file is dragged over wears the same ring** (round
+   CHAT): Finder's drop target, so where the file will go is never in
+   doubt before it is let go. */
+[data-chat-drop] {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: calc(-1 * var(--ring-off));
+}
+
+/* **A form on the narrow face is one column** (the audit fix plan F4.5;
+   N12): each question's label over its control, every control on the
+   same left edge. */
+[data-narrow] [data-form-grid] {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: var(--gap-in);
+}
+/* **Two gaps and only two** (the F4 review): a label stands `gap-in`
+   over its control (and a note `gap-in` under it), and each question
+   after the first opens `gap-base` under the last one. ⚠️ 墓碑: one
+   `gap-xxs` for both, so the groups ran together and a note sat as
+   close to the next label as to its own control. */
+[data-narrow] [data-form-grid] > [data-form-label]:not(:first-child) {
+  margin-top: calc(var(--gap-base) - var(--gap-in));
+}
+[data-narrow] [data-form-grid] > * {
+  grid-column: 1 / -1;
+  text-align: start;
+}
+
+/* Notes under settings rows keep their last line from being one word
+   (F4.9; N23), and the digits a page lines up are tabular (SYS-14). */
+[data-setting-note] {
+  text-wrap: pretty;
+}
+:is([data-setting-trail], [data-setting-value], [data-more-fact], dd, [data-day-band-axis] text, .dayblk text) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fixed titles stay clear while their content yields to the window's
+   single background plane. The pseudo-element blurs; it adds no tint. */
+[data-band] {
+  position: relative;
+  z-index: 3;
+}
+:is([data-band], [data-sticky-head]) {
+  background: transparent;
+  border-bottom: 0;
+  box-shadow: none;
+}
+:is([data-band], [data-sticky-head])::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 calc(-1 * var(--gap-pane));
+  z-index: -1;
+  pointer-events: none;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: var(--band-blur);
+  backdrop-filter: var(--band-blur);
+  --sticky-header-mask: linear-gradient(to bottom, var(--canvas-solid), color-mix(in srgb, var(--canvas-solid) 98%, transparent) 20%, color-mix(in srgb, var(--canvas-solid) 92%, transparent) 40%, color-mix(in srgb, var(--canvas-solid) 74%, transparent) 60%, color-mix(in srgb, var(--canvas-solid) 38%, transparent) 80%, transparent);
+  -webkit-mask-image: var(--sticky-header-mask);
+  mask-image: var(--sticky-header-mask);
+  opacity: 0;
+  transition: opacity var(--dur-180) var(--ease-out);
+}
+[data-band][data-scrolled]::before, [data-sticky-head][data-sticky-held]::before { opacity: 1; }
+[data-sticky-group]:has(> [data-sticky-body="flush"]) > [data-sticky-head]::before { bottom: 0; }
+[data-sticky-fading] {
+  --sticky-content-mask: linear-gradient(to bottom,
+    transparent var(--sticky-fade-start),
+    color-mix(in srgb, var(--canvas-solid) 2%, transparent) calc(var(--sticky-fade-start) + var(--sticky-fade-length) * 0.2),
+    color-mix(in srgb, var(--canvas-solid) 8%, transparent) calc(var(--sticky-fade-start) + var(--sticky-fade-length) * 0.4),
+    color-mix(in srgb, var(--canvas-solid) 26%, transparent) calc(var(--sticky-fade-start) + var(--sticky-fade-length) * 0.6),
+    color-mix(in srgb, var(--canvas-solid) 62%, transparent) calc(var(--sticky-fade-start) + var(--sticky-fade-length) * 0.8),
+    var(--canvas-solid) calc(var(--sticky-fade-start) + var(--sticky-fade-length)));
+  -webkit-mask-image: var(--sticky-content-mask);
+  mask-image: var(--sticky-content-mask);
+}
+/* A phone's band reaches up under the status bar, as iOS's bar does:
+   nothing shows above the title through it. */
+[data-band][data-band-reach]::before {
+  top: calc(-1 * var(--safe-top));
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-band]::before {
+    transition: none;
+  }
+}
+[data-band-over] > [data-band] + *,
+[data-band-over] > [data-band-under] {
+  margin-top: calc(-1 * var(--band-h));
+}
+[data-band-scroll] {
+  padding-top: calc(var(--band-h) + var(--band-pad));
+  scroll-padding-top: var(--band-h);
+}
+/* **Where no band covers a scroller, its top edge still fades** once
+   scrolled (the audit fix plan F4.11; N21), rather than a row being cut
+   mid-glyph by the box's edge: 20 of mask (`lib/scroll-edge` `EDGED`). */
+:is([data-nav-clear], [data-pane-body], [data-files-list])[data-scrolled]:not([data-band-scroll], [data-sticky-scroll]) {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-head));
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-head));
+}
+/* The terminal: even margins of 8, and no scrollbar (F4.10; N18; on every
+   platform since 2026-10-03, the owner: 「宽屏怎么没有把拖动条给删了？」) —
+   a finger drags it, a wheel or trackpad scrolls it, as in iTerm with its
+   bar hidden.
+   **The bar is xterm's own, not the engine's** (xterm 6): a drawn
+   slider in `.xterm-scrollable-element`, 14 wide, which the fit addon
+   takes off the width before it counts columns (`overviewRuler.width`,
+   default 14, and 0 reads as the default). So hiding it is half: the
+   screen is also made `--term-bar` wider, past the pane's right padding
+   where the pane clips it, and the columns come out of the full width —
+   the grid ends 8 from the edge, the same as it starts. The viewport pair
+   stays for an engine bar on the viewport itself; the native scroller the
+   history scrolls in (`scrollsNatively`, item 15) hides its bar the same
+   way. */
+/* The margins are the native scroller's own padding rather than the box's
+   (roadmap 2.3): a command block's exit stripe sits in the left one, so
+   the scroller must not clip it away. The grid still starts 8 in. */
+[data-terminal] {
+  padding-inline: 0;
+}
+[data-terminal] [data-term-scroller] {
+  padding-inline: var(--gap-in);
+}
+/* The screen is clipped above and below (its fractional shift) and on the
+   right (the hidden bar's width), never in the left margin. */
+[data-terminal] [data-term-stick] {
+  clip-path: inset(0 0 0 calc(-1 * var(--gap-in)));
+}
+/* **Command blocks** (roadmap 2.3, `drawBlocks`): a hairline where each
+   prompt starts; the exit status as a stripe the focus ring's width in the
+   middle of the left margin, the state inks. Never in the way of a press. */
+[data-terminal] .term-block-hair {
+  border-top: var(--hair) solid var(--border);
+  pointer-events: none;
+}
+[data-terminal] .term-block-tint {
+  width: var(--ring-w) !important;
+  margin-left: calc(var(--gap-in) / -2);
+  background: var(--state-failed);
+  pointer-events: none;
+}
+[data-terminal] .term-block-tint[data-exit="0"] {
+  background: var(--state-done);
+}
+[data-terminal] .term-block-tint[data-exit=""] {
+  background: var(--state-idle);
+}
+[data-terminal] .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+[data-terminal] [data-term-screen] {
+  width: calc(100% + var(--term-bar));
+}
+[data-terminal] .xterm-viewport,
+[data-term-scroller] {
+  scrollbar-width: none;
+}
+[data-terminal] .xterm-viewport::-webkit-scrollbar,
+[data-term-scroller]::-webkit-scrollbar {
+  display: none;
+}
+@media (pointer: coarse) {
+  /* **The pinyin being composed is not drawn at the cursor** under a
+     finger (item 18 B): a redrawing program moves the cursor, and the
+     preview jumped with it. The pane shows it in a strip of its own at
+     the screen's foot (`data-term-composing`); xterm still takes the
+     composition and commits it at the cursor. */
+  [data-terminal] .composition-view {
+    visibility: hidden;
+  }
+  /* **The keys' field stays in the corner** (2026-10-03, the owner:
+     「输入到屏幕边的时候整个页面会拉长」). xterm moves its hidden textarea
+     to the cursor and widens it to what is being composed; at the right
+     edge it reached past the pane, and WebKit scrolled the pane sideways
+     to show the caret — measured 32 px, the prompt cut at its left. A
+     phone's candidates live in the keyboard's own bar and need no caret
+     position, so under a finger the field is a 1 px box at the screen's
+     top-left; xterm's inline styles yield to these. */
+  [data-terminal] .xterm-helper-textarea {
+    left: 0 !important;
+    top: 0 !important;
+    width: var(--hair) !important;
+    height: var(--hair) !important;
+  }
+}
+/* …and the pane itself cannot be scrolled by anything: `hidden` still
+   lets a caret or `scrollIntoView` move it, `clip` does not (engines
+   without `clip` keep `hidden`). */
+[data-terminal] {
+  overflow: clip;
+}
+
+/* What a list's search matched, in its rows (F3.4; `SideList`). */
+::highlight(khor-find) {
+  background-color: var(--fill-strong);
+  color: var(--foreground);
+}
+
+/* **One focus ring** (F1.3; SYS-03, W05): 2px of `--ring`, 2 off the
+   control, following its radius. Low-specificity, so a full-bleed row
+   that draws it inside (`-outline-offset-2`) still can. **And only for
+   the keyboard** (`lib/modality`): a tap or a click on a field does not
+   ring it, and nothing is ringed before a key has been pressed. In the
+   base layer, so a call site's own offset (a full-bleed row's −2) wins. */
+@layer base {
+  :where(button, [role="button"], [role="tab"], [role="switch"], a[href], input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: var(--ring-w) solid var(--ring);
+    outline-offset: var(--ring-off);
+  }
+}
+html:not([data-modality="keyboard"]) :focus-visible,
+html:not([data-modality="keyboard"]) :is([data-search-field], [data-search-wrap]):focus-within {
+  outline: none;
+}
+/* The switch keeps its gap: a ring lying on the olive track merges into
+   it. */
+[role="switch"]:focus-visible {
+  outline-offset: var(--ring-off);
+}
+/* The popup button's `<select>` is invisible: the ring goes on the box
+   that is drawn. */
+[data-popup-button]:has(select:focus-visible) > div {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: var(--ring-off);
+}
+html:not([data-modality="keyboard"]) [data-popup-button]:has(select:focus-visible) > div {
+  outline: none;
+}
+/* A tab's ring inside its capsule, round like the tab. */
+[data-tab-open]:focus-visible {
+  outline-offset: calc(-1 * var(--ring-off));
+  border-radius: var(--radius-full);
+}
+/* The slider: the thumb's ring is the one ring. */
+[data-slider] input[type="range"]:focus-visible {
+  outline: none;
+}
+/* **The terminal draws no ring** (2026-10-03, the owner on a phone:
+   「输入或选择终端的时候逃不掉最外侧的这个绿色包边，我不知道这是什么意思」).
+   Its focus is the cursor's, the way every terminal shows it: a solid
+   block while it has the keys, a hollow one when not (`TerminalPane`,
+   `cursorInactiveStyle`). xterm's helper textarea is a box nobody sees,
+   so no outline of any kind — unlayered, it wins over the base ring. */
+.xterm-helper-textarea {
+  outline: none;
+}
+
+
+/* **The file page's text clears what floats over it** (round UX-3; UX-14):
+   the status bar at the top — nothing else is there — and the deck at the
+   bottom. Padding on the scroller itself, so the text still passes under
+   the deck while it moves and the last line can rest clear of it. */
+[data-file-page] :is([data-file-scroll], [data-file-preview]) {
+  padding-bottom: calc(var(--dock-safe-bottom) + var(--glass-btn) + 2 * var(--gap-in));
+}
+/* A top toolbar owns its port's clearance; floating decks only reserve the safe area. */
+[data-file-page] :is([data-file-scroll], [data-file-preview]):not([data-band-scroll]) {
+  padding-top: calc(var(--safe-top) + var(--gap-in));
+  scroll-padding-top: calc(var(--safe-top) + var(--gap-in));
+}
+/* The file's one floating notice (a refused save, a merge, the gutter
+   gone quiet while the buffer differs) stands over the deck, not on it:
+   the deck holds ✓, which is what the notice is about (UX-14). */
+[data-file-page] [data-file-notice] {
+  bottom: calc(var(--dock-safe-bottom) + var(--glass-btn) + 2 * var(--gap-in));
+}
+/* A revision compared with the file (round UX-4, git 历史) is the diff
+   view, whose two halves scroll on their own: the view as a whole clears
+   the status bar and the deck instead. */
+[data-file-page] [data-diff-tab] {
+  padding-top: calc(var(--safe-top) + var(--gap-in));
+  padding-bottom: calc(var(--dock-safe-bottom) + var(--glass-btn) + 2 * var(--gap-in));
+}
+
+/* **The browser's deck steps aside for the page's own keyboard** (round
+   UX-3), and comes back with it down — but not while its pill is the
+   address editor (UX-18), which is what the keyboard is up for. **Only the browser's** (the UX-13 addendum, the
+   owner 2026-10-05: 「一个甲板规则」): a terminal's deck stands over its key
+   row over the keyboard (UX-12), and a conversation's over its box — two
+   rows over the keyboard either way. ⚠️ 墓碑: every deck but a terminal's
+   stepped aside (`:not(:has([data-key-row-switch]))`). */
+:root[data-keyboard] [data-session-screen]:has([data-browse-landing]) [data-session-deck]:not(:has([data-deck-editing])) {
+  display: none;
+}
+
+/* **A deck drawn natively over the page** (UX-13, an iPhone's browser):
+   the DOM deck keeps its layout — the native one is read from it, and a
+   native press clicks it — and is not painted. */
+[data-session-bar][data-native-deck] > * {
+  visibility: hidden;
+}
+
+/* A numeric share is real progress; browsers use the issued navigation
+   estimate. Other work without a measurable share keeps its original busy
+   indicator. Progress and the session status occupy this one slot. */
+[data-pill-slot]:has([data-pill-progress], [data-pill-pending]) [data-pill-status] {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-pill-progress]:not([data-pill-progress=""]) > span {
+    transition: transform var(--dur-180) var(--ease-move);
+  }
+}
+[data-pill-progress=""] > span {
+  animation: pill-progress 1.4s var(--ease-move) infinite;
+}
+@keyframes pill-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pill-progress] > span {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* **The pill's own controls are not glass on glass** (round UX-3): what a
+   view seats at the pill's ends (the reconnect, a page's reload and its
+   ← →) is drawn as the pill's items, on the pill's own glass. */
+[data-deck-pill] [data-glass-circle]::before {
+  content: none;
+}
+[data-deck-pill] [data-glass-circle] {
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  width: var(--glass-item-h, 2rem);
+  height: var(--glass-item-h, 2rem);
+}
+
+/* **The folded capsule's ink follows what is behind it** (UX-29): the
+   deck says `data-deck-ink` from the ground it sampled — the page's, a
+   terminal's theme, a preview's ground — and the capsule's words wear
+   the ink that reads on it (tokens.css `--ink-on-dark` / `--ink-on-light`). */
+[data-deck-strip][data-deck-ink="light"] {
+  color: var(--ink-on-dark);
+}
+[data-deck-strip][data-deck-ink="dark"] {
+  color: var(--ink-on-light);
+}
+
+/* **The folded capsule sits in the home indicator's band** (item 62, the
+   owner 2026-10-07: half of it covered the terminal's last rows, and the
+   point is the most room for the terminal). With nothing seated under the deck, the
+   bar folds to the band alone (`--deck-fold`: the band, or the finger's
+   floor on a phone without one) and the capsule stands centred in it, so
+   the content — a terminal's grid — ends at the capsule's top. A row
+   seated under the deck keeps the capsule's own room above it
+   (`SessionBar`). ⚠️ Tombstone (UX-29): the capsule floated over the
+   content's foot, and the terminal's way-back float (`data-term-bottom`)
+   was lifted over it here; with the content ending above the capsule the
+   float needs no lift.
+   **Midway between the last line and the foot** (item 72, the owner
+   2026-10-07: centred in the band it read as stuck to the screen's edge):
+   a terminal's grid is whole rows and leaves a part-row empty above the
+   band, and the capsule rises by half of it (`--fold-lift`,
+   `lib/fold-seat`), its centre at the midpoint of the last row's bottom
+   and the screen's. No row is under it; the grid keeps its rows. */
+[data-session-bar][data-folded][data-fold-over]:not(:has(> [data-session-bar-under]:not(:empty))) {
+  padding-bottom: 0;
+}
+[data-session-bar][data-folded][data-fold-over]:not(:has(> [data-session-bar-under]:not(:empty))) > [data-deck-fold] {
+  height: var(--deck-fold);
+  align-items: center;
+}
+[data-session-bar][data-folded][data-fold-over]:not(:has(> [data-session-bar-under]:not(:empty))) > [data-deck-fold] > [data-deck-strip] {
+  position: relative;
+  bottom: var(--fold-lift, 0);
+}
+/* **…and the way-back float rises with it** (ux-q, the owner's
+   pair-19.png: lifted, the capsule stood 3.5–6.5 under 「回到底部」, which
+   had 11 above it). The float stands at the terminal box's foot over the
+   capsule; it rises by what the capsule rose (`--fold-lift` on the
+   content, set by `lib/fold-seat` while folded), so the gap between the
+   two is what it was before the lift. */
+[data-session-content] [data-term-bottom] {
+  bottom: calc(var(--spacing) * 2 + var(--fold-lift, 0rem));
+}
+
+/* ── 我的 khor 的表盘 (UX-26, the owner 2026-10-06; the spec is
+   audit/my-khor-dial.html) ──────────────────────────────────────
+   One page, nothing but the dial: this machine in the middle, every
+   other machine at the radius its latency says, three hairline rings.
+   The maths is `lib/dial.ts`; the page is `views/more/MyKhorPage.tsx`;
+   what is here is how a road, a ring and a seat are drawn. */
+
+/* The page's own first row on the wide face: the way back, the name and
+   the 地图/矩阵 segment, starting past the window's buttons like every
+   first row (UX-19: at the title inset where there are none). */
+:root:not([data-traffic]) [data-dial-top] {
+  padding-inline-start: var(--gap-group);
+}
+
+/* Rings: hairlines on the ground; the rim (不通) is dotted. */
+[data-dial-ring] {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1;
+}
+[data-dial-ring][data-rim] {
+  stroke-dasharray: 2 4;
+}
+/* A ring's word and a road's number sit on a patch of the ground, so the
+   hairline they stand on breaks behind them. */
+[data-dial-word] {
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 5;
+  stroke-linejoin: round;
+}
+
+/* Roads: the colour is the band (set inline from `BAND_INK`), the dash
+   is the way — solid direct, dashed by a relay, dotted none. At rest
+   only this machine's show; a look lights one machine's and fades the
+   rest. Nothing else moves on its own (rule 9). */
+[data-dial-edge] {
+  fill: none;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  opacity: 0.55;
+  transition:
+    opacity var(--dur-180) var(--ease-out),
+    stroke-width var(--dur-180) var(--ease-out);
+}
+[data-dial-edge][data-road="relay"] {
+  stroke-dasharray: 4 4;
+}
+[data-dial-edge][data-lat="none"],
+[data-dial-edge][data-road="idle"] {
+  stroke-dasharray: 1 5;
+}
+/* An idle edge (round NET-13): no live wire, nothing wrong — dotted like
+   no road, in its last reading's band, its number at half ink. */
+[data-dial-ms][data-idle] {
+  opacity: 0.5;
+}
+[data-dial-edge][data-far],
+[data-dial-x][data-far] {
+  opacity: 0;
+}
+[data-dial][data-look] :is([data-dial-edge], [data-dial-x]) {
+  opacity: 0;
+}
+[data-dial][data-look] [data-dial-edge][data-lit] {
+  opacity: 1;
+  stroke-width: 1.6;
+}
+[data-dial][data-look] [data-dial-x][data-lit] {
+  opacity: 1;
+}
+[data-dial-x] {
+  opacity: 0.8;
+  transition: opacity var(--dur-180) var(--ease-out);
+}
+[data-dial-ms] {
+  opacity: 0;
+  transition: opacity var(--dur-180) var(--ease-out);
+}
+[data-dial][data-look] [data-dial-ms][data-lit] {
+  opacity: 1;
+}
+
+/* Seats: a face at its point; it fades in on arriving and out on leaving
+   (the one motion the page has). The looked-at or open seat wears the
+   focus ring's colour round its face; a machine with no road is grey. */
+[data-dial-seat] {
+  animation: dial-appear var(--dur-420) var(--ease-out) both;
+}
+@keyframes dial-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+[data-dial-seat][data-leaving] {
+  animation: dial-leave var(--dur-240) var(--ease-out) both;
+}
+@keyframes dial-leave {
+  to {
+    opacity: 0;
+  }
+}
+[data-dial-seat][data-on] [data-dial-face] {
+  outline: var(--ring-w) solid var(--ring);
+  outline-offset: calc(var(--ring-off) + var(--hair));
+}
+[data-dial-seat][data-off] [data-dial-face] {
+  filter: saturate(0) opacity(0.5);
+}
+[data-dial-seat][data-dragging] {
+  z-index: 5;
+}
+/* The face scales a touch under the pointer, as every seat does. */
+[data-dial-seat]:not([data-me]) [data-dial-face] {
+  transition: transform var(--dur-180) var(--ease-out);
+}
+[data-dial-seat]:not([data-me]):active [data-dial-face] {
+  transform: scale(0.96);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-dial-seat] {
+    animation-duration: 1ms;
+  }
+}
+
+/* Matrix readings share the page's ground. Selection is neutral; only
+   the small marker carries a route's colour (connectivity, 2026-10-13). */
+[data-matrix-cell][data-axis] { background: var(--fill); }
+[data-matrix-cell][data-chosen] {
+  background: var(--fill-strong);
+  box-shadow: inset 0 calc(-1 * var(--hair)) var(--foreground);
+}
+[data-matrix-cell][data-idle] { opacity: 0.5; }
+[data-matrix-cell]:hover:not([data-self]) { background: var(--fill); }
+[data-matrix-row][data-on], [data-matrix-head][data-on] { color: var(--foreground); }
+
+@keyframes tab-load {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(185%); }
+}
+.animate-tab-load {
+  animation: tab-load 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-tab-load {
+    animation: none;
+    width: 100%;
+  }
+}
+
+/* GUI composers sit above the deck; terminal grid compensation only
+   applies when the content actually meets the folded capsule. */
+[data-session-bar]:has(> [data-session-bar-above]:not(:empty)) > [data-deck-fold] > [data-deck-strip] {
+  bottom: 0;
+}
+
+/* One perimeter for the state already on the pill. The wide strip clips
+   its scroll lane, so its light is inset. Never a state-coloured fill. */
+[data-pill-signal] {
+  --pill-signal-ink: var(--state-busy);
+  --pill-signal-halo: 0 0 var(--pill-glow-blur) var(--pill-glow-spread);
+}
+[data-tab][data-pill-signal] {
+  --pill-signal-halo: inset 0 0 var(--pill-glow-blur) var(--pill-glow-spread);
+}
+[data-pill-signal="rejoin"], [data-pill-signal="upload"] {
+  animation: pill-signal-breathe var(--pill-breathe) ease-in-out infinite;
+}
+[data-pill-signal="ended"], [data-pill-signal="unconfirmed"] {
+  box-shadow: inset 0 0 0 var(--hair) var(--foreground);
+  animation: none;
+}
+[data-pill-signal="failed"] {
+  --pill-signal-ink: var(--state-failed);
+  animation: pill-signal-arrive var(--dur-420) var(--ease-out) both;
+}
+[data-pill-signal="settling"] {
+  animation: pill-signal-settle var(--time-yield) var(--ease-out) both;
+}
+@keyframes pill-signal-breathe {
+  0%, 100% { box-shadow: var(--pill-signal-halo) color-mix(in srgb, var(--pill-signal-ink) 20%, transparent); }
+  45% { box-shadow: var(--pill-signal-halo) color-mix(in srgb, var(--pill-signal-ink) 65%, transparent); }
+}
+@keyframes pill-signal-arrive {
+  from { box-shadow: var(--pill-signal-halo) var(--pill-signal-ink); }
+  to { box-shadow: 0 0 0 var(--ring-w) color-mix(in srgb, var(--pill-signal-ink) 65%, transparent); }
+}
+@keyframes pill-signal-settle {
+  from { box-shadow: var(--pill-signal-halo) color-mix(in srgb, var(--pill-signal-ink) 65%, transparent); }
+  to { box-shadow: var(--pill-signal-halo) transparent; }
+}
+[data-tab-dropping] [data-upload-arrow] {
+  animation: pill-upload-arrow var(--pill-upload) ease-in-out infinite;
+}
+@keyframes pill-upload-arrow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(var(--pill-arrow-lift)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pill-signal], [data-tab-dropping] [data-upload-arrow] { animation: none; }
+  [data-pill-signal]:not([data-pill-signal="settling"]) {
+    box-shadow: 0 0 0 var(--ring-w) color-mix(in srgb, var(--pill-signal-ink) 65%, transparent);
+  }
+}
+
+/* When the notice grows over a GUI composer, the composer stays under
+   the scrim. Only the deck carries the growing pill above it. */
+[data-session-bar]:has(> [data-session-bar-above]:not(:empty)):has([data-notice-island]) {
+  z-index: auto;
+}
+[data-session-bar]:has(> [data-session-bar-above]:not(:empty)) [data-session-deck]:has([data-notice-island]) {
+  z-index: 50;
+}
+
+/* One background plane with terminal-shaped cutouts (window-surface).
+   All foreground surfaces retain their own ink and fill. */
+:root[data-window-transparent] body { background: transparent; }
+:root[data-window-transparent] #root { isolation: isolate; }
+:root[data-window-transparent] #root:not(:empty)::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--canvas-solid) var(--window-opacity), transparent);
+  clip-path: var(--window-ground-clip, none);
+}
+:root[data-window-transparent] :is([data-terminal], [data-term-ended-screen]) {
+  background: color-mix(in srgb, var(--term-bg) var(--window-opacity), transparent);
+}
+/* Accessibility and unsupported blur use the same solid window plane,
+   rather than adding an opaque plate to every fixed title. */
+@supports not ((backdrop-filter: blur(0)) or (-webkit-backdrop-filter: blur(0))) {
+  :root[data-window-transparent] #root:not(:empty)::before { background: var(--canvas-solid); }
+  :is([data-band], [data-sticky-head])::before { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-window-transparent] #root:not(:empty)::before { background: var(--canvas-solid); }
+  :is([data-band], [data-sticky-head])::before { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+/* Palette values are data; UI geometry stays in design tokens. */
+.term-theme-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap-in) var(--gap-base); }
+:root[data-narrow] .term-theme-grid { grid-template-columns: minmax(0, 1fr); }
+.term-theme-well { width: var(--theme-well); height: var(--theme-well); flex: none; border: 0; padding: 0; background: transparent; }
+.term-theme-hex { width: var(--theme-hex-w); flex: none; }
+@media (pointer: coarse) {
+  .term-theme-well { width: var(--touch); height: var(--touch); }
+}
+.term-theme-editor { top: var(--gap-pane) !important; max-height: calc(var(--app-h, 100dvh) - 2 * var(--gap-pane)); }
+:root[data-narrow] .term-theme-editor { top: auto !important; }
+
+/* xterm 6 themes its inner scrollable element, but the enclosing
+   .xterm-viewport still has the package stylesheet's hard-coded black.
+   The terminal surface already owns the tint; both scroll layers let it
+   through. This also covers a lost-WebGL DOM fallback and ended screens. */
+:root[data-window-transparent] :is([data-terminal], [data-term-ended-screen]) .xterm-viewport { background-color: transparent; }
+
+/* Cell backgrounds replace the pane tint inside the screen. Padding still
+   follows the selected terminal palette, with no overlapping tint layers. */
+:root[data-window-transparent] [data-term-glass] { background: transparent; isolation: isolate; }
+:root[data-window-transparent] [data-term-glass]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--term-bg) var(--window-opacity), transparent);
+  clip-path: var(--term-ground-clip, none);
+}
+:root[data-window-transparent] [data-term-glass] .xterm-viewport,
+:root[data-window-transparent] [data-term-glass] .xterm-scrollable-element { background-color: transparent !important; }
+
+/* The tab itself follows the mouse; only neighbouring slots travel. */
+[data-tab-dragging=true]{position:relative;z-index:5;cursor:grabbing;will-change:transform}
+[data-tab-reordering=true],[data-tab-reordering=true] *{cursor:grabbing!important;user-select:none!important}
+
+/* A transparent window retains one quiet edge independently of its tint.
+   System decorations and resize handles stay native on every desktop. This
+   edge does not re-enable alpha-shaped macOS shadows around terminal glyphs. */
+:root[data-window-transparent][data-window-outline] #root:not(:empty)::after {
+  content:"";position:fixed;inset:0;z-index:60;pointer-events:none;
+  border:var(--hair) solid var(--border);border-radius:var(--radius-xl);
+}
+
+:root[data-window-platform=windows] #root::after{border-radius:var(--radius-md)}
+:root:is([data-window-platform=linux],[data-window-square]) #root::after{border-radius:initial}
+:root[data-window-fullscreen] #root::after{display:none}
+
+/* Only rows scroll or fade. The glass rim stays on its fixed frame. */
+[data-menu-frame]{display:flex;flex-direction:column;overflow:hidden;isolation:isolate}
+[data-menu-frame]::before{z-index:2}
+/* An ancestor's backdrop filter is a sampling boundary: a completion
+   outside its field cannot blur the page behind that field. A separate
+   native menu window has the same limitation across WebViews. Use the
+   existing thick popover surface there, independently of window opacity;
+   ordinary portalled menus retain their dense glass and backdrop blur. */
+.glass [data-menu-frame],
+[data-menu-native] [data-menu-frame] {
+  background: var(--popover);
+}
+@supports not ((backdrop-filter: blur(0)) or (-webkit-backdrop-filter: blur(0))) {
+  [data-menu-frame] { background: var(--popover); }
+}
+[data-menu-viewport]{flex:1 1 auto;min-height:0;touch-action:pan-y;overscroll-behavior:contain;scrollbar-width:thin}
+
+/* One searchable choice field; avatars and glyphs use the existing row seat. */
+.choice-field{display:flex;min-width:0;flex-direction:column;gap:var(--gap-in)}
+.choice-input{position:relative;min-width:0}
+.choice-icon{position:absolute;z-index:1;inset-inline-start:var(--gap-in);top:50%;transform:translateY(-50%);width:var(--gap-base);height:var(--gap-base);display:grid;place-items:center;pointer-events:none;color:var(--muted-foreground)}
+.choice-icon>svg,.choice-row-icon>svg{width:100%;height:100%}
+.choice-row-icon{display:grid;width:var(--gap-base);height:var(--gap-base);place-items:center;flex:none;color:var(--muted-foreground)}
+.choice-aside{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.choice-textarea{display:block;min-height:var(--ctl-md);max-height:calc(6*var(--ctl-md));resize:none;padding-block:var(--gap-xxs);line-height:var(--leading-normal)}
+
+/* History owns read-only navigation; inset sheets do not repay the window's top inset. */
+[data-commit-page][data-history-edge] { padding-top: var(--safe-top); }
+.history-deck { display:flex; flex:none; align-items:center; gap:var(--gap-in); padding:var(--gap-in) var(--gap-row) calc(var(--gap-in) + var(--dock-safe-bottom)); }
+.history-pill { display:flex; height:var(--glass-btn); min-width:0; flex:1; align-items:center; border-radius:var(--radius-full); padding-inline:var(--gap-row); }
+[data-narrow] [data-history-overlay] { padding-inline:0; padding-bottom:0; }
+
+/* A field's help belongs below the field, not inside the row whose label
+   aligns with it. The narrow form already seats every child in one column. */
+[data-new-session-launch-note] { margin-top: calc(var(--gap-in) - var(--gap-row)); }
+
+/* A transfer stays above the existing deck without resizing the page or sheet. */
+[data-file-page] [data-file-handoff-status] {
+  bottom: calc(var(--dock-safe-bottom) + var(--glass-btn) + 2 * var(--gap-in));
+}
+
+/* Workspace titles live in the sidebar; the content's first row is its tabs. */
+[data-ws-region] > * { min-height: 0; }
+[data-ws-side-head] { flex: 1; }
+[data-ws-sidebar-heading] { padding-top: 0; }
+.workspace-commit-line { min-height: var(--tree-row); }
+[data-workspace-log] { --workspace-text-start: calc(var(--tree-inset) + var(--tree-slot) + var(--gap-in)); }
+[data-workspace-log-list] { position: relative; }
+[data-workspace-log-list]::before {
+  content: ""; position: absolute; inset-block: 0;
+  left: calc(var(--tree-inset) + var(--tree-slot) / 2);
+  width: var(--hair); background: var(--border);
+}
+[data-workspace-log-day] {
+  position: relative; padding: var(--gap-row) var(--gap-row) var(--gap-in) var(--workspace-text-start);
+}
+[data-workspace-log-day]::before {
+  content: ""; position: absolute; top: 50%;
+  left: calc(var(--tree-inset) + var(--tree-slot) / 2 - var(--gap-in) / 2);
+  width: var(--gap-in); height: var(--gap-in);
+  border: var(--hair) solid var(--muted-foreground); border-radius: var(--radius-full);
+  background: var(--canvas-solid);
+}
+.workspace-log-row {
+  position: relative; padding: var(--gap-in) var(--gap-row) var(--gap-in) var(--workspace-text-start);
+}
+[data-ws-mid] [data-commit-page] { flex: 1; }
+[data-ws-mid] [data-tab-bar] { padding-inline: var(--gap-row); }
+[data-ws-sidebar-heading] .workspace-commit-line {
+  margin-inline: calc(var(--tree-inset) - var(--page-inset));
+}
+[data-ws-mid] [data-tab-capsule]:not(:has([data-tab])) { visibility: hidden; }
+:root[data-narrow] [data-ws-mid] [data-tab][data-on="true"] {
+  min-width: min(var(--tab-w-even), 100%);
+}
+:root[data-narrow] [data-ws-mid] [data-tab-bar] { padding-inline: var(--gap-in); }

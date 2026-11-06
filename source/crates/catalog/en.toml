@@ -1,0 +1,3269 @@
+# The English translation of zh.toml. zh.toml is the source of truth:
+# every user-facing word is authored there first. Sections, keys, and
+# order here mirror zh.toml one for one, and every {0}/{1}/... set must
+# match its zh.toml counterpart exactly (count and identity, not order).
+# A key present in zh.toml and missing here is a build error (build.rs
+# checks the key sets and placeholder sets at compile time). Within a
+# section, no two keys may share the exact same English text, same as
+# zh.toml. Proper nouns, command names, flags, and vendor names are
+# carried over unchanged from zh.toml, never translated.
+
+[state]
+busy = "Busy"
+blocked = "Blocked"
+done = "Done"
+errored = "Errored"
+failed = "Failed"
+idle = "Idle"
+
+[category]
+khor = "khor"
+shell = "Shell"
+unknown = "Unrecognized"
+
+[hop]
+direct = "Direct"
+relay = "Relay"
+quiet = "Idle"
+down = "Down"
+no-serve = "Serve not running"
+ssh = "Over SSH"
+forwarded = "Forwarded"
+
+[avatar]
+axis-palette = "Palette"
+axis-variant = "Style"
+axis-shape = "Shape"
+axis-palette-slot = "Color {0}"
+
+liquid = "Liquid"
+monokai = "Monokai"
+mocha = "Mocha"
+nord = "Nord"
+okabe = "Okabe-Ito"
+warm = "Warm paper"
+# zh.toml deliberately moved the word off "Mandala" (the key stays,
+# so devices already on this palette keep it) because the screen
+# already carries the boring-avatars family's own vocabulary and this
+# palette needed its own name. English keeps that same move rather
+# than reintroducing "Mandala": what the set actually is, cream paper
+# and ink.
+mandala = "Paper & ink"
+
+marble = "Wash"
+bauhaus = "Geometric"
+beam = "Smiley"
+
+circle = "Circle"
+rounded = "Rounded"
+square = "Square"
+
+[config]
+# The `khor config` key table (docs/MORE.md 设置). Section names, key
+# names and value names all cross the wire, so these are data with the
+# same shape as the state words and the face options.
+window = "Window"
+window-material = "Background material"
+window-outline = "Window outline"
+window-opacity = "Background opacity"
+solid = "Solid"
+clear = "Translucent"
+frost = "Frosted"
+appearance = "Appearance"
+avatar = "Avatar"
+language = "Language"
+session = "Sessions"
+workspace = "Workspace"
+connection = "Connection"
+security = "Security"
+confirm = "Confirm dangerous actions"
+
+theme = "Theme"
+kind-mark = "Kind mark"
+corner-is = "The corner is"
+lang = "Interface language"
+tabs-limit = "Tab limit"
+session-form = "New sessions open as"
+files-click = "Single click"
+ssh-carry = "Relay over SSH"
+ssh-carry-note = "A khor host with no internet is connected through a machine that can log in to it over SSH. Takes effect when khor restarts"
+peer-hop = "Forward Through Other Machines"
+peer-hop-note = "With no direct connection, go through a machine both ends can reach before using a relay"
+# Under "Ask before", so each key names the act rather than repeating
+# the question.
+confirm-takeover = "Taking over a session"
+confirm-delete = "Deleting"
+
+# What is stored is the choice, `auto` included — never the theme it
+# resolves to today.
+auto = "Match system"
+light = "Light"
+dark = "Dark"
+# Each language names itself, identically in both files: somebody who
+# cannot read the interface finds the way out by these two words.
+zh = "中文"
+en = "English"
+chat = "Chat"
+term = "Terminal"
+preview = "Preview"
+pin = "Keep open"
+on = "On"
+off = "Off"
+face = "On the face"
+corner = "Corner badge"
+kind = "The kind"
+machine = "The machine"
+
+[cli]
+upgrade-usage = "khor upgrade [--machine <name>] [--check] [--channel stable|beta] [--version <tag>] [--json]"
+upgrade-download = "Downloading update: {0}%"
+upgrade-installed = "Updated CLI to {0}. Existing sessions keep running."
+upgrade-available = "Update available: {0}"
+upgrade-current = "Already up to date: {0}"
+usage = """
+usage: khor <verb>
+  id                    this machine's identity
+  avatar [machine] [--palette palette] [--colors five colors]
+         [--variant style] [--shape shape]
+                        a machine's avatar; with no arguments, shows
+                        what it is now and what's available, and with
+                        no machine, this one. **One copy for the whole
+                        network**: anyone may restyle any machine and
+                        the later write wins (the road a rename takes).
+                        The old name face still answers and goes next
+                        version — an avatar is a picture, an interface
+                        is a face (see faces)
+  devices [--roads]     the network's machines; --roads adds each one's
+                        roads to the others (as it last reported them)
+  top [machine]         what this machine is busy with: process top
+                        and the last 24 hours of CPU
+  ls <machine> [path]   that machine's directory (no path = its home
+                        directory)
+  pull <machine> <file> [directory]
+                        pulls a file over from that machine (defaults
+                        to the current directory)
+  drop [-m <machine>] <file> [--to <session> | --on <machine>] [--into <dir>]
+                        puts a file where the session's machine can
+                        read it and prints its absolute path there. On
+                        the same machine nothing is copied and the path
+                        is printed as is; another machine pulls it into
+                        its ~/khor-drop/ itself (a taken name gets -2,
+                        -3), and refuses files over 200 MB. --into lands
+                        it in that directory over there instead, copied
+                        there on the same machine too
+  git [status <machine> <repo path> | diff <machine> <file>]
+                        that machine's git repo, read-only. status's
+                        first line is the branch; each line after is a
+                        file that differs from HEAD (M modified / A
+                        staged / D deleted / U untracked); diff lists
+                        where one file differs — line numbers are the
+                        file's current ones, and under each hunk are
+                        the original lines from HEAD
+  places [machine]      directories that machine has opened sessions
+                        in (no machine = this machine)
+  ws ls | add [-m machine] <directory> | rm [-m machine] <directory> |
+     pin [-m machine] <directory> | unpin [-m machine] <directory>
+                        workspaces: "which directory on which
+                        machine", set by you — not inferred from git
+                        or session records. ls prints one line each:
+                        pin mark, name, machine:path; add adds one (no
+                        -m = this machine; . works); rm removes it
+                        from the table — the directory itself is
+                        untouched; pin/unpin puts it at the top
+  rm [-m machine] <path>
+                        deletes that file or directory. **On this
+                        machine it goes to the trash; on other
+                        machines and SSH hosts it's deleted outright,
+                        unrecoverable** (no trash there). A directory
+                        goes with everything inside it; refuses if the
+                        path doesn't exist
+  mkdir [-m machine] <path>
+                        creates a directory on that machine. Only one
+                        level — refuses if the parent doesn't exist;
+                        also refuses if the name already exists. No
+                        -p, no -f
+  touch [-m machine] <path>
+                        creates an empty file on that machine. Refuses
+                        if the name already exists — **it won't empty
+                        the existing one**
+  mv [-m machine] <old path> <new path>
+                        renames something on that machine — crossing
+                        directories is the same command. Refuses if
+                        the new name already exists; no overwrite, no
+                        -f
+  launch [-m machine] <path|url>
+                        has that machine open this with its own
+                        opener (Mac: open, Linux: xdg-open;
+                        `KHOR_LAUNCHER` can point to another).
+                        **Opens on that machine, not the one in front
+                        of you**; only takes absolute paths and
+                        http/https URLs. `open` means "open a session
+                        on that machine" — that's a different command
+  search [-m machine] <directory> <word>
+                        finds that word under that directory on that
+                        machine: first, files whose names contain it
+                        (one path per line), then lines whose content
+                        contains it (`path:line: that line`).
+                        Case-insensitive, plain substring, not a
+                        regex; on this machine it respects .gitignore,
+                        on an SSH host it only skips .git. Caps out at
+                        50 names, 200 lines, 5 seconds — says so on
+                        stderr when it hits the limit
+  read <machine> <file>
+                        reads a document out as text: md/csv/tsv as-is
+                        (they're already text); docx/xlsx/pptx, their
+                        old formats (doc/xls/ppt), and pdf get
+                        converted to markdown. It reads the text and
+                        structure, not the layout
+  code [--stop] <machine> [repo path]
+                        opens VS Code for the web on that machine,
+                        prints a local link (the link carries a key;
+                        no path = whichever one it last opened). One
+                        server per machine — switching projects just
+                        switches the link. The first run downloads a
+                        server from Microsoft (about 640 MB); never
+                        again after that. It's not a session — no row,
+                        and close doesn't apply; use --stop to shut it
+                        down
+  put [--new | --base <base copy>] <machine> <local file> <remote path>
+                        writes a local file to that path on that
+                        machine (pull's reverse). By default it reads
+                        first then writes; if something changed it in
+                        between, the whole write is refused — not one
+                        byte lands. --new says it differently: there
+                        shouldn't be a file there yet; --base gives
+                        the copy you started from — if the other side
+                        changed, it does a three-way merge: a clean
+                        merge gets written, but if anything conflicts
+                        nothing is written — the marked-up result goes
+                        to stdout with exit code 1
+  borrow <machine>      borrows that machine's network: opens a local
+                        proxy port — point a browser at it and traffic
+                        goes out from there (needs serve running;
+                        close that session to shut the port)
+  reach <host> [--port N]
+                        every online machine connects to this address
+                        once from its own network (ssh's 22 by default)
+                        and reports whether it got through, the ms, the
+                        server's first line (ssh's version line) and the
+                        key its own known_hosts holds for the name; the
+                        fastest is the entrance. One address only: no
+                        scan, no key fetch
+  pipe --via <machine> <host> <port>
+                        a byte pipe to host:port through that machine's
+                        network, on stdin and stdout. For ssh's
+                        ProxyCommand:
+                        ssh -o ProxyCommand='khor pipe --via lab %h %p' box
+  carry <machine> <ssh host> [--port <port>] [--via <jump>]
+      [--password | --key <key file> [--passphrase]] | carry <machine> --off
+                        connect a khor host with no internet through this
+                        machine's ssh login to it; others reach it through
+                        this machine. Logs in as add does: a password or
+                        passphrase is read from standard input and kept
+                        only in this machine's system keychain
+  tabs [--session id] [ls] | open [-m machine] [--view workspace|file|page] <address> | close|focus|pin|unpin <n|id>
+                        the browsing tabs this screen has open. **Local,
+                        never replicated**: what is open belongs to this
+                        screen, not to the person (places you keep do
+                        travel). ls prints the front and pinned marks, a
+                        number, the id, the title and the address. pin
+                        keeps a tab on top (it won't close until unpinned);
+                        unpin lets it go. All four
+                        take either: **the number** is the row's place in
+                        that listing — what a hand types, and it moves
+                        when a tab closes; **the id** names one tab for
+                        good, which is what a script should hold
+  usage [--days N]      tokens spent per machine, by day and category
+                        (defaults to 7 days)
+  sessions [--by recent|category|device|state|place] [--all]
+                        session list (defaults to recent); --by
+                        switches the arrangement; pinned rows stay
+                        on top; already-seen old sessions default to
+                        just a count, --all lists them all. The list
+                        holds what you started, what you imported and
+                        each machine's own conversation
+  find <word>           one search over sessions, machines, workspaces,
+                        browsing tabs and pages (⌘K in the window reads
+                        the same list)
+  import [<number|id>...]
+                        with nothing, lists what can be imported (agents
+                        started elsewhere, tmux sessions, ACP
+                        conversations), numbered; with numbers or ids,
+                        brings those onto the list
+  tell <machine>|@<machine>[:<dir>]... <words...>
+                        says it in the broadcast, pushed to the machines
+                        named (always taken literally); not sent when a
+                        named machine is unreachable
+  send <machine>|@<machine>[:<dir>]... <file|<machine>:<path>|words...> [--into <dir>]
+                        pushes to the machines named: when every argument
+                        is an existing file or a file on a machine, it
+                        lands in their receive location, or the directory
+                        @<machine>:<dir> or --into names;
+                        otherwise it's treated as words. If your words
+                        happen to match a filename, use tell
+  retry <transfer id>   sends a failed or cancelled file again (run it
+                        on any machine)
+  log [<machine>]       shows the broadcast's messages; with a machine,
+                        only those pushed to it
+  run [--tui] [--title <name>] -- <command...>
+                        a temporary session: lives as long as this
+                        terminal, visible on the network the whole
+                        time
+  open [-d] [--tui|--gui] [--agent <name> [--resume <id>]] [--on <machine>] [--title <name>] [-- command]
+                        a persistent session: survives closing the
+                        terminal, can be reattached (defaults to
+                        attaching; -d just opens it; --gui speaks the
+                        ACP protocol — khor draws the conversation —
+                        for an agent that speaks it; --agent uses a
+                        registered agent (see agents), and implies
+                        --gui; --resume continues one of its own
+                        listed conversations (see agents sessions);
+                        --on opens it on another machine — no command
+                        means that machine's own shell; --gui/--agent
+                        combined with --on starts that machine's own
+                        agent there, taking no command and no
+                        --resume)
+  accounts [ls]         registered accounts (this machine's Claude Code
+                        and Codex logins are each registered on their own
+                        the first time they are read, and not again once
+                        deleted); add <name>
+                        --provider
+                        newapi|claude|openai|deepseek|moonshot|
+                        moonshot-cn|openrouter [--base-url <url>]
+                        [--budget <number>] --key <key>|--key-stdin
+                        registers one (the key stays only on this
+                        machine); a subscription is add <name>
+                        --provider claude|codex --kind sub, with no key
+                        — it reads the Claude Code or Codex login on
+                        this machine,
+                        so whichever machine it's registered on is the
+                        one it reads from; rm <id|name> removes one
+  quota [--why]         how much each account has used: read live for
+                        this machine, from whatever the last sync
+                        brought back for the others; --why prints what
+                        each way of reading this machine's
+                        subscriptions did this time
+  attach <session>      attaches to a persistent session (Ctrl-\\
+                        detaches); connects to whichever machine the
+                        row is on — you don't say which
+  takeover <session>    takes over an agent session: ends its
+                        terminal, the conversation continues from here
+  agents [known | sessions <name> [--ask] | add <name> [...] | rm <name>]
+                        registers agents that speak ACP: no arguments
+                        shows what's registered. Register once and the
+                        whole network knows it (whether the command
+                        exists on each machine is only found out when
+                        it's started); claude, codex, khor, shell —
+                        khor uses those four names itself. known shows
+                        the ACP registry snapshot bundled with khor;
+                        @<id> uses that snapshot's command directly.
+                        sessions shows its conversations (reads what's
+                        recorded; --ask actually asks, which starts a
+                        process); once asked, the answer syncs across
+                        the network — other machines don't have to ask
+                        again
+         connect <name> <url> [--token-stdin]
+                        connects an A2A agent on this machine;
+                        the agent service needs no khor
+         disconnect a2a:<name>
+                        removes the local connection, keeps task receipts
+  state <word>          reports the current session status; --session selects one
+  seen <session>        marks it read
+  rename [-m] <session|machine> [name...]
+                        gives it a name (shared across the whole
+                        network, layered over its own name); no name =
+                        removes it, its own name shows through
+                        unchanged; -m renames a machine — that only
+                        changes the name people see, the channel name
+                        the network archives under doesn't move, so
+                        conversations and read status don't move house
+  pin [-m] <session|machine>
+                        pins it (-m pins a machine); pin it from any
+                        machine — it's the same one across the whole
+                        network. A directory is pinned as a workspace
+                        (ws add, then ws pin); a page with tabs pin
+  unpin [-m] <session|machine>
+                        unpins it
+  close <session>       closes it (stops the session's process; the
+                        conversation folds up its row, history and
+                        received files stay — a new message brings it
+                        back on its own; an imported row only leaves the
+                        list, the session itself untouched, and is a
+                        candidate again)
+  serve                 stays resident: answers others, runs this
+                        machine's commands on their behalf, syncs the
+                        whole network every 5 seconds (also opens the
+                        web access on the LAN — see web)
+  relay --dev | --tls-cert cert --tls-key key | --acme domain [--acme-contact email]
+        [--token key | --only-mine] [--rate bytes/s] [--metrics addr]
+        [--bind addr] [--http addr] [--quic addr] [--state dir] | --stats [--state dir]
+                        runs a relay on this machine (iroh-relay, the
+                        same code). --dev is plain HTTP on port 3340 by
+                        default; TLS takes a certificate you have, or
+                        --acme gets one from Let's Encrypt. --token
+                        admits only clients carrying that shared key;
+                        --only-mine admits only the devices on this
+                        network's roster and not revoked (the same rule
+                        every request here passes), no key typed
+                        anywhere.
+                        --quic serves QUIC address discovery (UDP) with
+                        the relay's certificate; beside --dev,
+                        --tls-cert and --tls-key are for QUIC alone.
+                        --rate limits each client. Metering keeps totals
+                        only — per device how many connections and how
+                        long online, plus the relay's bytes — in the
+                        --state directory (default .khor/relay);
+                        --stats prints that metering and starts nothing
+  web [--new]           the web access link: open it on your phone
+                        or another computer and you have the whole
+                        network. serve is what opens it — this
+                        just hands out the key; the link carries the
+                        key, so don't paste it into a document that
+                        syncs. --new rotates it — every link already
+                        handed out stops working
+  gui                   opens the desktop app's window (the desktop
+                        app is khor-gui, installed alongside khor; if
+                        it's not installed, this tells you where to
+                        get it)
+  faces                 which of khor's interfaces are up on this
+                        machine: whether the desktop app is running,
+                        whether web access is listening and on which
+                        port. **"face" here means an interface, not the
+                        avatar** — that one is avatar
+  quit                  shuts down: stops this machine's serve and
+                        every session host (files all stay — serve
+                        again and everything comes back)
+  lock [status|on|off|pin|timeout minutes]
+                        the password on the screens (the app window and
+                        web access). It does NOT lock this terminal —
+                        whoever types khor is already logged in here.
+                        No arguments shows the current state; pin reads
+                        one line from standard input (so it stays out of
+                        argv, shell history and ps), and an empty line
+                        clears the PIN, which turns the lock off with it;
+                        timeout takes 0/1/5/15/60 (0 is never). The
+                        macOS app can also open with Touch ID — an extra
+                        key, never the key: the PIN is the one every
+                        face has
+  config [list | get <key> | set <key> <value>]
+                        this machine's own preferences (they don't
+                        travel the network). No arguments is list, one
+                        line per setting with the value it has now —
+                        every setting, not only the ones that were set.
+                        An unknown key, and a value a key doesn't take,
+                        are each refused by name; the refusal for a
+                        value names the ones it does take
+  doctor [--json] [--fix <check>]
+                        checks this machine over: one line per check —
+                        name, state (ok / warn / failed / not measured)
+                        and a sentence. Not measured is NOT ok — it
+                        means nothing was read. Each check has three
+                        seconds of its own, so one that hangs doesn't
+                        hold up the rest. --json prints it raw (the GUI
+                        page reads the same answer); --fix runs one
+                        check's remedy (checks that have one say so at
+                        the end of their line)
+  journal [machine] [--minutes N] [--report] [--json] [--on machine]
+                        the connection record: every dial this machine
+                        made, the roads it tried, how it ended and the
+                        step that failed, backoff, connections retired,
+                        network and home relay changes. A machine shows
+                        just it (with this machine's own events), the
+                        last 60 minutes by default; --report saves that
+                        span of every machine into one file to hand
+                        over, with no keys, tickets or host keys; --on
+                        reads another machine's record over the network
+                        (only its record files are fetched)
+  invite                issues a one-time pairing ticket (requires
+                        serve running)
+  pair <ticket|->       joins the network with a ticket; - reads it
+                        from standard input
+  add <SSH host> [name] [--port <port>] [--via <jump>] [-m <khor host>]
+      [--password | --key <key file> [--passphrase]] [--no-install]
+                        adds a machine over SSH: by default installs khor
+                        and makes it a khor host (user-level resident, no
+                        root); when khor can't keep running there, removes
+                        the installed files and connects over SSH instead.
+                        --no-install installs nothing and adds an SSH host
+                        (no files left there; this machine runs everything
+                        over SSH). --port defaults to 22 or your ssh
+                        config's port. --via sends every ssh through that
+                        jump host without changing your ssh config. -m has
+                        that khor host add it over its own ssh (it runs the
+                        add; key login only, --key is a path there).
+                        --password reads the password from standard input
+                        and keeps it only in this machine's system
+                        keychain. --key logs in with that key file, keeping
+                        only its path, never the key; --passphrase reads
+                        its passphrase from standard input, kept the same
+                        way. Without them, your ssh config's and ssh-agent's
+                        keys are used. Identity comes from your known_hosts
+  promote <SSH host>    installs khor on an SSH host this machine added;
+                        the name carries over, the SSH host row goes
+  pending [--json]      what waits for the root holder: machines paired
+                        in that have no certificate yet, SSH hosts
+                        added by a machine without the root, machines
+                        removed elsewhere and not revoked yet. One line
+                        each: id, name, what it waits for
+  approve <machine>     on the machine holding the root: signs a waiting
+                        machine's certificate (or its revocation) and
+                        syncs it to the network right away
+  revoke <machine>      on the machine holding the root: once the network
+                        has the new roster, nobody answers that machine.
+                        It stays in the table; forget removes the row too
+  root [show [--json] | words <this machine> | recover <24 words> | init]
+                        the user's root key: it only signs (which
+                        machines are yours), never connects or encrypts.
+                        show says which root this machine trusts, whether
+                        it holds it and the roster's version; words
+                        prints the 24 recovery words (type this machine's
+                        name to see them); recover restores the root onto
+                        this machine; init gives a network from before
+                        roots its root and signs every machine in the
+                        table. Bare, it prints the store path (for the
+                        installer)
+  sync                  syncs with the whole network right now
+  mcp                   exposes khor's commands as tools (for
+                        agents, not for typing by hand)
+  upgrade [--check]     updates a managed CLI; --machine <name> selects a paired machine
+  version               which version is installed on this machine
+                        (see devices for versions across the network)
+  forget <machine>      removes a machine from the network: nobody
+                        recognizes it anymore, and it can no longer
+                        see the network either. To come back it has to
+                        pair again (issue a ticket from a machine that
+                        still recognizes it)
+  leave <this machine>  takes this machine out of the network: sends
+                        "I'm leaving" while the connections are still
+                        up, then empties this machine's table down to
+                        itself and drops what the others left here.
+                        This machine's own sessions, workspaces,
+                        identity and settings are untouched. Typing
+                        this machine's name is the confirmation (the
+                        same rule forget follows). A fresh ticket and
+                        pair bring it back in
+  pause                 pauses this machine's place in the network: it
+                        stops syncing with the others and they see it
+                        offline, while its own sessions, workspaces and
+                        web access go on working. A restart is still paused
+  resume                resumes it: syncing again, and the next round
+                        catches up
+                        pause <machine> pauses talking to that one machine
+                        only: not dialling it, not answering it, not syncing
+                        with it; it keeps running, and devices marks its row
+                        (paused). resume <machine> puts it back
+  watch <machine> [directory ...]
+                        has a machine watch the volumes those
+                        directories sit on (shared across the whole
+                        network — that machine's row in devices prints
+                        how much space is left for each); no
+                        directories = clears the watch"""
+this-machine = "(this machine)"
+watching = "{0} watching: {1}"
+watching-none = "{0} isn't watching any directories"
+in-use = "(current)"
+pinned-mark = "(pinned)"
+# The mark after 「(this machine)」 while it is paused (docs/MORE.md
+# 暂停). Apart from the road column: a road says how this machine
+# reaches that one, pausing is this machine's own state.
+paused-mark = "(paused)"
+group-header = "── {0}"
+group-pinned = "Pinned"
+name-separator = ", "
+
+# ── `khor doctor`'s checklist (docs/MORE.md 自检) ─────────────────────
+# One row per check: a name, a state, one sentence for a person, and a
+# remedy where khor has one. **The sentence is chosen on the node side**
+# — what a row says has no one shape to model — so what lives here is
+# the wording, not the choosing. CLI and GUI read the same entries.
+doctor-name-version = "Version"
+doctor-name-identity = "Identity key"
+doctor-name-store = "Local data"
+doctor-name-serve = "Resident"
+doctor-name-web = "Web access"
+doctor-name-relays = "Relays"
+doctor-name-peers = "Other machines"
+doctor-name-roads = "Connections"
+doctor-name-hooks = "Hooks"
+doctor-name-agents = "Agents"
+doctor-name-vscode = "VS Code"
+doctor-name-disk = "Disk headroom"
+doctor-name-launcher = "Opener"
+doctor-name-roster = "Roster"
+# The four states. **Untaken is not ok**: a green row means somebody
+# looked, and not having looked is a different fact.
+doctor-ok = "OK"
+doctor-warn = "Attention"
+doctor-fail = "Error"
+doctor-unmeasured = "Untaken"
+# One check overran its own budget. The name rides along: a row that
+# vanished would read as a clean bill.
+doctor-timed-out = "no answer in {0}s"
+# What a remedy says it did.
+doctor-fixed-chmod = "the key is readable by you alone again"
+doctor-fixed-hooks = "hooks reinstalled"
+doctor-fixed-serve = "a resident was started"
+doctor-no-fix = "khor cannot mend this one: {0}"
+# The hint at the end of a mendable row. **It names the check's own
+# key**, because that is what `--fix` takes.
+doctor-fixable = "khor doctor --fix {0}"
+# The GUI page's two actions. The CLI has neither: checking again is
+# typing it again, and the remedy is printed at the end of the row.
+doctor-again = "Check again"
+doctor-mend = "Repair"
+# The three groups the healthy checks fold under. Which check belongs to
+# which is the node's (`khor_node::doctor::group`), beside the key table.
+doctor-group-machine = "This machine"
+doctor-group-network = "Network"
+doctor-group-tools = "Tools"
+# The verdict line. "All good" only when every check is ok: a check that
+# could not be taken is not a check that passed.
+doctor-all-well = "All good"
+doctor-needs-you = "{0} need looking at"
+doctor-well-count = "{0} fine"
+# ── `khor faces`: which of khor's interfaces are up here ─────────────
+face-name-app = "Desktop app"
+face-up = "Open"
+face-down = "Not open"
+face-at = "port {0}"
+face-current = "Current"
+# ── what each check says ──
+doctor-version-split = "the command line is {0}, this one is {1}"
+doctor-version-no-cli = "no khor command on this machine"
+doctor-identity-ok = "there, readable by you alone"
+doctor-identity-loose = "others can read it too (mode {0})"
+doctor-identity-gone = "not there: {0}"
+doctor-identity-unreadable = "cannot read it: {0}"
+doctor-store-ok = "opens, takes a write, holding {0}"
+doctor-store-shut = "cannot write to it: {0}"
+# Two halves, told apart: a live pid on file and a socket that answers
+# fail separately, and "not running" would send somebody to start a
+# second one.
+doctor-serve-ok = "running (pid {0})"
+doctor-serve-none = "not running"
+doctor-serve-deaf = "pid {0} on file, but it does not answer"
+doctor-serve-many = "this machine is running {0} serves: {1}"
+doctor-serve-one-of = "pid {0} (store {1})"
+doctor-web-ok = "port {0} is listening, key is there"
+doctor-web-nokey = "port {0} is listening, but the key file is missing"
+doctor-web-quiet = "nothing is listening on port {0}"
+doctor-relay-ms = "{0} {1}ms"
+doctor-relay-quiet = "{0} out of reach"
+doctor-relay-not-yet = "{0} not switched on yet; using {1}"
+doctor-relays-none = "no relay at all"
+# A peer's version comes off its readings, never a question of its own,
+# so a machine khor has not heard from has none — an answer, not a gap.
+doctor-peer = "{0} {1} {2}"
+doctor-peer-behind = "{0} {1} {2}, not what this one runs"
+doctor-peer-mute = "{0} {1}, version unknown"
+doctor-peers-alone = "not paired with any machine yet"
+# What the checklist says while this machine is paused (docs/MORE.md
+# 暂停). Not a warning: it is doing what it was told.
+doctor-peers-paused = "Paused — not syncing with the others, and they see this machine as down. To resume: khor resume"
+doctor-peers-unread = "cannot read the machine table"
+doctor-road = "{0} first reply {1}ms, direct {2}/{3}"
+doctor-road-fresh = "{0} first reply {1}ms"
+doctor-roads-none = "serve has not dialled another machine since it started"
+doctor-roads-no-serve = "serve is not running, so there are no connection readings"
+doctor-roads-unanswered = "serve did not answer (it may be older than this khor)"
+doctor-road-unread = "link unread"
+doctor-wires = "Wires: {0} dialled ({1} failed), late answers {2}, readings asked again {3}"
+doctor-wires-retired = "let go — silent {0}, not responding {1}, closed {2}, network changed {3}, new endpoint {4}"
+doctor-wires-reads = "readings — direct {0}, relay {1}, idle {2}, down {3}; network changes {4}; status questions timed out {5}"
+doctor-wires-peer = "{0}: {1} failed dials, {2} not responding"
+doctor-hooks-ok = "every claude hook is installed"
+doctor-hooks-part = "{0} event hook(s) missing, or pointing at another khor"
+doctor-hooks-unread = "cannot read claude's settings"
+doctor-agents-ok = "all {0} registered command(s) found"
+doctor-agents-missing = "command not found: {0}"
+doctor-agents-none = "no agent registered"
+doctor-agents-unread = "cannot read the agent registry"
+doctor-vscode-ready = "{0}, server already fetched"
+doctor-vscode-fetch = "{0}, server not fetched yet (the first open fetches it)"
+doctor-vscode-none = "no code on this machine"
+doctor-disk = "{0} / {1}, {2} left"
+doctor-disk-unknown = "cannot say how much is left on this volume"
+doctor-launcher-ok = "uses {0}"
+doctor-launcher-missing = "{0} is not on PATH"
+doctor-launcher-none = "this machine has no opener"
+# What this app's terminals noted about themselves (item 33): the newest
+# entry into a terminal, as its face recorded it. The record itself is a
+# diagnostic line for whoever reads the checklist with us, not prose.
+doctor-name-terminal = "Terminal"
+doctor-terminal-last = "last terminal opened: {0}"
+doctor-terminal-none = "no terminal opened yet"
+
+# ── what `khor lock` prints (docs/MORE.md 安全) ───────────────────────
+# One line, three fields: whether the faces lock, whether there is a key,
+# and how long idle before one locks itself. **It locks the screens, not
+# this terminal** — behind `khor` there is already somebody logged in.
+lock-on = "Locked"
+lock-off = "Unlocked"
+lock-pin-set = "PIN set"
+lock-pin-none = "no PIN yet"
+lock-idle-never = "never locks on idle"
+lock-idle-after = "locks after {0} idle minutes"
+identity-reset = "the identity key is gone; the next khor mints a new one, and to the network that is another machine"
+unread = "unread {0}"
+unreachable-for = "unreachable for {0}"
+quiet-for = "quiet for {0}"
+adopted = "Added the SSH host {0}, connected over SSH from {1}; the whole network sees it now"
+# The user's root key and the roster (docs/CONNECT.md 身份).
+root-born-hint = "This machine just made the network's root key: it signs which machines are yours. Write the 24 recovery words on paper and keep them — without it no machine can be added or revoked again. To see them: khor root words {0}"
+root-show-key = "Root key: {0}"
+root-show-holds = "This machine holds the root key"
+root-show-not-held = "This machine does not hold the root key (another one does)"
+root-show-roster = "Roster version {0}, signed {1} days ago"
+root-show-pending = "This machine is waiting for the root holder's approval: run khor pending there, then khor approve"
+root-show-revoked = "This machine was revoked: the network no longer answers it"
+root-show-legacy = "This network has no root key yet (it predates roots). Run khor root init on the machine that should hold it"
+root-recovered = "Root key restored onto this machine: {0}"
+root-inited = "Made root key {0} and signed the {1} machines in the table; each picks it up on its next sync"
+pending-none = "Nothing is waiting"
+pending-kind-device = "join"
+pending-kind-satellite = "SSH host join"
+pending-kind-leave = "removal"
+approved = "Approved \"{0}\"; roster version {1}"
+revoked-ok = "Revoked \"{0}\"; roster version {1}"
+pair-pending-hint = "Paired, but this machine has no certificate yet: the root holder was not part of this pairing. The network recognizes it once khor approve runs on the machine holding the root"
+# 添加机器 (`khor add`, `khor promote`): the steps as the terminal
+# prints them, what each did, and the outcome.
+add-step-connect = "Connect"
+add-step-place = "Install khor"
+add-step-start = "Start"
+add-step-pair = "Pair"
+add-step-undo = "Remove installed files"
+add-step-satellite = "Add as an SSH host"
+add-placed-fetched = "{0}, downloaded by the target host"
+add-placed-pushed = "{0}, uploaded from this machine"
+add-paired-carried = "Connected over SSH"
+keeper-launchd = "Keeps running after logout; launchd starts it at boot"
+keeper-boot = "Keeps running after logout; systemd starts it at boot"
+keeper-login = "Keeps running after logout; after a restart it starts at the next login"
+keeper-none = "Keeps running after logout; after a restart run khor-serve-up"
+password-prompt = "Password"
+passphrase-prompt = "Key passphrase"
+added-member = "Added {0}: khor is installed and connects directly"
+added-satellite = "{0}; installed files removed, connected over SSH instead"
+promoted = "Installed khor on {0}; it is a khor host now"
+adopt-pending-hint = "SSH host added, but not on the roster yet: this machine does not hold the root. Run khor approve on the machine that does"
+doctor-roster-stale = "The roster is {0} days past fresh (signed {1} days ago): the root holder has been away a long time, and no new certificate is accepted"
+doctor-roster-none = "Knows the root key, but holds no roster that verifies"
+sat-tmux-yes = "It has tmux; terminals opened on it persist"
+sat-tmux-no = "It has no tmux; terminals opened on it close when the connection drops"
+adaptor-behind = "{0} running sessions khor can't read — it doesn't recognize the format they're reporting"
+old-sessions-hidden = "{0} old sessions not listed (--all shows them all)"
+age-seconds = "{0} seconds"
+age-minutes = "{0} minutes"
+age-hours = "{0} hours"
+age-days = "{0} days"
+link-last-heard = "{0} · last heard {1} ago"
+vitals-cpu = "CPU {0}% / {1} cores"
+vitals-mem = "memory {0} / {1}"
+vitals-disk = "disk {0} / {1}"
+vitals-name-cpu = "CPU"
+vitals-name-mem = "Memory"
+vitals-name-disk = "Disk"
+vitals-disk-unknown = "disk: unknown"
+vitals-gpu = "GPU {0}% / {1} cards"
+vitals-name-gpu = "GPU"
+vitals-vram = "VRAM {0} / {1}"
+vitals-gpu-card = "{0} {1}%"
+vitals-gpu-card-mem = "{0} {1}%, VRAM {2} / {3}"
+day-peak-at = "peak {0} · {1}"
+day-title = "Last 24 hours"
+day-view-heat = "Log"
+day-view-para = "Stats"
+day-at = "{0} · {1}"
+day-gap = "not captured"
+day-now = "Now"
+day-strain-legend = "memory/disk {0}+"
+day-brush-head = "{0}'s {1} moments ({2} hours):"
+
+day-brush-median = "{0} median {1}"
+day-brush-none = "{0} no data"
+day-brush-empty = "{0} {1}: no moment falls here"
+cores-sub = "{0} cores"
+gpu-sub-nomem = "{0} GPUs"
+disk-whole = "Disk {0} · {1} volumes"
+fill-left = "{0} left"
+day-peak = "24h peak {0}"
+uptime-days = "Up {0} days"
+uptime-hours = "Up {0} hours"
+updated-at = "Updated {0}"
+vitals-vol = "{0} {1} / {2}"
+vitals-watch = "{0} on {1}, {2} / {3} left"
+vitals-watch-missing = "{0} has no such directory"
+vitals-watch-unlisted = "{0} is not on any listed volume"
+vitals-name-vram = "VRAM"
+top-pid = "PID"
+top-user = "User"
+top-plot-sqrt = "√"
+top-plot-log = "log"
+top-plot-off = "{0} rows have no reading for either value, not plotted"
+top-cmd = "Command"
+top-fold = "× {0}"
+# "Elapsed" (wall-clock since start) vs top-cputime's "CPU time" (time actually
+# on core) — kept distinct so the two columns don't both read as "Time".
+top-time = "Elapsed"
+top-cputime = "CPU time"
+top-io = "I/O"
+top-status = "Status"
+top-st-run = "Running"
+top-st-sleep = "Sleeping"
+top-st-idle = "Idle"
+top-st-spawning = "Spawning"
+top-st-diskwait = "Disk wait"
+top-st-dead = "Exited"
+top-st-zombie = "Zombie"
+top-st-stopped = "Stopped"
+top-st-tracing = "Traced"
+top-st-parked = "Parked"
+top-st-wakekill = "Wake-kill"
+top-st-waking = "Waking"
+top-st-suspended = "Suspended"
+top-st-lockblocked = "Lock wait"
+top-st-unclear = "Unclear"
+vols-sub = "{0} volumes"
+
+procs-sub = "Top {0} processes"
+drawer-more = "Swipe down for more"
+top-day = "CPU, last 24 hours"
+vitals-taken = "Reading from {0} ago"
+vitals-version = "khor {0}"
+vitals-never = "No reading yet"
+tokens-input = "Input {0}"
+tokens-cached = "Cache read {0}"
+tokens-cache-write = "Cache write {0}"
+tokens-output = "Output {0}"
+usage-none = "No spend these past few days"
+# Kept distinct from vitals-never ("Not checked yet") — the Chinese source
+# says this state can't borrow that word, so the English shouldn't either.
+usage-never = "Usage not checked for this machine yet"
+usage-taken = "Usage from {0} ago"
+usage-unreadable = "{0} entries unreadable, totals don't include them"
+usage-model-unnamed = "Model not recorded"
+summary-sent = "Sent; the other machine is receiving it. Transfer ID: {0}"
+syncing-for-offer = "No record of this transfer on this machine yet, syncing first; {0} machines to ask, up to {1} seconds for each one we can't reach"
+pulled = "Done, pulled {0} bytes this round"
+pulled-to = "Pulled {0} bytes, saved to {1}"
+dir-truncated = "Directory too large, showing only the first {0} entries"
+put-landed = "Wrote {0}, now {1}"
+put-merged = "The other side changed too, merged both and wrote {0}, now {1}"
+put-clashes = "{0} lines changed on both sides, nothing written; the half-merged result is on stdout"
+put-new-and-base = "--new says nothing should be there, --base says your edited copy is there, pick one"
+put-cut-cannot-merge = "The file on the other side is {0} bytes, only {1} readable at once; merging needs the whole file, not merged, not written"
+read-empty = "This document is empty, no text"
+read-cut = "File is {0} bytes, read only the first {1}"
+code-at = "{0}\n  ({1}; the link carries a key, don't paste it into a document that syncs. Shut down: khor code --stop)"
+code-stopped = "Stopped VS Code on {0}"
+code-fetching = "No server on that machine yet, downloading one first (about 640 MB, from Microsoft, subject to their server license terms)"
+search-more = "More not listed, narrow the search terms"
+git-more = "Too many changes, the rest isn't drawn"
+git-status-more = "Too many changes, some files aren't marked"
+git-track = "{0} ahead, {1} behind, as of the fetch {2} ago"
+git-ahead = "{0} ahead, as of the fetch {1} ago"
+git-behind = "{0} behind, as of the fetch {1} ago"
+borrowing = "Using {0}'s network, proxy port at {1}; point your browser or HTTPS_PROXY at it. Close: khor close {2}"
+broken-blocks = "{0} blocks couldn't be read, this part of the conversation is missing"
+serve-banner = "khor serve: {0} listening, handles pairing and sync"
+serve-app-holds = "the khor app is this machine's resident (pid {0}) — not starting a second serve beside it"
+serve-already-here = "khor serve is already running on this store (pid {0}) — not starting a second one beside it"
+web-banner = "Web access listening on {0}; for a link, run khor web"
+hooks-file = "Hooks written to: {0}"
+hook-here = "Installed"
+hook-missing = "Not installed"
+
+hook-elsewhere = "Hooks installed belong to a different khor: {0}"
+hooks-worth-installing = "Install hooks to get a \"done\" state — reading the disk alone can't tell you that: khor hooks install"
+hooks-added = "Installed: {0}"
+hooks-repointed = "Repointed to this khor: {0}"
+hooks-already = "Already there, untouched: {0}"
+hooks-restart-claude = "A running claude has to be restarted to be sure it picks this up"
+hooks-removed = "Removed: {0}"
+hooks-none-to-remove = "Never installed, untouched"
+agents-none = "No agents registered yet: khor agents add <name> -- <command...>"
+agents-added = "Registered: {0}"
+agents-forgotten = "No longer registered: {0}"
+agents-was-not-there = "Was never registered: {0}"
+# "起得来" is terse: this must read as "khor can launch it," never as a promise it works once launched.
+agents-known-startable = "khor can start this"
+agents-known-byhand = "Install it yourself, then khor agents add <name> -- <command...>"
+agents-known-head = "ACP registry snapshot ({0}, {1} total, {2} of which khor can start)"
+agents-sessions-cannot = "{0} doesn't support listing sessions — it's optional in the protocol, and this one didn't implement it"
+agents-sessions-none = "{0} says it has no sessions"
+agents-sessions-head = "{0} has {1} conversations (recorded {2}):"
+agents-sessions-unasked = "Haven't asked {0} yet: khor agents sessions {0} --ask"
+agents-sessions-asked = "{0} says it has {1} conversations:"
+accounts-none = "No API accounts registered yet (khor accounts add …)"
+account-budget-number = "--budget needs a number after it"
+account-name-ambiguous = "More than one account named {0} — use its id instead"
+quota-trouble = "Couldn't get it ({0})"
+quota-unlimited = "Unlimited"
+find-none = "Nothing matched “{0}” — not a session, machine, workspace, browsing tab or page"
+import-none = "Nothing to import: agents started elsewhere, tmux sessions and ACP conversations are all on the list already, or there are none"
+quota-why-unavailable = "can't run on this machine"
+quota-why-used = "its reading was used"
+quota-why-cached = "not asked: this machine's reading from {0}s ago is still fresh"
+quota-why-cooling = "not asked: the last try failed, {0} more minute(s) to wait"
+quota-why-failed = "tried, got nothing ({0})"
+quota-no-number = "No number"
+# Worded differently from `fill-left` (a disk/dial reading) to avoid a
+# same-section duplicate — this is a prepaid wallet's remaining balance.
+quota-remaining = "{0} remaining"
+resume-needs-agent = "--resume needs --agent: an id alone doesn't say which agent should resume it"
+gui-not-on-another-machine = "--gui with --on only accepts an agent name (claude, codex, or a registered one), not a command: that machine has to start it itself"
+resume-not-on-another-machine = "--resume can't combine with --on: a conversation has to resume on the machine that opened it"
+invite-window = "Valid for {0} minutes, and only once"
+paired-ok = "Paired: {0}. Every machine it knows is now in your machine list"
+nothing-to-sync = "Only this machine is on the network — nothing to sync"
+sync-failed-line = "{0}: didn't sync — {1}"
+attached = "Attached: {0} (Ctrl-\\ to detach; the session won't exit with you)"
+detached = "Detached — the session is still running: khor attach {0}"
+session-settled = "Session ended: {0}"
+link-dropped = "Connection dropped — the session looks like it's still there ({0}): khor attach {1}"
+session-closed = "Session closed"
+retracted = "[retracted]"
+file-chip = "[file {0} {1}B]"
+fate-landed = "  {0}  Received {1}"
+fate-landed-via = "  {0}  Received {1} (from {2})"
+fate-failed = "  {0}  Transfer failed: {1}"
+fate-moving = "  {0}  Transferring {1}/{2}B"
+fate-stopped = "  {0}  Cancelled"
+unknown-body = "[this version can't read this entry: {0}]"
+
+relay-up = "Relay listening on {0}"
+relay-admit-everyone = "Admits: anyone (no key, no device table)"
+relay-admit-token = "Admits: clients carrying the shared key"
+relay-admit-mine = "Admits: devices on this network's roster ({0} now)"
+relay-key-in-clear = "Note: over plain HTTP the shared key travels in the clear"
+relay-rate = "Rate limit: {0}/s per client"
+relay-rate-none = "Rate limit: none"
+relay-quic = "QUIC address discovery: UDP {0}"
+relay-metrics = "Metrics: {0}"
+relay-meter = "Metering: {0}"
+relay-pick-mode = "Pick one: --dev (plain HTTP), --tls-cert with --tls-key, or --acme <domain>"
+relay-token-or-mine = "--token and --only-mine cannot be used together"
+relay-quic-needs-tls = "--quic needs a certificate: use it with --tls-cert and --tls-key (beside --dev, for QUIC alone), or --acme"
+relay-flag-unknown = "khor relay does not know this argument: {0}"
+relay-flag-needs-value = "{0} needs a value after it"
+relay-rate-bad = "--rate takes a whole number of bytes per second above 0: {0}"
+relay-addr-bad = "Not an address to listen on: {0}"
+relay-tls-bad = "Cannot read the certificate or key: {0}"
+relay-tls-reread = "[{0}] Read the certificate again: {1}"
+relay-tls-reread-failed = "[{0}] The certificate did not change; still serving the old one: {1}"
+relay-tls-check-needs-files = "--tls-check goes with --tls-cert and --tls-key"
+relay-tls-ok = "Certificate and key are usable: {0}, {1}"
+relay-wont-start = "The relay cannot start: {0}"
+relay-stats-none = "Nothing metered yet: {0} does not exist"
+relay-stats-unreadable = "Cannot read the metering file: {0}"
+relay-stats-since = "Since {0}: {1} sent to clients, {2} received from them"
+relay-stats-device = "{0}…  {1} connections, online {2}"
+relay-stats-no-device = "No device has connected yet"
+
+# Round NET-12: `khor devices --roads`.
+roads-ms = "{0} ms"
+roads-unreported = "reports no roads (an older khor, or not yet)"
+# Round ROAD-1: `khor reach`.
+reach-head = "{0} port {1}, tried once from each machine"
+reach-reached = "reachable"
+reach-silent-word = "no ssh answer"
+reach-refused-word = "refused"
+reach-timeout-word = "timed out"
+reach-no-name-word = "can't resolve"
+reach-unasked = "not asked"
+reach-predates-word = "older khor"
+reach-entrance = "Entrance: {0} ({1} ms)"
+reach-no-entrance = "No machine can connect to it"
+reach-choose = "This machine holds no key for it and the others disagree: choose the entrance yourself"
+reach-disagree = "These machines' known_hosts hold different keys for this name: they mean different machines"
+reach-known-as = "This key belongs to {0}"
+# Round ROAD-1: roads with legs in `khor devices --roads`.
+roads-ssh = "ssh"
+roads-broken = "broken at {0} → {1}"
+roads-jump = "the jump host"
+roads-broken-auth = "{0} accepts password logins only"
+
+[msg]
+launch-preset-name = "Enter a startup preset name"
+launch-preset-duplicate = "A startup preset already has this name"
+launch-command-invalid = "The startup command contains an invalid character or exceeds 32 KiB"
+recognition-changed = "Configuration changed; remove the khor integration before enabling again"
+recognition-missing = "Agent configuration directory not found; install and run the agent first"
+recognition-computer = "Configure recognition on the khor computer running the agent"
+recognition-busy = "Recognition configuration is being changed; try again shortly"
+command-input-required = "This command requires input"
+console-token-invalid = "Invalid command submission identifier"
+console-token-conflict = "This submission identifier belongs to another command"
+console-interrupted = "The executor exited; this command was not retried"
+console-private = "Arguments and results are available only on the executing device"
+console-unknown = "Unknown command: {0}"
+mcp-read = "Read a UTF-8 text file on a named machine, up to 48 KiB, reporting truncation"
+mcp-search = "Search file names and text under a directory on a named machine; read only"
+agent-text-file = "This tool can only read UTF-8 text files"
+agent-busy = "khor is working; finish or stop the current task first"
+agent-not-running = "This task has ended"
+agent-not-configured = "Choose an account and model for khor first"
+agent-key-missing = "The API key is unavailable on this executor, or the account does not support API calls"
+agent-model-required = "Enter a model name"
+agent-runtime-missing = "The khor agent runtime is not installed"
+agent-runtime-failed = "Could not start khor agent: {0}"
+agent-failed = "khor agent exited unexpectedly"
+agent-arguments = "khor agent received invalid arguments"
+agent-approval-expired = "This approval request has ended"
+agent-stopped = "Task stopped; operations already submitted may have taken effect"
+agent-declined = "The user declined this operation; do not submit it again unchanged"
+console-output-cut = "Output too large; showing an excerpt"
+watch-path-relative = "Watched directory must be an absolute path: {0}"
+watch-path-dotdot = "Watched directory can't contain ..: {0}"
+watch-path-empty = "Watched directory can't be empty"
+watch-path-twice = "Same directory listed twice: {0}"
+
+# ── the machine's own relays ──
+not-a-relay-url = "Not a relay address: {0}"
+no-local-lookup = "Local network discovery won't start"
+relays-only-mine-needs-one = "Add one of your own relays first — then you can use only your own"
+preferred-not-a-relay = "{0} is not one of this machine's relays — add it under Relays first"
+
+# ── the app lock (docs/MORE.md 安全) ─────────────────────────────────
+# **The PIN is the key every face has**, so the lock cannot come on
+# without one: a phone opening the web face has no Touch ID to fall back
+# on. Refused rather than quietly switched back off — a switch that turns
+# itself off is a screen lying about its own state.
+lock-needs-a-pin = "Set a PIN first, then the lock can come on"
+# Characters, not digits: refusing a longer passphrase for having letters
+# in it would be refusing the stronger answer.
+lock-pin-too-short = "A PIN is at least {0} characters"
+# An unreadable hash is khor being broken, **not a wrong PIN**. Folded
+# into one word, somebody retypes a correct PIN forever.
+lock-cant-hash = "this machine's PIN record cannot be read: {0}"
+lock-no-such-timeout = "no such step: {0} (there are {1})"
+# The reset wants the machine's own name, and the node is what checks it:
+# a flag and a dialog would be two rules about one irreversible act.
+reset-wants-the-machine-name = "To reset the identity, type the machine name exactly: {0}"
+cant-read-stdin = "cannot read standard input: {0}"
+# What the system's own verification sheet says. **The system draws it,
+# not khor**, so it has to say who is asking.
+lock-system-reason = "Unlock khor"
+
+# ── cli ──
+runtime-wont-start = "Runtime won't start: {0}"
+which-session = "Don't know which session to report to: set KHOR_SESSION or use --session"
+not-a-state-word = "Not one of the six words: {0}"
+unknown-verb = "Unknown verb: {0}"
+not-a-way-to-arrange = "Not an arrangement: {0}. Options: {1}"
+attach-needs-tty = "attach needs to run in a terminal"
+attach-windows-later = "Not supported in this version (Windows attach is on the backlog)"
+no-termios = "Can't get terminal parameters"
+no-raw-mode = "Can't switch terminal into raw mode"
+hook-payload-unreadable = "Can't read hook payload: {0}"
+
+# ── identity / tickets (net) ──
+identity-unreadable = "Failed to read identity file"
+cant-make-dir-for = "Failed to create directory: {0}"
+cant-write-file = "Failed to write: {0}"
+cant-set-permissions = "Failed to set file permissions"
+identity-too-open = "Identity file permissions are too open ({0}) — others can read it and impersonate this machine.\n  Fix: chmod 600 {1}"
+identity-corrupt = "Identity file is corrupt (should be 32 bytes). Deleting it regenerates one —\n  note that regenerating is equivalent to becoming a new machine; paired machines will need to re-pair: {0}"
+# The user's root key (docs/CONNECT.md 身份): it only signs.
+root-key-too-open = "Root key file permissions are too open ({0}) — anyone who can read it can sign their own machine into your network.\n  Fix: chmod 600 {1}"
+root-key-corrupt = "Root key file is corrupt (should be 32 bytes): {0}\n  Recover it from the words: khor root recover <24 words>"
+root-words-count = "Recovery takes {0} words; got {1}"
+root-words-unknown = "Word {0} ({1}) is not on the BIP-39 English list — probably a copying mistake"
+root-words-checksum = "These 24 words fail their checksum: most likely one was copied wrong, or two are swapped"
+trust-garbled = "Unreadable signed record: wrong format, or cut short"
+trust-bad-signature = "Signature does not match: this record was not signed by the root key, or was changed after signing"
+trust-other-root = "This record belongs to a different root key"
+trust-bad-cert-inside = "The roster carries a certificate that does not verify"
+not-a-machine-id-short = "Not a machine id"
+not-a-ticket-base64 = "Not a pairing ticket (can't decode base64). Choose Invite device on the machine that issued it and copy the whole ticket again"
+not-a-ticket-content = "Not a pairing ticket (content doesn't match). Choose Invite device on the machine that issued it and copy the whole ticket again"
+
+# ── document store and wire (sync) ──
+cant-read = "Can't read {0}: {1}"
+# Distinct from cant-make-dir-for ("Failed to create directory") to keep the
+# two Chinese verbs (创建...失败 vs 建不了) apart.
+cant-make-dir = "Can't create directory: {0}"
+cant-write = "Can't write {0}: {1}"
+cant-finish-write = "Can't finish writing: {0}"
+cant-sync-disk = "Can't flush to disk: {0}"
+cant-rename = "Can't rename: {0}"
+outbound-too-big = "This outgoing chunk is {0} KiB, over the pairing channel's per-frame limit of {1} KiB. The control stream is serial and only carries deltas — for full history, use the ssh path instead (it moves files, with no per-frame limit)"
+inbound-too-big = "This incoming chunk is {0} KiB, over the pairing channel's per-frame limit of {1} KiB. The control stream is serial and only carries deltas — for full history, use the ssh path instead (it moves files, with no per-frame limit)"
+delta-not-base64 = "This delta isn't base64: {0}"
+version-not-base64 = "This version number isn't base64: {0}"
+version-undecodable = "Can't decode version number: {0}"
+pile-other-epoch = "The other machine keeps {0} in format {1} and this machine in format {2}; nothing was merged. Syncing resumes once the older side is upgraded"
+cant-set-peer = "Can't set peer id: {0}"
+cant-export-changes = "Can't export delta: {0}"
+cant-export-snapshot = "Can't export snapshot: {0}"
+cant-merge = "Can't merge: {0}"
+cant-append = "Can't append: {0}"
+no-such-message = "No such message: {0}"
+no-such-tab = "No such tab: {0}"
+dir-pin-retired = "Pinned directories are retired: a directory is a workspace now. Use khor ws add -m {0} {1}, then khor ws pin -m {0} {1}"
+provider-sub-only = "{0} can only be registered as a subscription: add --kind sub, with no key"
+not-a-candidate = "{0} isn't one you can import (khor import lists what you can)"
+sub-auto-name = "{0} subscription"
+tab-pinned = "This tab is pinned — unpin it before deleting it"
+
+# ── frames (node) ──
+cant-encode-frame = "Can't encode frame: {0}"
+cant-decode-frame = "Can't decode frame: {0}"
+
+# ── local hand-off (node) ──
+serve-unreachable = "Can't reach serve: {0}"
+handoff-failed = "Handoff failed: {0}"
+cant-close-stream = "Can't close stream: {0}"
+no-reply-from-serve = "No reply from serve: {0}"
+serve-op-timed-out = "serve didn't finish {0} within {1}s — stopped waiting"
+serve-op-late = "[{0}] {1} ran past {2}s — gave up and answered"
+cant-open-handoff-port = "Can't open handoff port: {0}"
+handoff-unreadable = "Can't read handoff: {0}"
+handoff-wrong-cookie = "Handoff cookie doesn't match — re-read endpoint.json and try again"
+cant-reply = "Can't reply: {0}"
+serve-no-handoff-port = "khor serve is running (pid {0}) but has no handoff port open — upgrade it or stop it first"
+serve-handoff-failed = "khor serve is running (pid {0}) but handoff failed: {1}"
+endpoint-file-garbled = "Can't parse endpoint.json: {0}"
+
+# ── the wire between machines (node) ──
+request-unreadable = "Can't read request: {0}"
+cant-write-reply = "Can't write reply: {0}"
+bad-invite = "Pairing ticket is wrong or already used. Invite again on the machine that issued it (Invite device, or khor invite) and use the new ticket"
+invite-expired = "This ticket has expired (valid for {0} minutes after issue). Invite again on the machine that issued it: Invite device, or khor invite"
+cant-burn-invite = "Can't burn pairing code: {0}"
+not-paired = "This machine isn't in the machine table — pair first"
+# The roster is the one source of trust (docs/CONNECT.md 身份).
+not-in-roster = "This machine is not on the roster: it is waiting for the root holder to approve it, or it was revoked"
+words-need-confirm = "The recovery words restore the whole network's root key; anyone who sees them can sign their own machine into your network. To see them, type this machine's name back: khor root words {0}"
+words-names-another = "\"{0}\" is not this machine's name. To see the recovery words, type this machine's name: khor root words {1}"
+peer-not-in-roster = "That machine is not on the roster (waiting or revoked); not syncing with it"
+# Round NET-10: a machine whose table lost its rows is taken back only on a roster signed by its own root.
+vouch-refused = "Not taken back: that roster is not this network's, is older than the one here, is stale, or does not name both machines"
+pair-two-roots = "Each side is its own network with its own root key; pairing does not merge two networks. To bring that machine in, run khor leave on it first, then pair with this ticket"
+root-not-here = "This machine does not hold the root key. The root holder does; the recovery words can restore it here too: khor root recover <24 words>"
+approve-needs-root = "Approving happens on the machine that holds the root, and this one does not. Run khor pending and khor approve there"
+revoke-needs-root = "Revoking happens on the machine that holds the root, and this one does not"
+nothing-pending-named = "Nothing waiting is called \"{0}\" (khor pending lists them)"
+cant-revoke-holder = "The root holder cannot revoke itself"
+already-revoked = "\"{0}\" is already revoked"
+recover-other-network = "This machine is in another network (root {0}), and these words are a different root. Run khor leave first, then recover"
+root-already = "There is already a root key here: {0}"
+sat-revoked = "SSH host \"{0}\" was revoked; nothing is run on its behalf any more"
+no-home-dir = "This machine can't report its own home directory"
+path-not-absolute = "Path must be written from root: {0}"
+
+cant-list-dir = "Can't list {0}: {1}"
+unknown-doc = "Unknown doc type: {0}"
+unknown-action = "Unknown action: {0}"
+serve-non-answer = "serve gave an answer that didn't match: {0}"
+peer-non-answer = "The peer gave an answer that didn't match: {0}"
+far-table-not-base64 = "The peer's machine table isn't base64: {0}"
+no-roads-reported = "It hasn't reported any address yet. Wait for it to sync on its own."
+create-token-bad = "This create carried a malformed token; nothing was created"
+sync-partly-apart = "Partly synced: moved {0} bytes; different data epochs kept {1} separate"
+sync-partly-pending = "Partly synced: moved {0} bytes; document transfers still pending: {1}"
+sync-partly-pending-and-apart = "Partly synced: moved {0} bytes; document transfers still pending: {1}; different data epochs kept {2} separate"
+nothing-to-move = "Nothing to do, already in sync."
+moved-bytes = "Moved {0} bytes"
+no-entropy = "Can't get random data: {0}"
+cant-open-stream = "Can't open stream: {0}"
+cant-send = "Can't send: {0}"
+no-answer = "Can't read a reply: {0}"
+serve-not-running-for-invite = "khor serve isn't running. Start khor serve on this machine first; the invite needs its address."
+cant-make-invites-dir = "Can't create invites directory: {0}"
+cant-save-invite = "Can't save pairing code: {0}"
+cant-reach-named = "Can't reach {0}: {1}"
+cant-reach-plain = "Can't reach: {0}"
+machine-silent = "{0} is not responding. Check that it's running khor and online, then try again"
+answer-late = "{0} didn't finish answering within {1}s"
+wire-unanswered = "A request went unanswered; the connection was let go"
+wire-went-silent = "The connection went silent and was let go"
+wire-network-changed = "The network changed; the old connection was let go"
+peer-backing-off = "Couldn't connect last time — trying again in {0}s"
+peer-left-its-relay = "Its relay says it left — it will connect when it is back"
+dial-timed-out = "Connection timed out"
+inviter-unreachable-timeout = "The machine that issued the ticket didn't answer. Check that it's running khor and online, then try again"
+no-relay-reached = "This machine can't reach any relay: there may be no network, or the relay is down. Check the network (or the relays on the Network page), then try again"
+inviter-unreachable = "Can't reach the machine that issued the invite: {0}"
+
+not-a-digest = "This isn't a content digest: {0}"
+cant-make-transfers-dir = "Can't create transfers directory: {0}"
+cant-record-offer = "Can't record this file: {0}"
+offer-garbled = "Can't parse transfer record: {0}"
+cant-finish-reading = "Can't finish reading {0}: {1}"
+offer-lost = "No record of this file. The sender may have switched machines or deleted it."
+offered-file-unreadable = "The offered file can no longer be read ({0}): {1}"
+offered-file-changed = "The offered file has changed (its size changed). Ask the sender to send it again."
+offset-out-of-range = "Start position out of range: {0} > {1}"
+offered-file-wont-open = "The offered file won't open: {0}"
+cant-read-slice = "Can't finish reading this chunk: {0}"
+cant-save-file = "Can't save {0} back: {1}"
+file-changed-under-you = "This file changed while you were editing it. Nothing was written back: {0}"
+# "Mine" / "the other side's" on purpose, not git's ours/theirs — this is a merge on the person's own file, not a branch merge.
+merge-mine = "Mine"
+merge-theirs = "The other side's"
+file-moved-while-reading = "This file is being changed. It stopped matching partway through reading: {0}"
+not-a-text-file = "This file can't be read as text"
+cant-read-document = "Can't open this document: {0}"
+pdf-is-pictures = "This PDF is images, not text (a scan or full-page illustrations) — there's no readable text layer"
+too-big-to-write = "Content to write is {0} bytes; the limit per write is {1} bytes"
+recipient-not-in-table = "The recipient machine isn't in the machine table: {0}"
+machine-unreachable-timeout = "Can't reach {0} (timed out) — none of the paths tried got through. If it just restarted serve, this machine will recognize its new address shortly."
+offerer-unreachable-timeout = "Can't reach the sender (timed out)"
+offerer-unreachable = "Can't reach the sender: {0}"
+offerer-left-table = "The sender is no longer in the machine table"
+take-sender-down = "Sender {0} is unreachable"
+take-holder-down = "Holder {0} is unreachable"
+take-sender-failed = "Sender {0}: {1}"
+take-holder-failed = "Holder {0}: {1}"
+take-no-holder = "No other machine has received this file yet"
+take-tried-separator = "; "
+machine-left-table = "This machine is no longer in the machine table: {0}"
+dest-exists = "A file with this name already exists locally. Move it aside first: {0}"
+file-changed-mid-pull = "The file changed during the pull. Pull it again."
+cant-make-files-dir = "Can't create the files directory: {0}"
+cant-mark-pulling = "Can't record the pulling marker: {0}"
+cant-read-partial = "Can't read the resume point: {0}"
+cant-open-partial = "Can't open the resume file: {0}"
+size-mismatch = "The size the peer reported doesn't match the digest ({0} vs {1})"
+empty-slice = "The peer sent an empty chunk"
+cant-write-slice = "Can't write this chunk: {0}"
+digest-mismatch = "Content check doesn't match (pulled {0}… ≠ digest says {1}…)"
+no-such-transfer = "No such transfer: {0}"
+transfer-absent-after-sync = "No such transfer: {0} (every machine on the network has synced a round; this id is most likely wrong)"
+transfer-not-synced-yet = "This transfer hasn't synced to this machine yet: {0}; can't reach {1} machine(s) ({2}) — it may still be there"
+wrong-recipient = "This file was sent to {0}; this machine shouldn't receive it"
+broadcast-title = "khor"
+own-broadcast-file = "This machine sent this file; there is nothing to receive"
+post-target-down = "{0} is unreachable, so this message was not sent. Wait for it to come online, or send to another machine"
+post-holder-down = "{0} is unreachable, so {1} cannot be fetched; this message was not sent"
+post-holder-refused = "{0} cannot offer {1}: {2}"
+post-target-no-khor = "{0} is a satellite machine with no khor to receive a push"
+post-target-self = "{0} is this machine; there is no need to push to it"
+post-nothing = "Nothing to send"
+push-cut-suspended = "Sending interrupted: the phone was suspended"
+not-a-file-path = "This isn't a file path: {0}"
+cant-remove = "Can't remove {0}: {1}"
+cant-canonicalize = "Can't resolve this path: {0}"
+
+name-taken = "That name is already taken: {0}"
+cant-mkdir = "Can't create directory {0}: {1}"
+# Kept distinct from `cant-rename` (the doc store's own key for failing to move a file into place during sync) — this is a user-initiated rename of a path on disk.
+cant-move-name = "Can't rename {0}: {1}"
+no-launcher = "This machine has nothing to open things with; set {0} to point at one"
+not-openable = "Can't open this (only absolute paths and http/https URLs): {0}"
+cant-launch = "Can't launch {0}: {1}"
+
+tunnel-target-too-long = "The target address is too long"
+tunnel-bad-handshake = "Can't read the tunnel handshake: {0}"
+tunnel-bad-status = "Tunnel returned an unrecognized status: {0}"
+tunnel-no-route = "The exit can't reach the destination: {0}"
+borrowing-title = "Borrowing {0}'s network"
+borrow-needs-serve = "Borrowing a network needs serve running (the proxy port has to live in a resident process)"
+reach-needs-serve = "Reaching another machine's terminal needs serve running (the pipe has to live in a resident process)"
+forgot = "Device deleted: {0}. To bring it back: run khor invite on any machine still in the network, then take the ticket to that machine and run khor pair"
+left = "Left the network. This machine is in no network now; a fresh ticket and khor pair rejoin it"
+left-told = "These machines were told: {0}"
+left-untold = "These machines couldn't be reached and will go on seeing {1} as down — run khor forget {1} over there: {0}"
+cant-forget-self = "This is the local machine — a machine can't delete itself. For this machine to leave the network: khor leave {0}"
+leave-names-another-machine = "{0} isn't the local machine. To delete it: khor forget {0}"
+leave-with-no-network = "This machine has never joined a network — there's none to leave. To join one: khor pair <ticket>"
+# `khor pause` / `khor resume` (docs/MORE.md 暂停). Pausing is not
+# leaving: the table stays, the others see this machine offline, and
+# everything local goes on working.
+paused = "Paused. This machine stops syncing with the others and they see it as down; everything here still works. To resume: khor resume"
+resumed = "Resumed. This machine syncs with the others again, and the next round catches it up"
+# Asked twice. Unlike a setting: putting a preference to the value it
+# already holds is worth no sentence, while telling a paused machine to
+# pause is somebody who did not know it was (`lock::set_on` refuses the
+# same shape).
+already-paused = "Already paused. To resume: khor resume"
+not-paused = "Not paused. To pause: khor pause"
+peer-paused = "Paused talking to {0}: not dialling it, not answering it, not syncing with it; it keeps running on its own. To resume: khor resume {0}"
+peer-resumed = "Resumed talking to {0}; the next round catches it up"
+peer-already-paused = "Already paused with {0}. To resume: khor resume {0}"
+peer-not-paused = "Not paused with {0}. To pause: khor pause {0}"
+peer-paused-refusal = "paused from this side — to resume: khor resume <machine>"
+# A phone resting in the background asks nobody (net-r): its own
+# dials wait for the front, as the dials to it are refused.
+paused-no-dial = "This machine is paused and does not connect to other machines. To resume: khor resume"
+peer-resting = "it is paused or in the background and takes no connections"
+resting-no-dial = "The app is in the background and does not connect to other machines; it connects again when it returns to the front"
+# Reaching for pairing while paused. Both verbs need to send and
+# receive, so this is not 「it failed」 but 「this machine is not doing
+# that right now」 — refused by name, with the way out in it.
+paired-while-paused = "This machine is paused; pairing needs it resumed first: khor resume"
+reach-thread-died = "The terminal reach never came back"
+deliver-thread-died = "The file delivery never came back"
+landed-unsaid = "The file arrived, but that machine didn't say where it landed (its khor is older than this one), so there's no path to paste"
+serve-died-restarting = "[{0}] serve died ({1}), restarting in {2}s"
+died-with-code = "exit code {0}"
+died-by-signal = "signal {0}"
+died-unreadably = "cause of death unreadable"
+serve-swapping = "[{0}] khor on disk changed version ({1} → {2}), serve is restarting gracefully"
+serve-swap-refused = "[{0}] khor on disk changed but can't answer its own version, refusing the swap ({1})"
+swap-no-answer = "runs, but didn't answer version"
+quit-serve-stopped = "serve stopped"
+quit-no-serve = "serve wasn't running"
+quit-app-resident = "this machine's resident is the khor app (pid {0}) — quit it from the app; khor quit does not stop an app"
+quit-hosts = "collected {0} session hosts"
+serve-gone-deaf = "[{0}] unreachable by anyone for {1}s — its ears are probably broken, stepping down for a new pair (keeper will restart it)"
+serve-stuck = "[{0}] serve's loop has not moved for {1} minutes — stuck, stepping down (keeper will restart it)"
+serve-orphaned = "[{0}] keeper is gone — an orphaned serve just blocks its successor, stepping aside"
+serve-ears-closed = "[{0}] the endpoint closed under serve and it hears nobody — new ears when the app is back in front, or after two minutes of silence"
+serve-fresh-ears = "[{0}] fresh ears in {1} ms — syncing now"
+serve-fresh-ears-failed = "[{0}] could not get fresh ears: {1}"
+serve-deaf-fresh-ears = "[{0}] unreachable by anyone for {1}s — its ears are probably broken, getting a new pair in place (no restart)"
+# Round NET-11: why a silence was not taken as deafness, said once per reason.
+serve-silent-reached = "[{0}] no round with anyone went through, but a machine reached this one in the last {1}s — its ears work; staying"
+serve-silent-echoed = "[{0}] nobody answers, but this machine hears itself through its relay — the others are away; staying"
+serve-silent-no-relay = "[{0}] nobody answers and no relay answers from here — this machine's network, not its ears; staying"
+serve-deaf-waits = "[{0}] its ears look broken, but it took new ones {1} min ago; next try in {2} min"
+serve-gone-midway = "serve ended while getting fresh ears"
+serve-network-changed = "[{0}] network changed (or woke from sleep) — connections silent for three seconds are let go, then a sync round"
+round-cancelled = "Sync was interrupted"
+serve-shielding = "[{0}] {1} is on a network drive — keeper is moving to a local copy before running, so a file swap over there can't hit the process running here"
+serve-shield-failed = "[{0}] local copy failed ({1}), running in place"
+serve-copy-swept = "[{0}] the local copy was swept away (probably a /tmp cleaner), copying a fresh one to hand off"
+serve-keeper-stayed = "[{0}] serve moved to the new build but the keeper couldn't follow ({1}); it keeps watching on the old one"
+cwd-pinned = "standing in {0}; reading a repository no longer depends on where the process was started"
+no-standing-dir = "can't tell which directory this command was started in (most likely it was deleted); name where the file should land and run it again"
+cwd-pin-failed = "could not stand in {0} ({1}); still standing where it was started, and if that directory is deleted a repository read will be refused"
+borrow-self = "That's this machine's own network — no need to borrow it; open it directly for a direct connection"
+page-needs-desktop = "Opening a web page from another machine's network only works on desktop for now"
+window-needs-desktop = "Window actions work only on desktop"
+machine-cannot-host = "{0} is a phone — sessions open on computers only"
+hooks-need-a-computer = "There is no claude on a phone — hooks are installed on computers only"
+launch-needs-a-computer = "{0} is a phone — nothing can be opened on it"
+pull-needs-a-computer = "Files can only be pulled to a computer"
+agent-ask-needs-a-computer = "An agent can't run on a phone — ask from a computer"
+
+name-not-pathable = "This name can't go in a path: {0}"
+machine-name-not-pathable = "This machine name can't go in a path: {0}"
+no-such-machine = "No such machine: {0}. Currently in the network: {1}"
+no-such-session = "No such session: {0}"
+no-such-agent = "No agent registered under that name: {0}. Registered: {1}"
+no-agents-registered = "No agents registered yet (register one with khor agents add)"
+not-a-tmux-row = "Not an attachable tmux session: {0}"
+tmux-session-gone = "That tmux session is gone: {0}"
+tmux-no-mouse-option = "This machine's tmux has no mouse option (older than 2.1); attaching {0} anyway, and the wheel stays arrow keys"
+no-terminal-here = "This machine has no terminal to attach to for {0} right now"
+tool-output-cut = "(output too long, truncated)"
+cagent-allow = "Allow"
+cagent-deny = "Deny"
+cagent-denied = "User denied this action"
+cagent-one-turn = "The previous turn isn't finished"
+cagent-one-session = "This shim holds only one session"
+cagent-not-started = "Session hasn't started"
+cagent-no-pipe = "Can't reach claude's output"
+cagent-unknown-mode = "claude has no mode named {0}"
+cagent-mode-refused = "claude refused to switch to that mode"
+cagent-mode-unanswered = "claude didn't respond to the mode change"
+codexagent-no-pipe = "Can't reach codex's output"
+codexagent-bad-answer = "codex's answer to {0} isn't a shape the shim recognizes"
+codex-mode-read-only = "View only, no edits"
+codex-mode-read-only-note = "Reads files and runs commands that change nothing; asks before editing or using the network"
+codex-mode-auto = "Auto in workspace"
+codex-mode-auto-note = "Edits files and runs commands in the workspace without asking; asks before going outside it or using the network"
+codex-mode-full-access = "Do everything without asking"
+codex-mode-full-access-note = "Edits any file, runs any command and uses the network without asking"
+codex-mode-other = "Other: approval {0}, sandbox {1}"
+codexagent-unknown-mode = "codex has no \"{0}\" mode"
+agent-name-blank = "Needs a name"
+agent-name-reserved = "khor already uses this name: {0} (claude, codex, khor, and shell are reserved)"
+agent-needs-a-command = "Needs to say how to start it: khor agents add <name> -- <command...>"
+agents-unknown-id = "No such id in the snapshot: {0} (see khor agents known for what's there)"
+agents-id-not-startable = "{0} is self-installed; khor has no start command for it — once it's installed: khor agents add <name> -- <command...>"
+resume-unknown-session = "Never asked about this conversation: {0} — ask {1} once first"
+command-not-found = "Command not found: {0}. khor looked on this PATH: {1}. Install it, or set KHOR_PATH to point khor at it"
+
+no-such-dir = "No such directory: {0}"
+tunnel-pipe-failed = "Pipe couldn't reach {0}: {1}"
+# Round ROAD-1: `khor reach`, every machine's try at one address.
+reach-no-name = "No address found for {0}"
+reach-refused = "{0} refused the connection: {1}"
+reach-timeout = "{0} didn't answer within {1} s"
+reach-paused = "{0} is paused, so it wasn't asked"
+reach-predates = "{0} runs an older khor that doesn't know this request"
+reach-no-host = "Give an address"
+reach-silent = "{0} accepted the connection but sent no ssh version line (possibly a proxy's fake address)"
+carry-off = "Connect over SSH is off on this machine: khor config set ssh-carry on"
+carry-needs-serve = "khor is not running on this machine, so it can't be connected over SSH"
+carry-not-a-machine = "{0} is not a machine in this network"
+carry-set = "This machine connects {0} over SSH: {1}"
+carry-unset = "This machine no longer connects {0}"
+carry-is-satellite = "{0} is an SSH host and does not run khor, so it can't be connected this way"
+carry-not-up = "The SSH connection to {0} did not come up"
+pipe-via-satellite = "{0} is a satellite, not khor, so a pipe can't go through it; jump through its ssh with ssh -J"
+self-moved = "khor's own binary is no longer at {0} (upgraded or moved) — restart serve"
+agent-brief = """You're attached to khor: a network connecting all of this person's machines.\
+khor's tools are your hands — devices/sessions/ls are for looking, use them freely;\
+open/close/tell leave traces on someone else's machines, so say clearly what you're\
+about to do before you use them. These machines belong to this person — they are\
+not a test environment."""
+store-belongs-to = "This store belongs to {0}; this machine is {1}. Machines sharing a home each need their own — set KHOR_HOME for this one"
+not-a-page = "Not a web address: {0}"
+page-port-taken = "Port {0} on this device is already in use"
+page-ask-ok = "OK"
+page-ask-cancel = "Cancel"
+takeover-no-record = "No conversation record for it — can't take over: {0}"
+no-terminal-form = "Can't attach to a terminal: khor only recognizes the resume syntax claude and codex use in a terminal, and this line doesn't match either: {0}"
+wizard-codex-chat-only = "codex only has a chat form"
+wizard-registered-no-terminal = "Registered agents have no terminal form: khor only knows how claude and codex open in a terminal"
+wizard-registered-no-scheduler = "Registered agents can't act as a scheduler yet: khor's verbs are passed in through claude's and codex's own configs — the protocol's own door isn't wired up yet"
+wizard-unknown-agent = "Unknown agent: {0}"
+takeover-wont-die = "The process on the other end didn't exit — takeover aborted: {0}"
+takeover-writer-busy = "Codex still owns this session and cannot be safely taken over. Exit it in its original terminal, then retry: {0}"
+already-a-chat = "It's already in chat form: {0}"
+already-a-terminal = "It's already in terminal form: {0}"
+host-bad-convention = "Host arguments don't match the convention"
+no-such-session-because = "No such session: {0} ({1})"
+not-a-machine-id = "Not a machine id: {0}"
+label-too-long = "Name is too long — {0} characters max"
+cant-make-peers-dir = "Can't create the peers directory: {0}"
+cant-make-vitals-dir = "Can't create the vitals directory: {0}"
+cant-make-usage-dir = "Can't create the usage directory: {0}"
+bad-channel-name = "Invalid channel name: {0}"
+cant-delete = "Can't delete: {0}"
+remote-close-not-yet = "This session's home is {0} — remote close isn't supported yet; close it from that machine"
+not-khors-to-close = "{0} wasn't started by khor — can't close it; quit it from its own window"
+
+# ── the live kind (node) ──
+not-a-session-id = "Not a session number: {0}"
+session-already-exists = "This session already exists: {0}"
+cant-make-session-dir = "Can't create the session directory: {0}"
+failed-is-not-reportable = "Failure isn't decided by the report — it's decided by the exit code"
+session-over = "This session is already over: {0}"
+cant-read-session-meta = "Can't read the session record: {0}"
+session-meta-garbled = "Session record is garbled: {0}"
+cant-read-session-state = "Can't read session state: {0}"
+session-state-garbled = "Session state is garbled: {0}"
+cant-place = "Can't place {0}: {1}"
+wont-start = "{0} won't start: {1}"
+cant-await-child = "Can't wait for it to finish: {0}"
+hook-payload-garbled = "Hook payload is garbled: {0}"
+hook-payload-no-session = "Hook payload has no session_id"
+
+# ── installing the hook (node) ──
+settings-garbled = "Can't parse {0} — left it untouched: {1}"
+settings-not-an-object = "{0} isn't a JSON object — left it untouched"
+settings-hooks-not-an-object = "hooks in {0} isn't an object — left it untouched"
+settings-event-not-a-list = "hooks.{1} in {0} isn't a list — left it untouched"
+
+# ── this machine's face (node) ──
+no-such-palette = "No such palette: {0}. Available: {1}"
+not-a-palette = "A palette is five #rrggbb values: {0}"
+not-a-variant = "Not a variant: {0}. Available: {1}"
+not-a-face-shape = "Not a shape: {0}. Available: {1}"
+
+# ── the persistent host (node) ──
+no-host = "This session has no host (it's ephemeral, or the host hasn't started yet)"
+host-file-garbled = "Host record is garbled: {0}"
+# A host that took the connection but sent no word back within the
+# handshake's time (item 36): stopped, wedged, or a far pipe that went
+# quiet. Said instead of the socket's own errno ("os error 35").
+host-silent = "The host did not answer for {0} s"
+host-gui-protocol = "The session host protocol does not match"
+no-frame = "Can't read a frame: {0}"
+frame-too-big = "Frame too large: {0}"
+# A machine asked to watch the folders a tree has open, that cannot
+# (no watcher there). Not shown to a person: the face falls back to
+# asking the tree, which is what this says.
+watch-unavailable = "This machine can't watch folders for changes; the tree refreshes when asked instead"
+half-a-frame = "Frame read stopped halfway: {0}"
+cant-find-self = "Can't find its own executable: {0}"
+host-wont-start = "Host won't start: {0}"
+gui-not-installed = "The desktop app isn't installed next to khor ({0}): copy target/release/khor-gui there"
+gui-wont-start = "The desktop app won't start: {0}"
+host-never-ready = "Host wasn't ready within 5 seconds"
+host-died-mute = "Host died right after starting and left no message"
+ghost-never-ready = "Conversation host wasn't ready within 30 seconds"
+agent-wants-a-login = "This agent needs to log in before it can open a session (it said: {0})"
+agent-not-on-a-satellite = "{0} is an SSH host with no khor on it, so an agent can't start there; a terminal can"
+account-name-blank = "This account needs a name"
+account-key-blank = "The key is empty"
+
+account-needs-address = "new-api's address differs by site; give it the address."
+account-address-bad = "Address must start with http:// or https://: {0}"
+account-budget-bad = "Budget must be a positive number"
+account-sub-takes-nothing-else = "A subscription reads this machine's {0} login; it doesn't take a key, address, or budget"
+account-sub-no-login = "This machine has no {0} login — can't register a subscription. Run {1} once first"
+account-sub-already-here = "This machine's subscription is already registered: {0}"
+subscription-computer = "Choose a computer running khor to discover subscriptions"
+subscription-predates = "This machine's khor cannot discover subscriptions yet. Upgrade it and retry"
+subscription-wrong-home = "This machine returned a subscription belonging to another machine"
+provider-has-no-sub = "{0} has no subscription to read; subscriptions exist for: {1}"
+no-such-kind = "Unknown registration kind: {0}. Use bill (pay-as-you-go) or sub (subscription)"
+account-key-elsewhere = "{0}'s key isn't on this machine — change the key on that machine instead"
+no-such-account = "No account registered: {0}"
+no-such-provider = "Unknown provider: {0}. Known providers: newapi, claude, openai, deepseek, moonshot, moonshot-cn, openrouter, codex"
+cant-make-keys-dir = "Can't create the keys directory: {0}"
+resume-running-elsewhere = "This session is already running in another process (pid {0}) — can't start a second one. Continue there, or quit it first"
+agent-speaks-another-acp = "This agent speaks ACP version {0}; khor speaks version 1"
+agent-wont-talk = "This agent didn't start, or doesn't speak ACP: {0}"
+host-gone = "Host is gone — the session may have ended. Check khor sessions"
+cant-open-pty = "Can't open PTY: {0}"
+child-has-no-pid = "Child process has no pid"
+cant-read-pty = "Can't read PTY: {0}"
+cant-write-pty = "Can't write PTY: {0}"
+cant-listen-loopback = "Can't listen on the local port: {0}"
+# "Cookie" here is the local auth token for the PTY listener, not a browser cookie.
+wrong-cookie = "Wrong cookie"
+host-child-wait = "Couldn't wait for the child process to exit: {0}"
+
+web-cant-listen = "Web access can't start — port {0} is taken: {1}. Use a different port: set KHOR_WEB_PORT, then khor serve"
+web-no-such-page = "Web access has no such page: {0}"
+web-bad-host = "Web access only recognizes addresses, not names, and this request reported \"{0}\".\n  Use the link khor web prints; if you set up your own reverse proxy, that path isn't supported in this version"
+web-bad-origin = "This request came from another page ({0}); web access only answers to its own pages"
+web-no-key = "This link has no key. On that machine, run khor web and open the link it prints"
+web-wrong-key = "Wrong key. That machine probably rotated its key — the old link is now dead. Run khor web to get a new one"
+web-no-key-yet = "This machine has no web access key yet (has serve never run?). Run khor serve first, then khor web"
+web-key-empty = "The web access key file is empty: {0}. Delete it — restarting serve will issue a new one"
+upload-too-big = "File too large: web access uploads are capped at {0}MB. For anything bigger, use khor send on that machine"
+upload-needs-machine-and-name = "Uploads need machine and name as query parameters"
+web-door-shut = "This address needs a key. On that machine, run khor web and open the link it prints once — this browser will be remembered after that"
+ssh-wont-run = "Can't run ssh: {0}"
+sat-cant-reach = "SSH can't connect to {0}: {1}"
+# Which segment of a road through a jump broke (`satellite::broken`),
+# with ssh's own last line.
+sat-to-jump-broken = "This machine can't connect to the jump host {0}: {1}"
+sat-jump-to-target-broken = "The jump host {0} can't connect to the target host {1}: {2}"
+# BatchMode stopped at the target's door. khor never takes a password;
+# {1} is the command that puts this machine's key there.
+sat-password-only = "{0} did not accept this machine's key. Log in with a password, or run {1} in a terminal to upload the public key"
+sat-password-refused = "{0} did not accept the saved password"
+sat-password-missing = "No password for {0} is saved on this machine"
+sat-passphrase-missing = "No passphrase for the key {0} uses is saved on this machine"
+sat-passphrase-refused = "{0} did not accept the key {1}, or the saved passphrase is wrong"
+sat-key-locked = "The key {0} has a passphrase. Give it when adding; it is kept only in this machine's keychain"
+sat-key-refused = "{0} did not accept the key {1}. Run {2} in a terminal to upload the public key"
+sat-one-time-code = "{0} asks for a one-time code at every login; khor doesn't support such hosts"
+no-secret-store = "This machine has no system keychain to keep the password in; use key login instead"
+secret-store-failed = "Couldn't use the system keychain: {0}"
+password-not-given = "No password on standard input"
+add-on-no-password = "Adding through the khor host {0} takes key login only: a password stays on the machine that runs ssh and never crosses the network"
+add-on-no-passphrase = "Adding through the khor host {0} can't use a key with a passphrase: a passphrase stays on the machine that runs ssh and never crosses the network"
+add-on-self = "That is this machine; add it directly"
+add-on-predates = "khor on {0} is too old to add machines for you; update it first"
+add-on-needs-serve = "khor on {0} isn't running as a resident, so it can't add machines for you"
+# 添加机器 over ssh (`khor_node::join`). Why a member attempt became a
+# satellite, one sentence each; {0} is the host.
+add-timed-out = "No response within {0} seconds"
+add-why-bin-ro = "{0}'s ~/.local/bin isn't writable"
+add-why-no-build = "khor has no build for {0} yet"
+add-why-cant-place = "Couldn't install khor on {0}: {1}"
+add-why-no-resident = "khor can't keep running on {0}: it stopped when the session ended"
+add-why-start-failed = "khor couldn't start on {0}: {1}"
+add-why-no-pair = "khor on {0} didn't connect back within {1} seconds"
+add-why-no-relay = "{0} can't reach any relay, and connecting it through SSH didn't work either"
+add-no-asset-here = "This machine can't get {0} either"
+add-need-host = "Enter a host first"
+add-lost = "This add's progress is gone; khor may have restarted"
+promote-stayed-satellite = "Couldn't install khor; it's still an SSH host: {0}"
+sat-not-in-known-hosts = "known_hosts has no host key for {0}. Connect with ssh once and accept the fingerprint, then add it again"
+not-my-satellite = "{0} isn't an SSH host this machine added; its readings come from the machine that added it"
+sat-not-sampled-yet = "No reading yet (the machine that added it samples once a minute)"
+sat-no-ssh-host = "{0} is an SSH host, but no SSH address is on record; run khor add --satellite again on the machine that added it"
+sat-send-elsewhere = "{0} is an SSH host connected through {1}; send files with khor send on {1}"
+sat-no-tools = "{0} has neither sha256sum/shasum nor base64; saving there needs it to verify its own copy — without that, nothing is written"
+sat-sent = "Sent to {0}'s home directory, {1} bytes"
+web-key-too-open = "The web access key file's permissions are too open ({0}) — anyone else on this machine can read it and use it as you.\n  Fix: chmod 600 {1}"
+web-face-here = "Web access is here — open it from a phone or another computer:"
+web-face-key-note = "The link carries the key — don't paste it into a synced document. Rotate it: khor web --new"
+web-face-rotated = "Rotated to a new key — every link sent out before this is now dead."
+# "Borrow network" is the term chosen for 借网 elsewhere in this chunk; keep it consistent if other chunks name the same feature.
+web-borrow-needs-app = "Borrow network works only in the desktop app"
+web-face-not-serving = "serve isn't running, so nothing is listening on this address. Run khor serve first"
+web-face-down = "serve is running, but {0} isn't answering, so this link won't open for anyone you send it to.\n  Two common causes: something else is using that port (check serve's output, or set KHOR_WEB_PORT to change it),\n  or the system firewall hasn't allowed khor through — macOS shows a prompt the first time asking \"Allow incoming connections?\",\n  and if someone clicked Deny, or no one was there to click anything, this is what it looks like: the handshake connects but not a single byte of data comes through"
+load-predates = "That machine's khor is too old — it can't report processes or CPU trends yet"
+load-refused = "That machine declined this reading: {0}"
+ws-not-a-dir = "Not a directory: {0}"
+no-checkout = "This path isn't inside a git repository"
+git-predates = "That machine's khor is too old — it can't read git"
+git-refused = "That machine declined this git request: {0}"
+git-history-satellite = "This machine is reached over ssh — khor can't read its git history"
+chat-ended = "This conversation has ended"
+write-predates = "That machine's khor is too old — it can't save the file back"
+drop-too-big = "The file is over {0} MB, too big to drop into a session for now: {1}"
+tree-bad-path = "Invalid path inside directory: {0}"
+tree-too-many = "The directory exceeds the limit of {0} entries"
+tree-too-big = "The directory exceeds the {0} MB session transfer limit"
+tree-entry-unsupported = "Directory transfer cannot include symbolic links or special files: {0}"
+tree-changed = "The directory changed during transfer; retry it"
+tree-copy-inside = "A directory cannot be copied into itself or one of its children"
+folder-picker-unavailable = "Native folder selection is unavailable on this device"
+file-open-unavailable = "The system file panel is unavailable. Try again."
+file-preview-unavailable = "The system cannot preview this file. Open it in another app."
+file-cache-missing = "The temporary file was removed. Try again."
+folder-picker-busy = "The folder picker is already in use"
+drop-into = "Putting in {0}"
+drop-into-of = "Putting in {0} ({1}/{2} done)"
+drop-predates = "That machine's khor is too old to take a dropped file"
+drop-serve-gone = "This machine's khor service stopped partway; the file was not dropped"
+drop-cancelled = "The drop was cancelled; nothing was pasted"
+# Where a machine's received files land (STORE-BRIEF phase 1).
+receive-dir-not-absolute = "A receive location must be absolute or start with ~/: {0}"
+receive-dir-unusable = "The receive location {0} is unusable ({1}); files go to the default location"
+no-vscode = "That machine has no VS Code"
+code-predates = "That machine's khor is too old — it can't open VS Code"
+cant-start-vscode = "Can't start VS Code for the web: {0}"
+no-vscode-output = "VS Code started but its output can't be read"
+vscode-never-answered = "VS Code never said where it's listening"
+# Two refusals, not one: an unknown key sends someone to the list of
+# keys, an unknown value to that key's own ladder.
+config-no-such-key = "No such setting: {0} — khor config list shows them all"
+config-no-such-value = "{0} doesn't take \"{1}\" — it takes {2}"
+
+# khor's verbs as an agent's tools (`khor_node::mcp`). A model reads
+# these and repeats them to a person: the reading three say they change
+# nothing, the acting three say what they do next to their names.
+mcp-devices = "Every machine on the network, with its CPU/memory/disk/GPU right now. Reads only; changes nothing."
+mcp-sessions = "Every session on the network: id, state word, title, and which machine it's on. Reads only; changes nothing."
+mcp-ls = "Lists a directory on a machine. Without a path, that machine's home directory. Reads only; changes nothing."
+mcp-ls-machine = "The machine's name (as devices lists it)"
+mcp-ls-path = "An absolute path; omitted means the home directory"
+mcp-open = "Opens a persistent session on a machine running one command. **This starts a process on that machine.**"
+mcp-open-machine = "Which machine to open it on"
+mcp-open-command = "The command to run (handed to that machine's shell)"
+mcp-open-title = "What the row is called; omitted means the command itself"
+mcp-open-cwd = "Which directory to run in; omitted means that machine's home directory"
+mcp-close = "Closes a session. **This ends the process on that machine.**"
+mcp-close-session = "The id of the session to close"
+mcp-tell = "Leaves a line in a machine's window. **Whoever is there will see it.**"
+mcp-agents = "List local ACP agents and configured A2A agents, or agents on a paired khor home named by machine. A2A cards include skills and selected HTTP interface. Availability means configured/program present, not authenticated or reachable now."
+mcp-agent-disconnect = "Disconnect an a2a:<name> registration on the selected khor home (default here). Existing task receipts remain queryable and cancelable."
+mcp-agent-connect = "Connect a native A2A v1 agent by Agent Card URL or service base URL. The remote machine needs no khor. The name is returned as a2a:<name>. Omit machine to use this khor execution home. No secrets in arguments; bearer setup uses khor agents connect <name> <url> --token-stdin locally."
+mcp-delegate = "Delegate to a registered ACP agent or a native a2a:<name> agent. Omit machine for this khor home; native A2A targets need no khor on the remote machine. Starting is not completion: task_wait until terminal or input required. Use context for a follow-up; use task plus the user reply for an A2A task awaiting input. Never infer user approval. Retry only identical arguments and request ID; uncertain A2A sends are reconciled without replay."
+mcp-task-status = "Read the durable status, partial output, revision and pending permission of a delegated task."
+mcp-task-wait = "Wait for task changes, a terminal state or required input. revision is the latest decimal string. For ACP khor.approval ask the user before task_answer. For A2A TASK_STATE_INPUT_REQUIRED, ask the user and send their reply via delegate with task/context and a new request ID. AuthRequired may need credential setup."
+mcp-task-cancel = "Request cancellation of a delegated task. Confirm task status; cancellation intent alone does not prove the agent stopped."
+mcp-task-answer = "Answer the exact pending ACP permission after user approval. Use its ask ID and a listed option ID; omit option to dismiss. Never infer approval from the delegation itself."
+mcp-task-list = "List this caller device's task receipts for an agent, optionally by context or after cursor. Follow returned next for another page. Native A2A lists are cached receipts (cached=true); use task_status or task_wait for a fresh reading."
+mcp-listing-cut = "…(there's more; this listing was cut)"
+mcp-open-needs-command = "open needs a command"
+mcp-closed = "Session closed"
+mcp-told = "Message delivered"
+
+journal-started = "Resident started"
+journal-by-pump = "background sync"
+journal-by-forced = "sync now"
+journal-by-ask = "request"
+journal-by-hop = "to a middle machine, for forwarding"
+journal-by-onward = "forwarding for another machine"
+journal-by-pair = "pairing"
+journal-dial-ok = "Dial succeeded ({0}) in {1} ms, {2}"
+journal-dial-refused = "Dial refused ({0}), {1} ms: it is paused or in the background; not dialled again until it connects"
+journal-dial-failed = "Dial failed ({0}) after {1} ms: {2}"
+journal-won-direct = "the attempt with addresses answered first"
+journal-won-relay = "the relay-only attempt answered first"
+journal-won-early = "the request rode the handshake"
+journal-offered = "Tried: {0}"
+journal-offered-direct = "{0} direct addresses"
+journal-offered-relays = "relays {0}"
+journal-offered-carried = "SSH carry"
+journal-backoff = "Failure {0} in a row; background dial again in {1} s"
+journal-timed-out = "timed out"
+journal-settled = "The connection settled on {0}, round trip {1} ms"
+journal-settled-relay = "{0} ({1})"
+journal-road-direct = "direct"
+journal-road-relay = "relay"
+journal-road-carried = "carried"
+journal-road-unknown = "an undetermined road"
+journal-paths = "Paths: {0}"
+journal-retired = "Connection retired: {0}; nothing heard for {1} ms; it lasted {2} s"
+journal-why-silent = "silent"
+journal-why-unanswered = "request unanswered"
+journal-why-closed = "closed by the far side or QUIC"
+journal-why-network = "no answer after a network change"
+journal-why-replaced = "let go on purpose"
+journal-why-paused = "paused"
+journal-why-suspended = "app went to the background"
+journal-why-asleep = "it went to the background or paused"
+journal-why-departed = "its relay said it left"
+journal-departed = "Its relay reported it disconnected"
+journal-inbound = "It connected to this machine"
+journal-network = "Network change: {0}"
+journal-net-wake = "woke from sleep"
+journal-net-path = "the system reported a new network path"
+journal-net-clock = "clock jump (sleep)"
+journal-net-relay = "the home relay is connected again"
+journal-net-addrs = "this machine's interface addresses changed"
+journal-addrs = "This machine's addresses are now: {0}"
+journal-addrs-none = "This machine has no usable address"
+journal-home = "Home relay {0}: {1}"
+journal-home-none = "No home relay"
+journal-home-connected = "connected"
+journal-home-connecting = "connecting"
+journal-home-down = "disconnected"
+journal-home-down-why = "disconnected: {0}"
+journal-ears = "New endpoint bound in {0} ms"
+journal-ears-failed = "Binding a new endpoint failed: {0}"
+journal-rest = "Moved to the background: every connection let go, no dialling until it is back in front"
+journal-front = "Back in front: the same endpoint, ports rebound, relay checked, every path probed; the sync round that followed took {0} ms"
+journal-hop-up = "Forwarding through {0} is up"
+journal-hop-none = "Tried {0} middle machines; none forwarded"
+journal-carry-up = "SSH carry is up"
+journal-carry-down = "SSH carry ended: {0}"
+journal-person-face = "A window came to the front: syncing now, without waiting out the backoff"
+journal-person-page = "Machine page opened: syncing now, without waiting out the backoff"
+journal-here = "This machine"
+journal-empty = "No connection records yet"
+journal-report-title = "khor connection record"
+journal-report-machine = "Machine: {0} ({1})"
+journal-report-version = "Version: {0}"
+journal-report-span = "Span: last {0} minutes, {1} entries"
+journal-report-relays = "Relays: {0}"
+journal-report-saved = "Saved: {0}"
+journal-report-cant = "Couldn't save the report: {0}"
+journal-learnt = "Public address told by relays: {0} ({1})"
+journal-learnt-varies = "; this machine's NAT gives each destination its own port"
+journal-learnt-none = "No relay has told this machine its public address"
+journal-no-relay = "No relay to go out by: no home relay and no relay answering for over ten minutes; dials ask a middle machine first and give relays a short wait"
+journal-relay-back = "A relay to go out by again: a relay answered"
+journal-tun = "The default route goes through a proxy's TUN ({0}); UDP to the internet is forwarded by the proxy"
+journal-tun-off = "The default route no longer goes through a proxy's TUN"
+journal-path-opened = "Direct path opened: {0}"
+journal-path-selected = "Now on {0}: {1}"
+journal-path-rtt = ", round trip {0} ms"
+journal-path-hop = "Now through {0}"
+journal-path-ssh = "Now carried over SSH"
+journal-path-started = "New connection on {0}: {1}"
+journal-path-started-hop = "New connection through {0}"
+journal-path-started-ssh = "New connection carried over SSH"
+journal-paths-missed = "{0} path changes went unrecorded"
+journal-round = "Hole punching, {0} round(s): candidates here {1}; candidates there {2}"
+journal-round-none = "none"
+journal-sync-failed = "Syncing {0} failed and the round stopped there: {1}"
+journal-sync-apart = "{0} not synced; the rest of the round went on: {1}"
+journal-pen-retired = "{0}: the other machine holds records under this machine's writer name {1} that this machine does not have; the name is retired, and some of what was written under it may not have synced"
+journal-why-title = "Why not direct"
+journal-why-line = "{0}: {1}, {2}"
+journal-why-no-round = "this machine has not punched toward it (the side that opened the connection punches)"
+journal-why-v6-here = "it has a public IPv6 address and this machine has none"
+journal-why-v6-there = "this machine has a public IPv6 address and it has none"
+journal-why-hard-nat = "neither side has a public IPv6 address, and this machine's NAT gives each destination its own port, so IPv4 cannot be punched"
+journal-why-tun = "the default route goes through a proxy's TUN, which rewrites UDP ports"
+journal-why-no-public = "this machine does not know its public address (no relay offers QUIC address discovery)"
+journal-why-punched = "{0} round(s) of hole punching, none of its candidates answered"
+
+[gui]
+update-runtime-cache = "Runtime program cache"
+update-runtime-retained = "Kept for updates and rollback"
+update-runtime-retained-hint = "Keeps current, rollback and unconfirmed updates; collects released copies automatically"
+update-runtime-active-old = "Extra copies kept for sessions"
+update-runtime-active-hint = "Kept while sessions use them and collected after they finish"
+update-runtime-unknown = "Other retained items"
+update-runtime-idle = "Released older programs"
+update-runtime-clean = "Clean released versions"
+update-runtime-failed = "Cleanup failed; retry"
+update-label = "Software update"
+update-app-current = "App is up to date"
+update-apply-selected = "Update selection"
+update-companion = "Companion CLI"
+update-include-cli = "Include in this update"
+update-cli-complete = "CLI updated"
+update-component-current = "Current installation"
+update-restart = "Restart to update"
+update-save-files = "Save unsaved file edits first"
+update-finish-attachments = "Send or remove attachments first"
+update-finish-sends = "Resolve unconfirmed messages first"
+update-finish-input = "Finish the current text input first"
+update-draft-storage = "Drafts could not be saved; restart is deferred"
+update-window-not-ready = "A window is not ready; try again shortly"
+update-check = "Check for updates"
+update-checking = "Checking for updates"
+update-available = "An update is available"
+update-download = "Download update"
+update-downloading = "Downloading {0}%"
+update-verifying = "Verifying update"
+update-ready = "Update is ready"
+update-installing = "Updating"
+update-complete = "Update complete"
+update-failed = "Update incomplete; try again"
+update-current = "Up to date"
+update-channel = "Update channel"
+update-stable = "Stable"
+update-beta = "Beta"
+update-automatic-check = "Automatically check for updates"
+update-automatic-download = "Automatically download updates"
+update-install-on-start = "Install downloaded updates at launch"
+update-install-on-start-hint = "Deferred once you start using the app; current input is preserved"
+update-later = "Restart later to update"
+update-store = "Update through the App Store or TestFlight"
+update-development = "Development build"
+update-external = "Update through the original installer"
+update-machine-app = "Update in Khor Settings → About on this machine"
+update-queued = "Waiting to update"
+update-waiting-machine = "Waiting for the machine"
+update-confirming = "Waiting for machine confirmation"
+update-machines = "Update multiple machines"
+update-start = "Start update"
+update-cancel-waiting = "Cancel waiting"
+update-selected-hint = "Only selected machines update; offline machines continue when connected"
+update-clear-record = "Clear update result"
+update-queue-machine = "Queue machine update"
+notifications = "Notifications"
+notification-needs-input = "Needs your input"
+notification-completed = "Response completed"
+notification-failed = "Execution failed"
+notification-command = "Command finished"
+notification-notice = "New notice"
+notification-handled = "Resolved"
+notification-empty = "No notifications"
+notification-empty-how = "Requests for input, completed tasks and failures appear here"
+notification-read-all = "Mark all as read"
+notification-mute = "Mute this session"
+notification-follow = "Notify me about this session"
+notification-remove = "Remove record"
+notification-missing = "This session is no longer in the list"
+notification-unread = "Unread"
+recovery-waiting-owner = "Rejoining the new execution device after the previous view’s connection or transfer settles"
+recovery-conflict = "This session has another unresolved request; check the original request"
+recovery-capacity = "This device has reached its pending recovery limit; check existing requests first"
+recovery-title = "Session recovery"
+recovery-pill-connecting = "Connecting…"
+recovery-pill-continuing = "Continuing…"
+recovery-pill-unconfirmed = "Connection unconfirmed"
+recovery-pill-failed = "Unable to connect"
+recovery-pill-directory = "Choose a folder"
+recovery-pill-unsupported = "Unable to continue"
+recovery-no-home = "Execution device is unverified; history remains read-only"
+recovery-join = "Rejoin"
+recovery-new-shell = "New shell"
+recovery-resume = "Recover session"
+recovery-check = "Check and recover"
+recovery-recheck = "Recheck and recover"
+recovery-unsupported = "Recovery was previously unsupported; you can explicitly recheck"
+recovery-live = "Running"
+recovery-ended = "Ended"
+recovery-offline = "Execution device is offline"
+recovery-execution-unknown = "Execution state is unknown"
+recovery-previous = "Previous session"
+recovery-pending = "Recovery is pending; retry checks the same request"
+recovery-unknown = "Recovery outcome is unknown; retry keeps the same request"
+recovery-unresolved = "This device holds an unresolved request"
+recovery-retry-intent = "Check original request"
+recovery-unavailable = "Recovery is currently unavailable"
+recovery-refused = "Recovery request was refused"
+recovery-directory-required = "The original directory is unavailable; choose one for a new shell"
+recovery-choose-directory = "Choose directory"
+recovery-storage = "Cannot safely preserve or settle recovery; check the original request"
+recovery-invalid-intent = "The saved recovery request cannot be read; no replacement was created"
+git-history-search-page = "Search commits on this page"
+git-history-updated = "New repository history is available"
+git-history-newer = "Newer"
+git-history-older = "Older"
+agent_list_unknown_home = "Source machine unknown; refresh the list"
+session_state_unknown = "No execution state is available"
+session_observation = "Read-only record"
+content_ambiguous_source = "Multiple session records match this identity; the content source is ambiguous"
+content_loading = "Reading session content source"
+content_no_source = "No readable session record"
+content_unreadable = "The session record cannot be read right now"
+content_remote_not_connected = "The session content source on this machine is not connected yet"
+history_older = "Load older content"
+history_newer = "Load newer content"
+history_record = "Read original record"
+history_record_note = "This content is not expanded. Read it in sections as needed."
+history_record_next = "Read next section"
+history_record_restart = "Read from start"
+history_find = "Search all conversation text"
+history_find_placeholder = "Search conversation text"
+history_find_scope = "Searches text present when this search starts, including unloaded pages"
+history_find_partial = "Some records could not be searched. Their original records remain available."
+history_find_more = "Continue search"
+history_find_invalid = "Enter valid search text, up to 256 bytes"
+history_searching = "Reading conversation text"
+history_match_excerpt = "Text around this match"
+history_copy = "Copy this text part"
+history_copy_large = "This text part is too long to copy. Export its original record from the context menu."
+history_copy_incomplete = "This text part is not fully expanded and was not copied"
+history_export = "Export original record"
+history_export_unavailable = "Streaming export is unavailable here. The original record can still be read in sections."
+history_action_failed = "Reading failed. Retry the search."
+history_copied = "Text copied"
+history_exported = "Original record exported"
+history_find_changed = "The records changed. Start the search again."
+history_copy_failed = "The text could not be copied"
+history_export_failed = "The original record could not be exported"
+history_changed = "The record changed. Showing the latest content."
+history_read_failed = "Could not read history"
+history_capture_scope = "This shows content Khor actually received and recorded. External changes made while disconnected may not be included."
+history_capture_gap = "Continuous capture cannot be confirmed across {0} interval(s). External changes in those intervals may be absent."
+agent-compatible-provider = "OpenAI-compatible service"
+agent-model-account = "Model account"
+agent-usage-account = "Usage account"
+agent-provider = "Model provider"
+agent-account-name = "Account name"
+agent-credential-home = "Credential home"
+agent-base-url = "Base URL"
+agent-base-override = "Custom endpoint"
+agent-base-default = "Use provider endpoint"
+agent-connect = "Connect account"
+agent-connecting = "Connecting"
+agent-auth-continue = "Continue"
+agent-auth-open = "Open authorization page"
+agent-auth-local = "Credentials stay on the selected device; other devices use this account through it"
+agent-default-model = "Default model"
+agent-model-search = "Search or enter model ID"
+agent-model-refresh = "Refresh models"
+agent-model-loading = "Loading model catalog"
+agent-model-manual = "You can also enter a model ID"
+agent-model-save-default = "Save default model"
+agent-account-add = "Add model account"
+agent-account-auth = "Set up model access"
+agent-model-next-turn = "A reply is running; changes apply next turn"
+agent-model-session = "Conversation model"
+agent-provider-missing = "Choose a provider and credential home"
+new-session-accounts-loading = "Reading model accounts on this computer"
+new-session-accounts-missing = "This computer has no model account ready for conversations"
+new-session-machine-missing = "The previous computer is no longer in this network; choose another computer"
+new-session-host-required = "This device cannot run a session; choose a computer"
+new-session-launch-missing = "This launch method is no longer available; choose another method"
+new-session-create-missing = "The agent did not return a new session"
+agent-commands = "Agent commands"
+agent-auth-wait = "Complete the provider sign-in steps"
+agent-usage-not-configured = "Usage lookup is not configured"
+agent-account-ready = "Credentials saved"
+agent-reasoning-capability = "Supports reasoning"
+agent-image-capability = "Images"
+agent-account-inference = "Model access"
+agent-auth-retry = "Reconnect"
+agent-save-and-use = "Use selected model"
+agent-auth-failed = "Connection did not finish"
+# 2026-10-18: action labels have no trailing ellipsis, including actions
+# that open dialogs. This supersedes the older conventions recorded below.
+launch-method = "Start with"
+launch-add = "Save as startup preset"
+launch-manage = "Manage startup presets"
+launch-attach-agent = "Connect agent"
+launch-add-title = "New startup preset"
+launch-edit-title = "Edit startup preset"
+launch-command = "Startup command"
+launch-shell-hint = "Default shell, or enter a command"
+launch-command-note = "Runs once when created; reconnecting does not run it again"
+launch-built-in = "Built in"
+launch-remove = "Delete this startup preset?"
+path-results-cut = "This directory listing is incomplete; you can enter a path directly"
+files-cancelling = "Cancelling…"
+content-choose-exit = "The original machine is no longer in the network. Choose an exit to open this page"
+term-theme-storage-error = "Applied in this window; could not save on this device"
+term-theme-soft = "Soft Dark"
+term-theme-warm = "Warm Light"
+term-theme-contrast = "High Contrast"
+term-theme-automatic = "Follow appearance"
+term-theme-readability = "Readability protection"
+term-theme-readability-note = "Adjust text colours that are too close to their background"
+term-theme-protect-light = "Mild"
+term-theme-protect-standard = "Standard"
+term-theme-protect-strong = "Strong"
+term-theme-title = "Colors"
+term-theme-palette = "Terminal palette"
+term-theme-follow = "Match khor"
+term-theme-presets = "Presets"
+term-theme-mine = "My palettes"
+term-theme-customize = "Customize"
+term-theme-customize-title = "Customize terminal palette"
+term-theme-copy-name = "{0} · My palette"
+term-theme-basic = "Basic colors"
+term-theme-ansi = "ANSI 16 colors"
+term-theme-extended = "Extended colors · 16–255"
+term-theme-extended-note = "Enter HEX values starting at color 16; leave empty for the standard palette"
+term-theme-bad-json = "The file is not valid JSON"
+term-theme-bad-color = "Use HEX colors such as #RRGGBB; selections also accept #RRGGBBAA"
+term-theme-bad-extended = "Extended colors need at most 240 HEX values"
+term-theme-large = "Palette files must be smaller than 100 KB"
+term-theme-full = "You can save at most 50 custom palettes"
+term-theme-export = "Export"
+term-theme-save = "Save palette"
+term-theme-saved = "Palette saved"
+term-theme-imported = "Palette imported"
+term-theme-exported = "Palette exported"
+term-theme-copied = "Palette JSON copied"
+term-theme-remove-name = "Delete palette “{0}”?"
+term-color-bright = "Bright {0}"
+term-color-pick = "{0} color picker"
+term-color-hex = "{0} HEX"
+window-surface-title = "Window"
+window-surface-material = "Background material"
+window-surface-outline = "Window outline"
+window-surface-outline-hint = "Keep a visible edge around translucent windows"
+window-surface-opacity = "Background opacity"
+term-color-background = "Background"
+term-color-foreground = "Text"
+term-color-cursor-accent = "Cursor text"
+term-color-selection = "Selection"
+term-color-selection-foreground = "Selected text"
+term-color-black = "Black"
+term-color-red = "Red"
+term-color-green = "Green"
+term-color-yellow = "Yellow"
+term-color-blue = "Blue"
+term-color-magenta = "Magenta"
+term-color-cyan = "Cyan"
+term-color-white = "White"
+
+agent-recognition = "Agent recognition"
+recognition-machine = "Computer"
+recognition-empty = "No khor computers to configure"
+recognition-enable = "Enable"
+recognition-disable = "Undo setup"
+recognition-configured = "Configured"
+recognition-changed = "Configuration changed"
+recognition-absent = "Configuration not found"
+recognition-error = "Needs attention"
+recognition-claude-auto = "Automatic status detection"
+recognition-claude-note = "Reads native status and conversation records without hooks"
+recognition-codex-note = "Use the conversation ID as the Codex terminal title; applies on next launch, removable to restore the previous setting"
+recognition-user-config = "Configured outside khor"
+recognition-removed-note = "Restore only khor changes, keeping later manual edits"
+recognition-open = "Configure recognition"
+thread-unbound = "Thread unavailable"
+agent-setup = "Configure khor"
+agent-setup-hint = "khor runs and saves context on the account device; another device uses its own context"
+agent-add-key = "Register an API account using ＋ at the top left, then choose it here"
+agent-account = "Account"
+agent-model = "Model name"
+agent-deny = "Decline"
+agent-approve-hint = "Approve to execute this operation"
+agent-choose-first = "Configure the khor account and model below the input"
+agent-placeholder = "Ask khor, or type / to run a command"
+console-input = "Additional input"
+console-input-hint = "Input goes only to the executor"
+console-owner = "Run on {0}"
+console-title = "Choose a command"
+console-hint = "↑↓ select · Tab complete · Esc dismiss"
+console-running = "Command running"
+console-done = "Command completed"
+console-failed = "Command failed"
+console-interrupted = "Command interrupted"
+console-cancelled = "Command cancelled"
+console-open-session = "Open command session"
+console-placeholder = "Leave a note, or type / for a command"
+console-attached = "Select files using command arguments"
+console-no-choices = "No matching completions"
+conn-home = "Home relay"
+conn-home-ok = "{0} · connected"
+conn-home-down = "{0} · can't connect"
+conn-home-none = "Not on any relay yet"
+conn-relay-quiet = "No round trip measured"
+conn-peer-rtt = "round trip {0}"
+conn-peer-failed = "Last error ({0}): {1}"
+conn-unanswered = "The resident didn't answer"
+relays-preferred = "Preferred relay"
+relays-preferred-auto = "Automatic (nearest)"
+relays-preferred-note = "Homes here whenever it's reachable; takes effect from the next reconnect"
+waiting-on = "Still waiting for {0} · {1}"
+waiting = "Still waiting · {0}"
+waiting-cancel = "Stop Waiting"
+waiting-stopped = "Stopped waiting for {0}"
+waiting-stopped-here = "Stopped waiting"
+term-rejoining = "Reconnecting to {0}"
+term-rejoining-here = "Reconnecting"
+term-rejoining-how = "Reconnects by itself once {0} is running khor and online"
+term-rejoining-how-here = "Reconnects by itself once that machine is running khor and online"
+notice-rejoin-short = "Reconnecting {0}"
+notice-host-lost-how = "khor's host for this session on {0} isn't answering; reconnects by itself once it's back"
+notice-retry-now = "Retry Now"
+notice-detail = "Details"
+notice-image-failed-short = "Image not sent to {0}"
+notice-image-failed = "The image didn't reach {0}"
+notice-file-failed-short = "File not sent to {0}"
+notice-file-failed = "The file didn't reach {0}"
+notice-say-failed-short = "Message not sent to {0}"
+notice-say-failed = "The message didn't reach {0}"
+notice-why-unreached = "{0} can't be reached right now"
+notice-why-serve-gone = "This machine's khor stopped midway"
+notice-why-predates = "khor on {0} is too old to take files"
+notice-why-too-big = "Over {0} MB; too big to put in a session"
+notice-why-other = "{0} didn't take it; its words are under Details"
+link-last-heard = "{0} · last heard {1}"
+window-minimize = "Minimize"
+window-maximize = "Maximize / restore"
+window-close = "Close window"
+find-everything = "Search everything"
+find-hint = "Sessions, machines, workspaces, tabs, pages"
+find-nothing = "Nothing matched"
+sessions-tab = "Sessions"
+new-session = "New session"
+new-session-machine = "Machine"
+session-tabs = "Open sessions"
+session-tabs-focus = "Click to focus this session’s tabs"
+session-tabs-all = "Click to show all sessions"
+rail-more = "More"
+nav = "Navigation"
+nav-settings = "Settings"
+my-khor = "My khor"
+map-latency = "Latency"
+map-heard = "Last heard"
+map-facts = "Link details"
+reading-last = "Last {0}"
+dial-last-route = "Last reported route · {0}"
+dial-reverse = "Reverse {0}"
+dial-ring-fast = "30 ms"
+dial-ring-mid = "120 ms"
+dial-key-fast = "Under 30 ms"
+dial-key-mid = "Under 120 ms"
+dial-key-slow = "Slower"
+dial-key-none = "No road"
+dial-count = "{0} machines · {1} reachable"
+dial-view-map = "Map"
+dial-view-matrix = "Matrix"
+dial-rearrange = "Rearrange"
+dial-look = "Show {0}'s roads"
+dial-to = "To {0}"
+dial-last-answer = "Last answered {0}"
+dial-via = "Relay · {0}"
+dial-holds-root = "Holds the root"
+dial-faces = "Faces"
+dial-faces-open = "{0} open"
+dial-some = "{0} items"
+dial-some-busy = "{0} · {1} busy"
+dial-none = "None"
+dial-new-terminal = "New terminal"
+dial-rename = "Rename and face"
+dial-forget = "Forget this machine"
+dial-repair = "Pair again"
+dial-invite = "Make a ticket"
+dial-pair = "Pair with a ticket"
+dial-matrix = "Roads as each machine reports them"
+dial-reported-by = "Reported by {0}"
+search-open = "Search"
+search-close = "End search"
+page-choose-machine = "Choose a machine"
+page-address = "Enter an address"
+page-none = "No pages open"
+page-none-how = "Use the ＋ above to open one"
+page-machine = "Choose machine"
+# The browser pill's list (sb-a, 2026-10-09): the caption over a machine's recent addresses.
+page-recent-on = "Recently opened on {0}"
+nav-order = "Navigation bar"
+nav-order-note = "The first four show on the bar; the rest are under More"
+type-size = "Text size"
+ui-size-system = "Interface text follows the system"
+ui-size = "Interface text size"
+term-size = "Terminal text size"
+term-size-sample = "\ue0a0 main  \uf07b ~/khor ❯ Il1 O0 {}"
+term-font = "Font"
+term-font-system = "System default"
+term-font-added = "Added fonts"
+term-font-add = "Add Font File"
+term-font-bad = "This font file can't be read: {0}"
+term-font-too-big = "Font files are limited to {0} MB"
+term-wake = "Show keyboard"
+term-wake-note = "Automatic: tapping the line being typed shows the keyboard, tapping elsewhere hides it"
+term-wake-auto = "Automatic"
+term-wake-screen = "On any tap"
+term-wake-button = "With the keyboard button"
+block-copy-output = "Copy Output"
+block-copy-command = "Copy Command"
+block-rerun = "Run Again"
+block-to-agent = "Send to Agent"
+block-peek = "View as Data"
+command-prev = "Previous Command"
+command-next = "Next Command"
+key-group-commands = "Commands"
+finished-notify = "Notify when a command finishes"
+finished-notify-off = "Don’t notify"
+finished-notify-after = "Commands longer than {0}"
+finished-on = "{0} finished on {1} · exit {2} · {3}"
+finished-on-plain = "{0} finished on {1} · {2}"
+open-dir = "Open Enclosing Folder"
+new-session-here = "New Session Here"
+paste-ask = "Paste {0} lines?"
+clip-read-ask = "A program in this terminal wants to read the clipboard"
+clip-read-allow = "Allow Reading"
+clip-read-deny = "Don’t Allow"
+term-new-output = "New output"
+command-history = "Command History"
+command-history-search = "Search commands"
+command-history-here = "This Folder"
+command-history-failed = "Failed"
+command-history-none = "No commands found"
+command-history-exit = "exit {0}"
+command-history-runs = "{0} runs"
+term-picture = "Picture"
+term-bell = "Bell"
+term-bell-note = "When a terminal rings, the Mac flashes its edge and the phone vibrates lightly"
+bell-rang = "Bell rang"
+term-predict = "Predict typing"
+term-predict-note = "When a machine echoes slowly, what you type shows at once, underlined, until it answers"
+term-block-lines = "Command separators"
+term-block-lines-note = "A hairline between commands, and a stripe at the left showing how each one exited"
+term-keys-hw = "Show extra keys with a hardware keyboard"
+term-keys-hw-note = "When you type on a hardware keyboard, the extra keys start open. The extra keys button at the bottom opens or closes them any time"
+term-joy-haptic = "Joystick haptics"
+term-joy-haptic-note = "A light tick for each arrow the cursor joystick sends, a firmer one when it changes direction"
+term-option-meta = "Use Option as Meta key"
+term-option-meta-note = "Off, Option types special characters, such as ™ for ⌥2; on, combinations like ⌥B and ⌥F go to the shell. ⌥← ⌥→ ⌥⌫ move and delete by word either way."
+term-tmux-marks = "Command marks in tmux"
+term-tmux-marks-note = "Add this line to ~/.zshrc and shells in tmux mark their commands, for the session row, command history and jumping between commands. Panes opened in khor already do."
+term-tmux-marks-copy = "Copy line"
+term-cursor = "Cursor style"
+term-cursor-block = "Block"
+term-cursor-bar = "Bar"
+term-cursor-underline = "Underline"
+term-cursor-blink = "Blinking cursor"
+term-history = "Scrollback lines"
+term-history-note = "About {0} MB per terminal"
+machine-sessions = "Sessions on this machine"
+pull-to-sync = "Pull to sync"
+release-to-sync = "Release to sync"
+syncing = "Syncing"
+synced-now = "Synced"
+row-unreachable = "Down · {0}"
+row-ran-ok = "{0} succeeded"
+row-ran-failed = "{0} failed"
+# How a dead terminal row ended (P5-SHELL item 3).
+row-ended-exit = "Exit code {0}"
+row-ended-host = "Host was terminated"
+# A dead terminal row with no last screen: the commands it ran.
+ended-commands = "Recent commands"
+ended-commands-none = "No commands were recorded"
+day-unreachable = "Unreachable"
+reading-unreachable = "Down · last {0}"
+machine-cant-reach = "Can't reach {0}"
+# "Quota" (not "Usage") — the `khor usage` command already owns that word.
+accounts-tab = "Quota"
+accounts-empty = "No API accounts registered yet — register one and its usage shows up here."
+accounts-empty-how = "Use the ＋ above to register an account"
+accounts-register = "Register"
+subscriptions-note = "Discover logins across your network; import keeps each login on its own machine"
+subscriptions-no-computers = "No computers available to discover subscriptions"
+subscriptions-import = "Import subscription"
+subscriptions-search = "Search subscriptions to import"
+subscriptions-empty = "No subscriptions to import"
+# Kept distinct from `quota-by` ("Provider", the grouping axis) to avoid a duplicate string in this section.
+accounts-provider = "Vendor"
+accounts-provider-newapi = "New-api site"
+accounts-provider-claude = "Claude API"
+accounts-provider-openai = "OpenAI API"
+accounts-provider-deepseek = "DeepSeek"
+accounts-provider-moonshot = "Moonshot (international)"
+accounts-provider-moonshot-cn = "Moonshot (China)"
+accounts-provider-openrouter = "OpenRouter"
+accounts-provider-codex = "Codex"
+quota-sub-provider-claude = "Claude"
+vendor-claude = "Claude Code"
+vendor-cursor = "Cursor Agent"
+# zh.toml uses the conversational "叫什么" (what's it called) here and
+# the plain "名字" for `new-session-name` — kept distinct in English too.
+accounts-name = "Nickname"
+accounts-address = "Address"
+accounts-key = "Key"
+accounts-key-stays = "The key stays on this machine only; other machines read the numbers this one reads."
+accounts-needs-admin = "This provider needs an admin key to read usage — a regular API key can't."
+accounts-unit = "Unit"
+accounts-unit-blank = "Leave blank to use {0}"
+accounts-budget = "Monthly budget"
+accounts-budget-hint = "Leave blank to track the number without drawing a ring"
+accounts-no-budget = "No budget set — number only"
+# zh's "怎么了" (what's wrong) reads more casual than `axis-state`'s
+# plain "状态" — "Condition" keeps that difference and avoids a
+# same-section duplicate with "Status".
+accounts-state = "Condition"
+accounts-spent = "Spent"
+accounts-of = "{0} / {1}"
+accounts-unlimited = "Unlimited"
+accounts-remaining = "Remaining"
+accounts-resets = "Reset"
+accounts-expires = "Expires"
+accounts-this-month = "This month"
+# Not the usage range's "All" (`sessions-all`, a time-window filter) —
+# this is a running total, so "Lifetime" pairs naturally with "This month".
+accounts-all-time = "Lifetime"
+accounts-models = "Models"
+accounts-just-now = "Just now"
+accounts-read-here = "Just read on this machine"
+accounts-read-from = "Read by {0}, {1}"
+# The bare `remove` key already owns "Remove" (the search chip's own
+# control) — "Remove account" keeps this menu item distinct.
+accounts-remove-confirm = "No longer on any machine — the key still needs deleting on its own machine"
+accounts-edit = "Edit"
+accounts-key-keep = "Leave blank to keep the current key; a key can only be changed on the machine that stores it"
+accounts-balance-only = "Balance only"
+accounts-trouble-key-refused = "Key was rejected"
+accounts-trouble-unreachable = "Can't connect"
+accounts-trouble-unreadable = "Can't parse the response"
+accounts-trouble-cooling = "Just failed — wait before retrying"
+accounts-trouble-no-key = "No key for this account on that machine"
+accounts-trouble-no-reading = "That machine hasn't responded yet"
+accounts-trouble-gateway-too-old = "This new-api site is too old for /api/usage/token/ (needs v0.9+; v0.10.8+ for exhausted tokens)"
+accounts-trouble-unknown-provider = "This khor doesn't recognize this provider — upgrade it to read this"
+accounts-trouble-no-login = "{0} isn't logged in on that machine"
+accounts-trouble-login-stale = "{0}'s login on that machine expired — run {1} there once"
+# ⚠️ Tombstone: accounts-subscription, the probed row's name, retired 2026-09-22 (docs/SHELL.md 第七轮 第 3 条; now [msg] sub-auto-name).
+quota-kind = "Type"
+quota-kind-sub = "Subscription"
+quota-kind-bill = "Billing"
+accounts-sub-note = "Subscription reads this machine's {0} login — no key needed"
+quota-by = "Provider"
+quota-from = "Source"
+quota-from-khor = "Registered in khor"
+quota-credits = "Extra usage"
+quota-credits-monthly = "Monthly cap"
+quota-credits-out = "Out of credits"
+quota-group = "Group by"
+quota-group-none = "No grouping"
+accounts-log-capped = "Only fetched the most recent {0} entries"
+
+machine-here = "This machine"
+# **The list rows' four corners** (UX-48): a machine's connection on the
+# right, or Offline. UX-50: the latency after the name; under it CPU, Memory,
+# then GPU where there is one, else Disk — each a label (vitals-name-*) and a
+# value.
+row-pct = "{0}%"
+# Every latency's word (WORDS-1008, `latency` in words.ts). It was unspaced
+# while conn-relay-ms said "{0} ms" (the catalog refuses one text under two
+# names); conn-relay-ms is gone.
+row-rtt = "{0} ms"
+# A peer hop's two legs (NET-DIRECT): {2} the leg's road, {3} its round trip.
+hop-leg = "{0} → {1} {2}"
+hop-leg-rtt = "{0} → {1} {2} {3}"
+card-version = "khor {0}"
+# The strip of facts at the top of a machine's detail (2026-10-01; it was a
+# contact card from 2026-09-30). The model is a cell only on the narrow face.
+card-model = "Model"
+card-connection = "Route"
+card-uptime = "Up"
+card-reading = "Reading"
+card-faces = "Interfaces"
+new-session-dir = "Directory"
+dir-path-hint = "Directory path"
+new-session-name = "Name"
+# The name box's placeholder: an empty name is named for you.
+new-session-name-hint = "Optional"
+new-session-agent = "Agent"
+# "Kind" rather than "Type" — the Chinese source deliberately avoids 类型
+# here because quota-kind already owns that word; keeping "Kind" distinct
+# from "Type" preserves that separation in English.
+new-session-kind = "Kind"
+new-session-agent-pick = "Run with"
+new-session-handed = "Attached"
+new-session-form = "Open as"
+new-session-kind-shell = "Shell"
+new-session-more-agents = "Connect other agents with khor agents add."
+new-session-registry = "Agents khor knows"
+new-session-registry-taken = "Snapshot from {0}, {1} total"
+new-session-search = "Find agent"
+new-session-attach = "Connect"
+new-session-attached = "Connected"
+new-session-byhand = "Install it yourself, then connect it from the command line."
+import-sessions = "Import"
+import-title = "Import sessions"
+import-machines-count = "{0} machines selected"
+import-search = "Search sessions to import"
+import-note = "Choose one to import and open it; deleting it from the list later leaves the session itself untouched."
+import-empty = "Nothing to import"
+import-empty-hint = "tmux sessions and agents in terminals on your machines show up here"
+import-agents = "Conversations ACP agents remembered"
+close-warn-imported = "Only takes it off the list — the session itself is untouched, and you can import it again"
+# ⚠️ Tombstone: new-session-seen, the wizard section that moved into import (docs/SHELL.md 第八轮).
+new-session-seen-ask = "Ask once"
+new-session-seen-asking = "Asking…"
+new-session-seen-unasked = "Haven't asked yet"
+new-session-seen-cannot = "It can't list its conversations — that's optional in the protocol."
+new-session-seen-none = "It says it has no conversations."
+chat-readonly = "Read-only session"
+chat-busy-for = "Busy for {0}"
+takeover-busy = "It's busy — taking over interrupts this turn. The terminal there will end; the conversation continues here."
+takeover-calm = "The terminal there will end; the conversation continues here."
+takeover-term = "The conversation pane will end; it goes back to a terminal, and the conversation continues there."
+takeover-term-busy = "It's mid-reply — taking over interrupts this turn. The conversation pane will end; it goes back to a terminal."
+create = "Create"
+devices-tab = "Machines"
+workspaces-tab = "Workspaces"
+browser-tab = "Browser"
+workspaces-empty = "No workspaces yet"
+workspaces-how = "Use the ＋ above to pick a directory on a machine"
+ws-add-ask = "Add a workspace"
+ws-now-changed = "Recently changed"
+ws-now-how = "Use the ＋ above to add a workspace"
+# Said in the one delete window every sidebar shares (`confirm-delete`,
+# docs/SHELL.md 第四轮).
+ws-remove-confirm = "Takes it off this list; the directory itself is untouched"
+ws-marked = "{0} files changed"
+dir-picker = "Pick a directory"
+dir-picker-take = "Use this directory"
+file-not-text = "Not text"
+file-cut = "Only the first {0} was read — the file is {1}"
+file-take = "Download to this machine"
+file-face-preview = "Preview"
+file-face-source = "View Source"
+pdf-as-words = "This machine's browser can't render PDFs — showing extracted text, not the layout."
+file-remove-trash = "Move \"{0}\" to the trash"
+file-remove-dir = "Move \"{0}\" and everything in it to the trash"
+file-remove-gone = "Delete \"{0}\" outright — it can't be recovered; a directory takes everything inside it too."
+never-ask = "Don't ask again"
+# The way out of a confirm dialog, left of its one act. 2026-09-26.
+delete-keep = "Cancel"
+file-new = "New file"
+dir-new = "New directory"
+# Ambiguous: the Chinese comment says this borrows `rename`'s verb for the
+# menu action, but the value itself ("换一个名字") reads as a new-name
+# prompt/placeholder rather than a menu label. Translated at face value.
+file-rename-taken = "Name already in use"
+ws-empty-recent = "Recently opened"
+ws-empty-none = "No file open"
+diff-head = "HEAD"
+diff-work = "Working copy"
+diff-open = "See how this file differs from HEAD"
+quit-drafts = "{0} files still unsaved"
+quit-drop = "Don't save, quit"
+quit-keep = "Don't quit"
+link-open-on = "Open on {0}"
+tab-close-draft = "\"{0}\" isn't saved yet"
+tab-close-save = "Save and close"
+tab-close-drop = "Don't save, close"
+tab-close-keep = "Don't close"
+tab-close-others = "Close others"
+
+tab-copy-path = "Copy path"
+tab-copy-rel = "Copy relative path"
+workspace-tree = "File tree"
+workspace-sessions = "Sessions here"
+ws-sessions-toggle = "Sessions sidebar"
+tree-search = "Search files in this folder"
+search-none = "Nothing here"
+search-workspaces = "Search workspaces"
+doc-plain = "Text and structure, not layout"
+doc-empty = "This document has no text"
+look-too-big = "This file is {0}, too big to preview here. Download it, then open it."
+code-tab = "VS Code"
+code-consent = "First time, this downloads a server package (about 640 MB) to that machine, from Microsoft.\nThis also accepts Microsoft's server license terms."
+# `file-take` already owns "Download" — this is a consent-dialog go-ahead
+# button, so a more conversational "Get it" keeps the pair distinct.
+code-consent-go = "Get it"
+code-consent-no = "Not now"
+git-hunk = "This change"
+file-take-theirs = "Reload (discard my changes)"
+file-keep-mine = "Save mine (overwrite their changes)"
+file-merge = "Merge (you decide on lines both sides touched)"
+file-merged-clean = "Their changes are merged in too. Still your call to save."
+file-merged-clashes = "Merged in. {0} places changed the same line on both sides — marked in the file for you to decide."
+file-clash = "This file changed elsewhere. Autosave is paused."
+file-unsaved-why = "Not saved; trying again shortly: {0}"
+file-saved = "Saved"
+file-read-only = "Read-only"
+git-added = "These lines aren't in HEAD"
+# The open peek's head bar (cm-e, 2026-10-12): which change of how many,
+# the two steps, the revert and the way out. The strip that used to count
+# them above the file is still gone (2026-09-16) — the open change says it
+# on its own head, as VS Code's inline diff does.
+git-hunk-count = "Change {0} of {1}"
+git-hunk-prev = "Previous Change"
+git-hunk-next = "Next Change"
+git-revert = "Revert Change"
+
+settings = "General"
+network = "Network"
+security = "Security"
+# 第十七轮: the one word an error state offers (`components/RegionState`).
+region_retry = "Retry"
+# The one place a time says which way (WORDS-1008): every other [gui] sentence takes what `ago` / `until` said.
+time-ago = "{0} ago"
+time-in = "in {0}"
+time-hours-minutes = "{0} h {1} min"
+time-days-hours = "{0} d {1} h"
+# A part of the face that failed to draw (afix-a, 2026-10-08; audit R1): one sentence and Retry, the error itself only in the console.
+fault-said = "This part can't be shown"
+# The checks came back empty (not a table): neither 「all well」 nor a spinner forever.
+doctor-no-answer = "No diagnosis came back"
+# "Diagnostics": the owner named this page 「诊断」 on 2026-09-27 (was 「自检」 / "Doctor"); the key stays `doctor`.
+doctor = "Diagnostics"
+# The identity-card page title. Distinct from `machine-here`'s "This
+# machine" (a machine list/card's own-row label) — "About this machine"
+# reads as a page title, matching how such pages are usually named.
+identity = "About this machine"
+identity-id = "Machine ID"
+identity-version = "khor version"
+identity-alone = "Not paired with any machine yet"
+advanced = "Advanced"
+identity-faces = "khor's interfaces"
+# The four acts on the 网络 page (docs/MORE.md 第二轮). They moved off
+# the identity card: they are about this machine's relationship to the
+# network, not about which machine this is. Pause before leave — the
+# undoable one first.
+identity-pause-warn = "While paused this machine stops syncing with the others and they see it as down; its own sessions and workspaces go on working. The device table is untouched — this is not leaving the network, and it resumes whenever you say."
+pause = "Pause"
+resume = "Resume"
+machine-paused = "Paused"
+identity-paused-now = "Paused — the others see this machine as down"
+identity-leave-warn = "Takes this machine out of the network: the device table goes down to this machine alone, and what the others left here goes with them. This machine's own sessions, workspaces, identity and settings are untouched; a fresh ticket and pair rejoin it."
+identity-leave-type-name = "Type this machine's name exactly"
+identity-leave-do = "Leave network"
+# The 网络 page as a page of settings rows (2026-09-28): 状态 / 中继 /
+# leave. The group name borrows `axis-state`.
+net-online = "Online"
+net-connected = "Connected machines"
+net-connected-n = "{0} ({1})"
+net-connected-bare = "{0} machines"
+net-via = "{0} {1}"
+# R0's second line (2026-09-30): only facts the page already asked for.
+head-machines = "{0} machines in all"
+head-connected = "{0} connected"
+head-lock-on = "Lock on"
+head-lock-off = "Lock off"
+roads-share-label = "Direct share"
+roads-share = "{0}% of the last {1} connections"
+roads-none = "No connection readings yet"
+roads-unanswered = "serve did not answer"
+net-pause-sync = "Pause syncing"
+net-pause-note = "The others see this machine as down; everything here still works"
+net-relays = "Relays"
+net-leave-note = "The device list keeps only this machine; a fresh ticket rejoins"
+net-leave-ask = "Leave"
+# "Face" is khor's own term for this settings section (avatar/identity look), not a literal face
+settings-face = "Avatar"
+# A row menu's "Edit…" — the machine row's (2026-09-30: one door, one
+# window, for everything a machine has to edit; it replaced "Change
+# avatar…") and the account row's (2026-10-01). Both open a window.
+machine-edit-title = "Edit {0}"
+machine-name = "Machine name"
+edit-done = "Done"
+# In [gui], not [avatar]: that section holds the options a face is made
+# of, and its gate requires every word there to name one.
+face-shuffle = "Another colour set"
+# 存储 / 关于: read-only, and neither opens a node — which is why they
+# still answer on a machine whose store won't open.
+settings-store = "Storage"
+settings-about = "About"
+store-path = "Store location"
+store-size = "Size on disk"
+# Not "Show in Finder": the same button opens something else on Linux,
+# and a button shouldn't misname what it does on half the machines.
+store-open = "Open folder"
+
+# ── 安全 and the lock screen (docs/MORE.md 安全) ──────────────────────
+# The lock screen carries three things: this machine's face, its name,
+# and one box. **Nothing else** — how many are waiting and who just spoke
+# are the contents, and the contents are what is locked.
+lock-pin = "PIN"
+lock-open = "Unlock"
+lock-wrong = "Wrong"
+lock-unavailable = "Lock settings are unavailable. Retrying."
+lock-verification-failed = "PIN verification is unavailable. Try again."
+# The app's other key on macOS. The web face draws no such button: a
+# browser has nothing to ask, and a button that refuses is worse than
+# none.
+lock-system = "Use system verification"
+lock-section = "Screen lock"
+# The switch says **whether these faces lock**, not whether one is locked
+# right now — that is each face's own, and no setting can answer it.
+lock-switch = "Lock this machine's interfaces"
+lock-switch-note = "Locks the app window and web access, never the command line"
+lock-set-pin = "Set a PIN"
+lock-change-pin = "Change the PIN"
+# The PIN row's value, left of its button. **The row is already called
+# 「PIN」**, so the value says only the state.
+lock-pin-is-set = "Set"
+lock-pin-not-set = "Not set"
+lock-pin-floor = "At least {0} characters"
+lock-pin-save = "Save the PIN"
+lock-pin-clear = "Remove the PIN"
+lock-idle = "Lock after idling"
+lock-idle-never-pick = "Never"
+lock-idle-pick = "{0} minutes"
+lock-now = "Lock now"
+# The web face's key. **Masked by default**: this page may be on a screen
+# somebody else is looking at, or in a recording.
+web-key-section = "Web access key"
+web-key-show = "Show"
+web-key-hide = "Hide"
+web-key-rotate = "Regenerate"
+web-key-none = "This machine has never turned on web access"
+# Not decoration: every link handed out before this stops working, and
+# that is the whole meaning of the act.
+web-key-rotated = "Done; every link handed out before this one is dead"
+# Takes a device out of the network, from its card on the 网络 page.
+# **Not the row menu's word.** That one is 「delete」, a row leaving a
+# list; this is a device leaving the network. The sentence after the
+# press is shared, because that is one act.
+# The one thing on this page that cannot be undone: red, and it wants the
+# machine's name typed out.
+reset-section = "Reset identity"
+reset-warn = "Deletes this machine's identity key and mints a new one. To the network this is another machine: every paired machine still knows the old one and will not know the new one, and getting back means pairing again."
+reset-type-name = "Type the machine name exactly"
+reset-do = "Confirm reset"
+relays-mine = "My relays"
+relays-add = "Add relay"
+relays-hint = "http://address:port"
+relays-after-restart = "New ones take effect after khor serve restarts"
+relays-in-use = "In use"
+relays-only-mine = "Only use mine"
+relays-key = "Relay key"
+relays-key-hint = "Key (leave empty if none)"
+relays-keyed = "With key"
+relays-scheme-https = "HTTPS"
+relays-scheme-http = "HTTP, unencrypted"
+back = "Back"
+keyboard-show = "Show Keyboard"
+keyboard-hide = "Hide Keyboard"
+key-row-show = "Show Extra Keys"
+key-row-hide = "Hide Extra Keys"
+term-keys = "Terminal keys"
+key-esc = "Esc"
+key-esc-name = "Escape"
+key-ctrl = "Ctrl"
+key-ctrl-name = "Control"
+key-tab = "Tab"
+key-tab-name = "Tab key"
+key-backspace-name = "Backspace"
+key-backtab = "⇧Tab"
+key-backtab-name = "Shift-Tab"
+key-newline = "⇧⏎"
+key-newline-name = "New Line"
+key-paste = "Paste"
+key-cursor = "Cursor"
+key-alt = "Alt"
+key-more = "More Keys"
+keys-group-move = "Movement"
+keys-group-mod = "Modifiers"
+keys-group-symbol = "Symbols"
+keys-group-function = "Function Keys"
+keys-edit-row = "Edit this row"
+term-key-row = "Terminal key row"
+key-attach-name = "Put files in the terminal"
+key-row-add = "Add key"
+key-row-edit = "Edit key"
+key-row-name = "Key name"
+key-row-name-auto = "Leave blank to show the key combination"
+key-row-type = "Key action"
+key-row-chord = "Key combination"
+key-row-sequence = "Key sequence"
+key-row-base-key = "Base key"
+key-row-add-step = "Add step"
+key-row-remove-step = "Remove step"
+key-row-move-up = "Move step up"
+key-row-move-down = "Move step down"
+key-row-save = "Save key"
+key-row-cancel = "Cancel editing"
+key-row-test = "Try key"
+key-row-test-note = "Preview the standard terminal encoding without sending to a session; live encoding follows the session protocol"
+key-row-test-output = "Encoding preview"
+key-row-invalid = "Could not save; check the name length and key configuration"
+key-row-unsupported = "The terminal could not execute this key combination"
+key-row-damaged = "The saved key row cannot be read. Default keys are shown until you reset; resetting replaces the saved configuration"
+key-row-temporary = "Storage is unavailable; changes stay in this window only"
+key-row-reset = "Reset key row"
+files-device = "Photos and files"
+files-add = "Add Attachments"
+files-local-file = "Files"
+files-select = "Select"
+files-deselect = "Deselect"
+files-selected = "Selected Items"
+files-selected-count = "{0} items selected"
+files-select-hint = "Choose files or folders"
+files-included = "Included in the selected folder"
+files-send-count = "Send ({0})"
+files-insert-count = "Insert Paths ({0})"
+files-original = "Original Text"
+files-send-session = "Send to Session"
+files-insert-path = "Insert Path"
+files-receive = "Default Receive Location"
+files-current-dir = "Current Directory"
+files-reading-folder = "Reading folder…"
+files-picking = "Choosing…"
+files-sending = "Sending {0}"
+files-no-matches = "No matching files"
+files-failed-list = "Could not read files: {0}"
+files-empty-selection = "No files selected"
+files-retry-ready = "Not sent; ready to retry"
+files-sent = "Inserted {0} paths"
+files-browser-dir = "This browser cannot choose folders"
+files-land = "Lands in the receive location of the session's machine; the path goes in at the cursor"
+files-session = "This session"
+files-to-term = "Put in Terminal"
+files-to-cwd = "Put in Current Directory"
+store-search = "Search Received Files"
+store-empty = "No received files"
+store-place = "Receive Location"
+store-place-default = "Default location"
+store-place-change = "Change"
+store-place-reset = "Restore Default"
+store-place-pending = "Takes effect when {0} syncs"
+store-place-unknown = "{0} has not reported a receive location"
+term-reload = "Reload Terminal"
+page-back = "Previous page"
+page-forward = "Next page"
+page-reload = "Reload"
+# The tab pill's third seat while a page loads (UX-33): stop the load.
+page-stop = "Stop"
+term-drop-stop = "Cancel the drop"
+# …and on a file tab that is clean: read it from the disk again.
+file-reread = "Read Again"
+mesh-map = "Machines in the mesh"
+# Tombstone (2026-10-02): `from-device` named the machine a reported
+# session row came from, on the row's second line. Retired: the row's
+# avatar is that machine's face, so the name said it twice (the owner,
+# on a phone). The second line is the preview alone.
+pick-a-session = "Pick a session"
+empty-sessions = "No sessions yet"
+empty-sessions-how = "Use the ＋ above to start one"
+waiting-on-you = "Waiting on you"
+none-waiting = "Nothing waiting on you"
+today = "Today"
+yesterday = "Yesterday"
+backend-unreachable = "Can't reach khor on this machine"
+backend-garbled = "Couldn't read the answer from khor on this machine"
+search-sessions = "Search sessions"
+search-devices = "Search machines"
+search-quota = "Search quota"
+search-tabs = "Search tabs"
+search-recent = "Search recent"
+filter = "Filter"
+axis-state = "Status"
+axis-category = "Category"
+remove = "Remove"
+arrange = "Arrange by"
+by-recent = "By recent"
+by-category = "By category"
+by-device = "By machine"
+by-state = "By status"
+by-place = "By directory"
+axis-place = "Working directory"
+group-placeless = "No directory"
+# The heading over the rows in no group, once a group (置顶) stands above
+# them: a list's own order (group-rest), and the sessions' by recency.
+group-rest = "Others"
+group-recent = "Recent"
+# The seam between a list and its page, as a screen reader names it.
+list-seam = "Resize the list"
+# Inside a search field: empties it (the × beside the field leaves search).
+search-clear = "Clear"
+# Why a dialog's act did not go yet (`components/Why`): said under the
+# box it needs, with the caret put there.
+need-path = "Enter a directory first"
+need-pin = "Enter the PIN first"
+need-text = "Write something first"
+need-ticket = "Enter an invitation code first"
+need-relay = "Enter a relay address first"
+need-account-name = "Name this account first"
+need-key = "Paste the key first"
+need-address = "Enter the site address first"
+# 安全's group over 重置身份.
+identity-section = "Identity"
+# A machine's files with none open: the empty side says what it is for.
+files-pick = "Choose a file"
+# Under a machine's top processes: the rest of them.
+top-show-all = "Show all {0}"
+axis-connection = "Connection"
+axis-system = "System"
+# Round NET-12: macOS and iOS apart; `apple` is what an older khor still says.
+system-macos = "macOS"
+system-ios = "iOS"
+system-apple = "Apple"
+system-linux = "Linux"
+system-windows = "Windows"
+system-android = "Android"
+filter-unknown = "Unknown"
+ws-kind-repo = "Git repository"
+ws-kind-folder = "Folder"
+ws-status-clean = "No changes"
+ws-status-unavailable = "Unavailable"
+ws-op-merge = "Merging"
+ws-op-rebase = "Rebasing"
+ws-op-cherry-pick = "Cherry-picking"
+ws-op-revert = "Reverting"
+ws-op-bisect = "Bisecting"
+ws-newest-added = "Added {0}"
+ws-newest-changed = "Changed {0}"
+day-unwatched = "Not watched"
+day-unwatched-why = "khor has no record of this stretch: it wasn't running, or that machine didn't report"
+day-show = "Click to see the last 24 hours"
+metric-open = "Show what {0} is made of"
+metric-close = "Back to the last 24 hours"
+day-hide = "Click to hide the last 24 hours"
+day-none = "No record in the last 24 hours"
+# The session's side panel (UX-30).
+session-side = "Side panel"
+side-show = "Open the side panel"
+side-hide = "Close the side panel"
+side-seam = "Resize the side panel"
+recent-none = "Nowhere yet"
+# The 附栏's 最近 and 浏览器 are this session's slice (UX-37 §1, UX-39
+# §3): the slice with nothing in it yet.
+side-recent-here-none = "Nothing opened yet"
+side-pages-here-none = "No pages opened yet"
+# 过去24小时, 最近's first row (UX-39 §4): the day's two totals over its band.
+day-busy-idle = "Busy {0} · idle {1}"
+day-last-24h = "Last 24h"
+new-item = "New"
+
+no-matches = "No matches"
+pin = "Pin"
+unpin = "Unpin"
+delete = "Delete"
+delete-named = "Delete {0}?"
+reset-title = "Reset {0}'s identity?"
+rename = "Rename"
+rename-failed = "Couldn't rename"
+old-sessions = "{0} old sessions"
+collapse-old = "Collapse old sessions"
+pin-failed = "Couldn't pin"
+unpin-failed = "Couldn't unpin"
+# The row menu and the map card run one act under one word, `delete`
+# (docs/SHELL.md 第二轮).
+forget-machine-confirm = "The whole network stops recognizing it, and it stops seeing the network too"
+watch-dirs = "Watched directories"
+watch-add = "Add"
+watch-save = "Save"
+watch-save-failed = "Couldn't save"
+# Distinct from `file-unsaved`'s "Unsaved" (an editor tab's own state) —
+# this is a watched-directory list row that hasn't been saved to config yet.
+watch-unsaved = "Not saved"
+open-term-on-ask = "Open session"
+browse-files = "Browse files"
+borrow-web = "Browse"
+install-hooks = "Install hooks"
+uninstall-hooks = "Uninstall hooks"
+install-hooks-failed = "Couldn't install"
+uninstall-hooks-failed = "Couldn't uninstall"
+hooks-buy-you = "Install it, and a session shows \"Done\" only after it finishes a turn"
+message-text = "Message"
+send-it = "Send"
+make-a-ticket = "Invite device"
+join-with-a-ticket = "Join network"
+# ── Add machine (round join-d) ──
+add-machine = "Add Machine"
+add-khor-host = "khor Host"
+add-khor-host-note = "Already runs khor; add it with an invitation code"
+add-ssh-host = "SSH Host"
+add-ssh-host-note = "Add it over SSH"
+have-a-ticket = "Have an Invitation Code"
+add-host = "Host"
+add-host-hint = "user@host"
+add-port = "Port"
+add-config-hosts = "Hosts in SSH Config"
+add-jump = "Jump Host"
+add-jump-none = "Connect Directly"
+add-jump-khor = "Through a khor Host"
+add-jump-khor-note = "The add runs on that machine"
+add-jump-ssh = "Through an SSH Jump Host"
+add-jump-other = "Other host"
+add-copy-config = "Copy SSH Config"
+add-copy-config-note = "Don't add a machine; just ssh through a khor host"
+add-probe = "Test Which Machines Can Connect"
+add-auth = "Authentication"
+add-auth-password = "Password"
+add-auth-key-file = "Key · {0}"
+add-key-files = "Key Files"
+add-key-files-on = "Key Files on {0}"
+add-key-default = "Default"
+add-key-default-note = "Keys from the SSH config and ssh-agent"
+add-key-pick = "Choose Key File"
+add-key-path-only = "khor records only the key file's path and never copies the key"
+add-key-only-on = "Adding through {0} works with keys only. khor records only the key file's path"
+add-password-kept = "The password is kept only in this Mac's keychain"
+add-run-on = "The add runs on {0}, and {0} connects to {1} over SSH"
+add-install = "Install khor on {0}"
+add-install-note = "When off, connect over SSH only and leave no files on the host"
+add-this-host = "the host"
+add-via-title = "Connect Through {0}"
+add-config-line = "A Line for Your SSH Config"
+add-config-line-note = "Put it under Host {0}. khor never changes your SSH config"
+add-or-run = "Or Run"
+copy-text = "Copy"
+reach-title = "Connectivity Test"
+reach-busy = "Testing…"
+reach-lead = "Each online machine tries to connect to port {1} on {0}"
+reach-here = " (this machine)"
+reach-best = "Lowest latency"
+reach-odd = "The host key {0} recorded differs from the other machines'; it may not be the same host"
+reach-unsure = "The machines recorded different host keys, and this machine has none for the host. Check the keys, then choose a machine"
+add-adding = "Adding {0}"
+add-step-via = "Through {0}"
+add-fell-back = "khor could not be installed on {0}; the installed files were removed"
+add-satellite-note = "Actions run over SSH"
+login-title = "Log In to {0}"
+login-key-refused = "{0} doesn't accept this machine's key"
+login-copy-id = "Upload Public Key"
+login-copy-id-note = "Run ssh-copy-id in a terminal, then log in with the key"
+login-use-password = "Use Password"
+passphrase-title = "{0} Needs Its Passphrase"
+passphrase = "Passphrase"
+passphrase-kept = "The passphrase is kept only in this Mac's keychain"
+road-line = "Path"
+leg-to-sponsor = "This machine can't connect to {0}"
+leg-to-jump = "This machine can't connect to the jump host {0}"
+leg-jump-to-target = "The jump host can't reach the target: {0} can't connect to {1}"
+leg-ssh = "{0} can't connect to {1} over SSH"
+leg-auth = "{0} doesn't accept {1}'s key"
+promote-ask = "Install khor"
+journal-row = "Connection record"
+journal-summary = "{1} entries in the last {0} minutes"
+journal-summary-trouble = "{1} entries in the last {0} minutes, {2} of them faults"
+journal-report-ask = "Report"
+journal-report-at = "Report saved to {0}"
+journal-line-of = "{0}: {1}"
+# Waiting for the root holder, and the root's recovery words (docs/CONNECT.md 身份).
+pending-title = "Waiting"
+approve = "Approve"
+pending-elsewhere = "Approve on the machine that holds the root"
+# On demand since 2026-10-01: a row on Security opens the window, and the
+# title is also the row's name.
+root-words-title = "Recovery words"
+root-words-body = "These 24 words are the network's root key, which signs which machines are yours. Write them on paper and keep them: without them no machine can be added or revoked again, and anyone who sees them can sign their own machine into your network"
+ticket = "Invitation code"
+ticket-qr = "The invitation code as a QR code"
+copy-ticket = "Copy Invitation Code"
+paste-a-ticket = "Enter invitation code"
+join-dialing = "Connecting to the machine that made the code…"
+alone-how = "Only this machine is here. Add another under ＋"
+ticket-used-by = "{0} joined with this code"
+scan-a-ticket = "Scan QR Code"
+scan-aim = "Point at the QR code in Invite device on the other machine"
+scan-camera-denied = "khor isn't allowed to use the camera. Allow it in Settings and scan again, or paste the ticket"
+scan-open-settings = "Open Settings"
+scan-no-camera = "Couldn't open the camera. Pasting the ticket works too"
+camera-usage = "Scan the pairing QR code on another machine to join its network, or take a photo to send in a conversation"
+local-network-usage = "Let khor reach your other machines on this network directly, without going through a relay"
+join = "Join"
+close = "Close"
+chat-input = "Message…"
+# The ＋ at the left end of the conversation's capsule, and the one
+# item its menu always has when the agent takes files.
+chat-add = "Add to conversation"
+chat-attach = "Add files"
+chat-attach-machine-title = "A file on {0}"
+chat-put-failed = "Couldn't send the file to that machine"
+chat-file-open = "Open in File View"
+chat-file-reveal = "Show in Finder"
+chat-file-share = "Share"
+chat-file-wrote = "Wrote"
+file-open-other = "Open in Another App"
+file-reveal-windows = "Show in File Explorer"
+file-reveal-linux = "Show in File Manager"
+file-open-default = "Open in Default App"
+file-open-copy = "Download a Copy and Open"
+file-open-preparing = "Downloading original file"
+file-open-presenting = "Choose how to open this file"
+file-preview-too-big = "This file is too large to preview here"
+file-locate = "Reveal in Workspace"
+file-actions = "File Actions"
+file-in-code = "Open in VS Code"
+file-size-down = "Smaller"
+file-size-up = "Larger"
+file-history = "Git History"
+file-history-none = "This file has no commits yet"
+file-history-more = "Older commits aren't listed"
+commit-history = "Commits"
+commit-authored-one = "{0} authored"
+commit-authored-two = "{0} and {1} authored"
+commit-changed = "Files changed: {0}"
+commit-more = "This commit is large; the rest of its changes aren't listed"
+commit-file-big = "This file is too large to show its changes"
+commit-file-capped = "This commit is large; this file's changes weren't loaded"
+commit-jump = "Jump to File"
+file-rev-compare = "Compare with Current"
+file-rev-alone = "This Version Only"
+file-rev-back = "Back to Current"
+file-rev-cut = "This version is long; only its start is shown"
+md-note = "Note"
+md-tip = "Tip"
+md-important = "Important"
+md-warning = "Warning"
+md-caution = "Caution"
+md-footnotes = "Footnotes"
+md-footnote-back = "Back to text"
+nb-needs-script = "This output needs a script to display"
+nb-unreadable = "Can't read this notebook"
+nb-version = "nbformat {0} can't be previewed"
+blame-show = "Show Blame"
+blame-hide = "Hide Blame"
+blame-uncommitted = "Not Committed"
+# ── The file's editor (cm-a, 2026-10-10, CM-BRIEF) ──
+search-file = "Search this file"
+code-fold = "Fold"
+code-unfold = "Unfold"
+diff-unchanged = "Show {0} unchanged lines"
+merge-keep = "Keep"
+merge-drop = "Discard"
+preview-ground = "Preview Background"
+preview-ground-auto = "Auto"
+preview-ground-light = "Light"
+preview-ground-dark = "Dark"
+chat-over = "Conversation ended"
+chat-no-record = "Couldn't find a record of this conversation"
+chat-stop = "Interrupt"
+chat-no-replay = "This agent doesn't replay earlier conversations — whatever was said before isn't visible here"
+chat-needs-login = "This agent needs to log in before it can start a conversation"
+chat-empty = "No messages to show here yet"
+chat-reasoning-active = "Thinking"
+chat-tool-read = "Read"
+chat-tool-run = "Run"
+chat-tool-input = "Parameters"
+chat-confirmation = "Your approval is needed"
+agent-detail-cut = "Some activity details exceeded the display limit"
+chat-confirmation-sending = "Submitting"
+chat-confirmation-waiting = "Submitted, waiting for session confirmation"
+chat-request-closed = "Request closed"
+chat-reasoning = "Reasoning"
+chat-plan = "Plan"
+chat-mode-plan = "View only, no edits"
+chat-mode-accept-edits = "Edit files without asking"
+chat-mode-bypass = "Do everything without asking"
+chat-mode-default = "Asks before changes"
+chat-mode-codex-auto = "Auto in workspace"
+chat-mode-claude-auto = "Claude decides"
+chat-mode-claude-auto-note = "Claude judges which actions are safe and does those without asking; asks about the rest"
+chat-mode-default-note = "Asks before editing files or running commands"
+chat-mode-plan-note = "Reads and plans; edits nothing"
+chat-mode-accept-edits-note = "Edits files without asking; asks before running commands"
+chat-mode-bypass-note = "Edits files and runs commands without asking"
+chat-mode-codex-read-only-note = "Reads files and runs commands that change nothing; asks before editing or using the network"
+chat-mode-codex-auto-note = "Edits files and runs commands in the workspace without asking; asks before going outside it or using the network"
+chat-mode-codex-full-access-note = "Edits any file, runs any command and uses the network without asking"
+chat-mode = "Mode"
+chat-diff-before = "Before"
+chat-diff-after = "After"
+chat-diff-no-newline = "No newline at end of file"
+chat-diff-no-changes = "Content unchanged"
+chat-diff-changes = "Changes only"
+chat-diff-full = "Full content"
+chat-image = "Image {0}"
+chat-file = "{0}"
+chat-file-too-big = "{0} is {1}KB, over the {2}KB limit — can't send"
+chat-image-too-big = "This image is {0}MB, over the {1}MB limit — can't send"
+# A turn with pictures or files on its way to the machine that runs the
+# agent, megabytes sent so far and in all (gui-core's chat_say_with
+# sends it in slices). Shown while it crosses a slow road, so a send
+# that takes a while does not look like one that did nothing.
+chat-sending = "Sending {0} of {1} MB"
+chat-context = "Context {0}%"
+# The seat inside the capsule that holds the context dial (or the
+# agent's mark before any usage), and its panel's context row.
+chat-who = "This conversation's agent, model and context"
+chat-who-context = "Context"
+to-bottom = "Back to bottom"
+new-below = "New messages"
+chat-refused-turn-in-flight = "Another window is already talking — that message wasn't sent, and it's back with you"
+chat-refused-no-turn = "There's no turn running right now"
+chat-upload-stopped-reconnect = "Upload stopped. Reconnect to continue."
+chat-send-unconfirmed = "Send status is not confirmed yet"
+chat-cancelled-draft = "Stopped upload draft"
+chat-add-draft = "Add to message"
+chat-discard-draft = "Discard draft"
+chat-refused-setting = "The agent declined this — nothing changed"
+close-warn-live = "Close it, and the process it's running will stop"
+close-warn-terminal = "This terminal closes, and whatever is running in it stops"
+close-warn-running = "This terminal closes, and {0}, still running, stops"
+close-warn-tmux = "khor's terminal on it closes; the tmux session and what runs in it keep going"
+# A khor shell whose running command is a tmux client the person typed
+# (item 58): closing ends the shell and that client, never the session.
+close-warn-shell-tmux = "This terminal closes; the tmux session it was attached to keeps running, with what runs in it"
+close-warn-gui = "This deletes khor's row; the conversation itself stays with that agent and can be imported again"
+close-warn-chat = "Close it and this row is put away — history and received files stay, and it comes back with the next message"
+close-warn-transfer = "Close it and the files from this transfer are deleted — the row stays"
+close-warn = "Close it — this can't be undone"
+copy-id = "Copy ID"
+copy-url = "Copy URL"
+copied = "Copied"
+copy-failed = "Couldn't copy"
+up-dir = "Up one level"
+empty-dir = "Empty directory"
+take-file = "Download"
+took-file = "Landed in {0}"
+
+# A conversation's file goes directly (STORE-BRIEF phase 2): the chip
+# says how its move stands, the same on every device.
+file-stop = "Cancel Transfer"
+file-stopped = "Cancelled"
+file-failed = "Transfer failed: {0}"
+send-into = "Save to"
+bcast-waiting = "Not received"
+bcast-take = "Receive"
+bcast-taking = "Receiving"
+bcast-landed = "Received"
+bcast-landed-via = "Received · from {0}"
+bcast-own = "Sent by this machine"
+bcast-count = "{0} of {1} received"
+at-pick-title = "Push to"
+at-pick-hint = "Choose a machine, or go on typing :path"
+at-pick-none = "No machine by that name"
+at-pushed = "Delivered"
+at-pushing = "Delivering"
+at-push-failed = "Delivery failed: {0}"
+at-push-stopped = "Delivery cancelled"
+at-only = "Only messages pushed to {0}"
+at-only-clear = "Show all"
+at-to-here = "Pushed to this machine"
+send-file = "Send file"
+uploading = "Uploading…"
+send-file-failed = "Couldn't send"
+new-tab = "New tab"
+close-tab = "Close tab"
+switch-tabs = "{0} tabs"
+deck-all-tabs = "All tabs"
+deck-gesture = "Swipe up for all tabs. Hold and move sideways to browse, return to center to pause, release to select. Arrow Up opens all tabs."
+deck-gesture-down = "Swipe down for all tabs. Hold and move sideways to browse, return to center to pause, release to select. Arrow Down opens all tabs."
+deck-preview = "Preview: {0}"
+address-dir = "Machine and path"
+address-page = "Machine and URL"
+recent-places = "Recently visited"
+web-address = "URL, opens through {0}'s network"
+web-open = "Open"
+web-opening = "Opening through {0}'s network…"
+web-opened = "Opened through {0}'s network"
+web-opening-here = "Opening…"
+web-opened-here = "Opened"
+# A page that could not be opened (UX-22): one line in the pill/caption, 「Retry」 (region_retry) beside it.
+# The reason is WebKit's error code, sorted; anything else is the system's own sentence.
+page-failed = "Can't open the page: {0}"
+page-fail-connect = "Could not connect to the server"
+page-fail-lost = "Connection was lost"
+page-fail-host = "Server not found"
+page-fail-refused = "Connection refused"
+page-fail-timeout = "Request timed out"
+page-fail-offline = "No network"
+page-fail-tls = "Secure connection failed"
+page-fail-blocked = "Blocked from loading"
+page-fail-route = "The borrowed network can't reach this address"
+# A page's download (UX-42 §16) is never silent: the phone offers the file in the share sheet;
+# the Mac saves it to Downloads and the caption says where (took-file) with 「Show in Finder」.
+# An untrusted certificate (UX-42 §14): 「Visit Anyway」 passes this one certificate for this host on this machine until khor quits; never stored.
+page-fail-cert = "Certificate not trusted"
+page-pass = "Visit Anyway"
+page-downloading = "Downloading {0}…"
+page-download-failed = "Couldn't download {0}"
+open-in-browser = "Open in system browser"
+# ⚠️ Tombstone: pick-exit, retired 2026-09-22 with the fresh tab's button (docs/SHELL.md 第七轮).
+term-over = "This terminal ended"
+view-terminal = "Terminal"
+view-chat = "Chat"
+to-a-chat = "Switch to chat"
+to-a-terminal = "Switch to terminal"
+
+quota-five-hour = "5H"
+quota-seven-day = "7D"
+quota-resets = "Resets {0}"
+quota-no-login = "This machine isn't signed in to Claude Code"
+quota-stale = "Login expired — run claude once in the terminal"
+quota-cooling = "Rate-limited — try again in {0} minutes"
+# "Unreadable" (data came back but can't be parsed) vs "unreachable"
+# (couldn't even reach the endpoint) — kept distinct to match the source.
+quota-unreadable = "Couldn't read this quota"
+quota-unreachable = "Couldn't reach quota"
+
+sessions-all = "All"
+
+forget-place = "Remove from {0}"
+search-terminal = "Search terminal"
+match-prev = "Previous match"
+match-next = "Next match"
+match-case = "Match case"
+match-regex = "Use regular expression"
+match-word = "Match whole word"
+
+usage-title = "Token usage"
+usage-view-day = "By day"
+usage-view-model = "By model"
+usage-window = "Range"
+usage-window-days = "{0}D"
+usage-axis-total = "Total"
+usage-axis-input = "Input"
+usage-axis-output = "Output"
+usage-axis-read = "Cache read"
+usage-axis-write = "Cache write"
+# Distinct from usage-axis-reuse (cache-share vs cache-reuse are two
+# different measures in the source; kept separate here too).
+usage-axis-rate = "Cache share"
+usage-axis-reuse = "Cache reuse"
+usage-axis-days = "Days"
+usage-ruler-linear = ""
+usage-ruler-sqrt = "√"
+usage-ruler-log = "log"
+usage-ruler-flat = "Only one reading"
+usage-median = "Median {0}"
+usage-range = "{0} → {1} · {2} days total"
+usage-pick-area = "Area"
+top-section = "Processes"
+usage-sum-days = "Window days"
+usage-no-report = "This provider doesn't report tokens, only spend"
+usage-no-models = "That machine can't split usage by model"
+usage-window-empty = "No spend in this window"
+usage-no-cache = "This provider doesn't report cache"
+usage-scatter-off = "{0} models unreadable on both values — not plotted"
+
+# Session-owned desktop content tabs
+session-content = "Session content"
+content-new = "New session tab"
+content-scope = "Choose workspace or browser"
+content-expand = "Expand"
+content-restore = "Restore split view"
+content-machine-gone = "This machine is no longer in the device list"
+content-no-directory = "This session has no directory. Enter a path or switch to the browser"
+
+# Session content browsing (mobile and temporary documents)
+content-find = "Open file or website"
+content-keep = "Keep tab"
+content-temporary = "Temporary view"
+content-tabs = "Tabs"
+content-tabs-for = "Contents of {0}"
+content-tabs-count = "{0} tabs in this session"
+content-tabs-search = "Find tabs"
+content-empty = "No kept tabs yet"
+content-no-match = "No matching tabs"
+content-previous = "Previous file"
+content-next = "Next file"
+content-return = "Back to browsing"
+content-workspace-actions = "Workspace actions"
+content-return-session = "Return to {0}"
+content-current = "View all tabs, current {0}"
+content-expand-sheet = "Expand content panel"
+content-collapse-sheet = "Reduce content panel"
+
+# The macOS menu bar (2026-09-28).
+[menu]
+about = "About khor"
+my-khor = "My khor"
+doctor = "Diagnostics"
+settings = "Settings"
+lock = "Lock"
+services = "Services"
+hide = "Hide khor"
+hide-others = "Hide Others"
+show-all = "Show All"
+quit = "Quit khor"
+file = "File"
+new = "New"
+new-tab = "New Tab"
+import = "Import Sessions"
+close-tab = "Close Tab"
+close-window = "Close Window"
+edit = "Edit"
+undo = "Undo"
+redo = "Redo"
+cut = "Cut"
+copy = "Copy"
+paste = "Paste"
+select-all = "Select All"
+find-list = "Find"
+view = "View"
+find = "Search"
+reload-term = "Reload Terminal"
+prev-command = "Jump to Previous Command"
+next-command = "Jump to Next Command"
+command-history = "Command History"
+term-bigger = "Bigger Terminal Text"
+term-smaller = "Smaller Terminal Text"
+term-actual = "Default Terminal Text Size"
+fullscreen = "Enter Full Screen"
+hide-sidebar = "Hide Sidebar"
+show-sidebar = "Show Sidebar"
+window = "Window"
+minimize = "Minimize"
+zoom = "Zoom"
+next-tab = "Show Next Tab"
+prev-tab = "Show Previous Tab"
+front = "Bring All to Front"
+
+[one]
+second = "{0} second"
+minute = "{0} minute"
+hour = "{0} hour"
+day = "{0} day"
+up-day = "Up {0} day"
+up-hour = "Up {0} hour"
+lock-idle-after = "locks after {0} idle minute"
