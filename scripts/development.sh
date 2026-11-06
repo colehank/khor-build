@@ -82,6 +82,7 @@ install_dependencies agent
 install_dependencies gui
 case "$DEV_TASK" in
   ios-lab-prepare|ios-lab|ios-keyboard)
+    /usr/sbin/taskpolicy -B -t 0 -l 0 -p $$
     if ! command -v pod >/dev/null; then
       HOMEBREW_NO_AUTO_UPDATE=1 brew install cocoapods
     fi
