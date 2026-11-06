@@ -81,6 +81,11 @@ install_dependencies() {
 install_dependencies agent
 install_dependencies gui
 case "$DEV_TASK" in
+  ios-lab-prepare|ios-lab)
+    phase=verify
+    if [[ "$DEV_TASK" = ios-lab-prepare ]]; then phase=prepare; fi
+    python3 scripts/khor_lab/ios_probe.py "$phase" --report "$REPORT_DIR/ios"
+    ;;
   fast)
     printf 'Runner ProcessType: '
     /usr/libexec/PlistBuddy -c 'Print :ProcessType' /Library/LaunchDaemons/com.khor.github-runner.macmini.plist
