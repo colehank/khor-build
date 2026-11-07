@@ -112,7 +112,8 @@ jobs:
           sys.path.insert(0, 'snapshot/source/scripts')
           from khor_lab.contract import digest
           run = json.loads(subprocess.check_output(['gh', 'api', 'repos/colehank/khor-build/actions/runs/' + os.environ['CONTRACT_RUN']]))
-          assert run['name'] == 'Developer Lab' and run['conclusion'] == 'success'
+          assert run['path'] == '.github/workflows/developer-lab.yml' and run['conclusion'] == 'success'
+          assert run['head_sha'] == '2893ea480c565b89b85fdca3ad7acd393d77a1be'
           cached = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'contract-source/lab-manifest.json').read_text())
           assert cached['native_contract'] == digest(pathlib.Path('snapshot/source'))
           PYVERIFY
