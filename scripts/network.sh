@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: test a materialized source snapshot on disposable Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab-compare|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -52,6 +52,16 @@ else
     bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p7_
+  elif [[ "$DEV_TASK" == netlab-compare ]]; then
+    # Performance comparisons run sequentially; retain all three outcomes
+    # even when one iteration exposes the baseline's expected product red.
+    printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p6_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    status=0
+    for repeat in 1 2 3; do
+      printf '[netlab-repeat] %s/3\n' "$repeat"
+      NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_ || status=$?
+    done
+    exit "$status"
   else
     bash scripts/netlab.sh
   fi
