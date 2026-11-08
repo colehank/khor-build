@@ -31,8 +31,15 @@ if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-v
   if [[ "$DEV_TASK" == net-unit ]]; then
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
   elif [[ "$DEV_TASK" == net-vendor ]]; then
-    cargo test --locked -p noq-proto --lib 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log"
-    cargo test --locked -p iroh --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
+    # Excluded dependencies cannot run their dev-dependencies from the root
+    # workspace. Use each committed package lock, and make iroh test our noq
+    # patch rather than the registry copy. Keep the exact resolution as evidence.
+    cp vendor/noq-proto/Cargo.lock "$REPORT_DIR/noq-proto-Cargo.lock"
+    cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
+    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log"
+    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
+      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
+      --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
   else
     cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
     cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
