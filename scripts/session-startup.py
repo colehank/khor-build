@@ -10,7 +10,8 @@ import tempfile
 import time
 
 report = Path(os.environ['REPORT_DIR'])
-app = Path(os.environ['CARGO_TARGET_DIR']) / 'aarch64-apple-darwin/release/bundle/macos/Khor.app'
+app = (Path(os.environ['KHOR_STARTUP_APP']) if os.environ.get('KHOR_STARTUP_APP')
+       else Path(os.environ['CARGO_TARGET_DIR']) / 'aarch64-apple-darwin/release/bundle/macos/Khor.app')
 program = app / 'Contents/MacOS/khor-gui'
 info = json.loads(subprocess.check_output([str(program), '_release_info'], timeout=15))
 assert info['component'] == 'desktop-app' and info['build']['source'] == os.environ['SOURCE_SHA']
