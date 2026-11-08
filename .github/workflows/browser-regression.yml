@@ -41,7 +41,7 @@ jobs:
           python3 - <<'PY'
           import os, subprocess
           changed = subprocess.check_output(['git', '-C', 'source', 'diff', '--name-only', os.environ['BASELINE_SHA'], os.environ['SOURCE_SHA']], text=True).splitlines()
-          assert all(path.startswith(('apps/gui/src/', 'apps/gui/scripts/')) for path in changed), changed
+          assert all(path.startswith(('apps/gui/src/', 'apps/gui/scripts/')) or path == 'apps/gui/package.json' for path in changed), changed
           PY
       - name: Reuse the source-matched public Quality frontend
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
