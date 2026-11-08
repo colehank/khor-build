@@ -12,6 +12,8 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 scripts/asset-fetch-probe.py
+        env:
+          GH_TOKEN: ${{ github.token }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

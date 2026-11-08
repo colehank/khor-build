@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -30,6 +32,16 @@ try:
     digest = checksum.hexdigest()
     assert digest == "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198", digest
     facts.append({"name": "shellcheck", "fresh_body_sha256": digest, "verified": True})
+except (OSError, AssertionError) as error:
+    facts.append({"name": "shellcheck", "fresh_body_error": type(error).__name__})
+try:
+    with tempfile.TemporaryDirectory() as temporary:
+        subprocess.run(["gh", "release", "download", "v0.11.0", "--repo", "koalaman/shellcheck",
+                        "--pattern", "shellcheck-v0.11.0.linux.x86_64.tar.xz", "--dir", temporary],
+                       check=True, timeout=90)
+        digest = hashlib.sha256((Path(temporary) / "shellcheck-v0.11.0.linux.x86_64.tar.xz").read_bytes()).hexdigest()
+        assert digest == "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198", digest
+        facts.append({"name": "shellcheck", "api_body_sha256": digest, "verified": True})
 finally:
     Path("asset-fetch.json").write_text(json.dumps(facts, indent=2) + "\n")
     print(json.dumps(facts))
