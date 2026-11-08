@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: test a materialized source snapshot on disposable Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|netlab-smoke|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|netlab-smoke|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -22,13 +22,18 @@ PY
 mkdir -p apps/gui/dist/assets
 printf '// network test fixture\n' > apps/gui/dist/assets/index-netlab.js
 printf '<!doctype html><script type="module" src="/assets/index-netlab.js"></script>\n' > apps/gui/dist/index.html
-if [[ "$DEV_TASK" == net-unit ]]; then
+if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node ]]; then
   if ! cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
     cargo fmt --all
     git diff --binary > "$REPORT_DIR/format.patch"
     exit 1
   fi
-  cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
+  if [[ "$DEV_TASK" == net-unit ]]; then
+    cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
+  else
+    cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
+    cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
+  fi
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
   unshare -Urn sh -ec 'ip link add probe0 type dummy; ip link set probe0 up; tc qdisc add dev probe0 root netem delay 1ms; nft add table inet probe; nft list ruleset' > "$REPORT_DIR/namespace.log" 2>&1

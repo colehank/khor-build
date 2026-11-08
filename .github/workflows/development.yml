@@ -11,7 +11,7 @@ on:
       task:
         required: true
         type: choice
-        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, netlab-smoke, netlab]
+        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, net-node, netlab-smoke, netlab]
         default: fast
       request_id:
         description: Client receipt ID
