@@ -11,7 +11,7 @@ on:
       task:
         required: true
         type: choice
-        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard]
+        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, netlab-smoke, netlab]
         default: fast
       request_id:
         description: Client receipt ID
@@ -105,6 +105,7 @@ jobs:
           if-no-files-found: error
 
   development:
+    if: ${{ !startsWith(inputs.task, 'net') }}
     needs: prepare
     concurrency:
       group: mac-mini-worker
@@ -146,8 +147,63 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  network:
+    if: ${{ startsWith(inputs.task, 'net') }}
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/network-target
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: dev-source
+          path: ${{ runner.temp }}/source-package
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - name: Install network lab tools on the disposable Linux runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nftables conntrack iproute2 tmux
+          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            network-target
+          key: network-linux-rust195-${{ inputs.task }}-${{ inputs.snapshot_sha }}
+          restore-keys: |
+            network-linux-rust195-${{ inputs.task }}-
+            network-linux-rust195-
+      - name: Run the exact network source snapshot
+        env:
+          DEV_TASK: ${{ inputs.task }}
+          SOURCE_PACKAGE: ${{ runner.temp }}/source-package
+          REPORT_DIR: ${{ runner.temp }}/dev-evidence
+        run: bash control/scripts/network.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: dev-evidence
+          path: ${{ runner.temp }}/dev-evidence
+          if-no-files-found: error
+          retention-days: 7
+
   retire-snapshot:
-    needs: [prepare, development]
+    needs: [prepare, development, network]
     if: always()
     runs-on: ubuntu-24.04
     permissions:
