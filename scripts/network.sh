@@ -23,7 +23,11 @@ mkdir -p apps/gui/dist/assets
 printf '// network test fixture\n' > apps/gui/dist/assets/index-netlab.js
 printf '<!doctype html><script type="module" src="/assets/index-netlab.js"></script>\n' > apps/gui/dist/index.html
 if [[ "$DEV_TASK" == net-unit ]]; then
-  cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"
+  if ! cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
+    cargo fmt --all
+    git diff --binary > "$REPORT_DIR/format.patch"
+    exit 1
+  fi
   cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
