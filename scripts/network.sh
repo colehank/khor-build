@@ -57,7 +57,8 @@ else
   unshare -Urn sh -ec 'ip link add probe0 type dummy; ip link set probe0 up; tc qdisc add dev probe0 root netem delay 1ms; nft add table inet probe; nft list ruleset' > "$REPORT_DIR/namespace.log" 2>&1
   export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
   if [[ "$DEV_TASK" == netlab-smoke ]]; then
-    bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_
+    printf '{"test_threads":2,"repeats":1,"filters":["paths::p2_","paths::p3_","paths::p6_","hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    NETLAB_TEST_THREADS=2 bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_ hop::f4_ hop::f4s_ hop::f4i_
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
     printf '{"test_threads":1,"repeats":3,"filters":["paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     repeat_netlab paths::p7_
