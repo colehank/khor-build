@@ -65,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='khor-desktop-startup-', dir=os.environ[
             marker = root / 'ready'
             location = root / 'cwd'
             command = f'pwd > {shlex.quote(str(location))}; printf ready > {shlex.quote(str(marker))}; sleep 15'
-            opened = tool('open', {'machine': '', 'cwd': str(work), 'title': 'Private startup check', 'command': command})
+            opened = tool('open', {'machine': 'startup-check', 'cwd': str(work), 'title': 'Private startup check', 'command': command})
             active = opened['content'][0]['text'].strip()
             assert active.startswith('shell/'), opened
             deadline = time.monotonic() + 15
