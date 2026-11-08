@@ -101,7 +101,7 @@ jobs:
         if: steps.released-contracts.outputs.ready != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CONTRACT_RUN: '42346962839'
+          CONTRACT_RUN: '42494702886'
         run: |
           if ! gh run download "$CONTRACT_RUN" --repo colehank/khor-build --name developer-lab-frontend --dir "$RUNNER_TEMP/contract-source"; then
             echo 'Compatible Lab artifact unavailable; generate contracts normally.'
@@ -113,7 +113,7 @@ jobs:
           from khor_lab.contract import digest
           run = json.loads(subprocess.check_output(['gh', 'api', 'repos/colehank/khor-build/actions/runs/' + os.environ['CONTRACT_RUN']]))
           assert run['path'] == '.github/workflows/developer-lab.yml' and run['conclusion'] == 'success'
-          assert run['head_sha'] == '633ca2c12c7aac060a23f733e5afaa0c4a7f7202'
+          assert run['head_sha'] == 'd00812692f37c7666e83f09db6c88a3c5076321e'
           cached = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'contract-source/lab-manifest.json').read_text())
           assert cached['native_contract'] == digest(pathlib.Path('snapshot/source'))
           PYVERIFY
