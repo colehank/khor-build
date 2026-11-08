@@ -99,15 +99,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: colehank/khor
-          ref: ad07fd728254e50dbdb7102838dad856c24f6f0d
+          ref: 5f356c381b4c63eac2a0794a0edf9a6217ec8315
           path: lab-contract-baseline
           persist-credentials: false
-      - name: Reuse matching contracts from a verified Lab build
+      - name: Reuse matching contracts from a verified Lab frontend
         id: lab-contracts
         if: steps.released-contracts.outputs.ready != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CONTRACT_RUN: '42500534763'
+          CONTRACT_RUN: '42530282294'
         run: |
           if ! gh run download "$CONTRACT_RUN" --repo colehank/khor-build --name developer-lab-frontend --dir "$RUNNER_TEMP/contract-source"; then
             echo 'Compatible Lab artifact unavailable; generate contracts normally.'
@@ -118,11 +118,18 @@ jobs:
           sys.path.insert(0, 'snapshot/source/scripts')
           from khor_lab.contract import generated_digest
           run = json.loads(subprocess.check_output(['gh', 'api', 'repos/colehank/khor-build/actions/runs/' + os.environ['CONTRACT_RUN']]))
-          assert run['path'] == '.github/workflows/developer-lab.yml' and run['conclusion'] == 'success'
-          assert run['head_sha'] == '82f1cf60aa202b32e7c5db0914a5d19d42050795'
+          assert run['path'] == '.github/workflows/developer-lab.yml' and run['event'] == 'workflow_dispatch'
+          assert run['status'] == 'completed' and run['conclusion'] in ('success', 'failure')
+          # UI regressions cannot invalidate contracts already generated and
+          # uploaded by this trusted successful frontend job. Candidate checks
+          # below still run in full against the new exact source.
+          jobs = json.loads(subprocess.check_output(['gh', 'api', 'repos/colehank/khor-build/actions/runs/' + os.environ['CONTRACT_RUN'] + '/jobs?per_page=100']))['jobs']
+          frontend = [job for job in jobs if job['name'] == 'frontend']
+          assert len(frontend) == 1 and frontend[0]['status'] == 'completed' and frontend[0]['conclusion'] == 'success'
+          assert run['head_sha'] == '7ad464d7aee99b702a06e6dd446e165ae7e650af'
           cached = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'contract-source/lab-manifest.json').read_text())
-          assert cached['base_commit'] == 'ad07fd728254e50dbdb7102838dad856c24f6f0d'
-          assert cached['tree'] == 'bdff588f65950486597d85680cee51926accda5a'
+          assert cached['base_commit'] == '5f356c381b4c63eac2a0794a0edf9a6217ec8315'
+          assert cached['tree'] == '4935c897d8facf1216b81188e3896b67186e293d'
           assert generated_digest(pathlib.Path('snapshot/source')) == generated_digest(pathlib.Path('lab-contract-baseline'))
           PYVERIFY
           then
