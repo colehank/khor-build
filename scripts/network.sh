@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: test a materialized source snapshot on disposable Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab-compare|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -51,6 +51,7 @@ if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-v
   else
     cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
     cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
+    cargo test --locked -p khor-node --lib journal::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/journal-unit.log"
   fi
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
@@ -62,6 +63,9 @@ else
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
     printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     repeat_netlab paths::p2_ paths::p3_ paths::p7_
+  elif [[ "$DEV_TASK" == netlab-hop ]]; then
+    printf '{"test_threads":1,"repeats":3,"filters":["hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    repeat_netlab hop::f4_ hop::f4s_ hop::f4i_
   elif [[ "$DEV_TASK" == netlab-compare ]]; then
     # Performance comparisons run sequentially; retain all three outcomes
     # even when one iteration exposes the baseline's expected product red.
