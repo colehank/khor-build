@@ -53,7 +53,7 @@ jobs:
           cp scripts/webkit-loopback.swift "$package_dir/webkit-loopback.swift"
           cp scripts/worker-storage.py "$package_dir/worker-storage.py"
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
-          if [[ "$CHECK" = dependencies || "$CHECK" = files || "$CHECK" = release-preflight || "$CHECK" = ios-release-preflight ]]; then
+          if [[ "$CHECK" = dependencies || "$CHECK" = files || "$CHECK" = borrow || "$CHECK" = release-preflight || "$CHECK" = ios-release-preflight ]]; then
             git -c credential.helper= clone --mirror https://github.com/Brendonovich/swift-rs "$package_dir/swift-rs.git"
             git --git-dir="$package_dir/swift-rs.git" update-ref refs/khor/source HEAD
             git --git-dir="$package_dir/swift-rs.git" rev-parse HEAD > "$package_dir/swift-rs-sha.txt"

@@ -72,6 +72,12 @@ case "${CHECK:-full}" in
     npm ci --prefix apps/gui
     npm run build --prefix apps/gui
     cargo check --locked -p khor-gui --lib
+    sync_swift_mirror
+    rustup target add aarch64-apple-ios
+    export GIT_CONFIG_COUNT=1
+    export GIT_CONFIG_KEY_0="url.file://$SOURCE_PACKAGE/swift-rs.git.insteadOf"
+    export GIT_CONFIG_VALUE_0=https://github.com/Brendonovich/swift-rs
+    cargo check --locked -p khor-gui --lib --target aarch64-apple-ios
     exit 0
     ;;
   session-startup)
