@@ -22,6 +22,14 @@ PY
 mkdir -p apps/gui/dist/assets
 printf '// network test fixture\n' > apps/gui/dist/assets/index-netlab.js
 printf '<!doctype html><script type="module" src="/assets/index-netlab.js"></script>\n' > apps/gui/dist/index.html
+repeat_netlab() {
+  local status=0 repeat
+  for repeat in 1 2 3; do
+    printf '[netlab-repeat] %s/3\n' "$repeat"
+    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh "$@" || status=$?
+  done
+  return "$status"
+}
 if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor ]]; then
   if ! cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
     cargo fmt --all
@@ -51,17 +59,13 @@ else
   if [[ "$DEV_TASK" == netlab-smoke ]]; then
     bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p7_
+    printf '{"test_threads":1,"repeats":3,"filters":["paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    repeat_netlab paths::p7_
   elif [[ "$DEV_TASK" == netlab-compare ]]; then
     # Performance comparisons run sequentially; retain all three outcomes
     # even when one iteration exposes the baseline's expected product red.
     printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p6_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    status=0
-    for repeat in 1 2 3; do
-      printf '[netlab-repeat] %s/3\n' "$repeat"
-      NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_ || status=$?
-    done
-    exit "$status"
+    repeat_netlab paths::p2_ paths::p3_ paths::p6_
   else
     bash scripts/netlab.sh
   fi
