@@ -254,11 +254,11 @@ jobs:
           npm run sticky-fade
           npm run list-scroll-ui
           PLAYWRIGHT_CHROMIUM_CHANNEL='' WORKSPACE_CONTENT_DIR="$LAB_REPORT/workspace-content" npm run workspace-content-ui
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' npm run chat-poll
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' npm run chat-cancel
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' npm run chat-recovery
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' npm run history-search-ui
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' npm run ai-elements
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' CHAT_POLL_CHECK_DIR="$LAB_REPORT/chat-poll" npm run chat-poll
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' CHAT_CANCEL_CHECK_DIR="$LAB_REPORT/chat-cancel" npm run chat-cancel
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' CHAT_RECOVERY_CHECK_DIR="$LAB_REPORT/chat-recovery" npm run chat-recovery
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' HISTORY_SEARCH_UI_EVIDENCE="$LAB_REPORT/history-search" npm run history-search-ui
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' AI_ELEMENTS_OUT="$LAB_REPORT/ai-elements" npm run ai-elements
           node dev/lab/check-app.mjs
           node dev/lab/check-hot.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
