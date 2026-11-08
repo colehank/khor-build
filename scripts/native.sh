@@ -223,6 +223,8 @@ PYTEST
     ;;
   contracts)
     test -x "$KHOR_AGENT_BUNDLE"
+    run_tests acp-setup -p khor-node --lib acp_management::tests
+    run_tests acp-process -p khor-node --lib acp_process::tests
     run_tests runtime-image -p khor-cli --test runtime_image
     run_tests agent-hook-retirement -p khor-cli --test run
     run_tests agent-recognition -p khor-node --lib recognition::tests
@@ -267,6 +269,8 @@ npm ci --prefix apps/agent
 (cd apps/agent && node build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE")
 export KHOR_TEST_AGENT_BIN="$KHOR_AGENT_BUNDLE"
 run_tests runtime-update-domain -p khor-runtime -p khor-update
+run_tests acp-setup -p khor-node --lib acp_management::tests
+run_tests acp-process -p khor-node --lib acp_process::tests
 cargo test --locked -p khor-runtime actual_standalone_agent -- --ignored --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/actual-agent-runtime.log"
 npm ci --prefix apps/gui
 npm run build --prefix apps/gui
