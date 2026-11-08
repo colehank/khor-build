@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: test a materialized source snapshot on disposable Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|netlab-smoke|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|netlab-smoke|netlab-dynamic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -40,6 +40,8 @@ else
   export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
   if [[ "$DEV_TASK" == netlab-smoke ]]; then
     bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_
+  elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
+    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p7_
   else
     bash scripts/netlab.sh
   fi
