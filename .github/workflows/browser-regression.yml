@@ -10,7 +10,7 @@ on:
       task:
         type: choice
         default: editor-overwrite
-        options: [editor-overwrite, browser-yield]
+        options: [editor-overwrite, browser-yield, chat-recovery]
       frontend_run:
         type: string
         default: '42444612307'
@@ -93,6 +93,23 @@ jobs:
           npx tsc --noEmit
           npx vite build
           npm run browser-yield
+      - name: Repeat the exact directory recovery case in both engines
+        if: ${{ inputs.task == 'chat-recovery' }}
+        working-directory: source/apps/gui
+        env:
+          PLAYWRIGHT_CHROMIUM_CHANNEL: ''
+          CHAT_RECOVERY_SCENARIOS: directory-required-shell
+          CHAT_RECOVERY_WEBKIT: '1'
+        run: |
+          failed=0
+          for iteration in 1 2 3; do
+            if CHAT_RECOVERY_CHECK_DIR="$RUNNER_TEMP/chat-recovery-$iteration" npm run chat-recovery; then
+              echo "Iteration $iteration passed"
+            else
+              failed=1
+            fi
+          done
+          exit "$failed"
       - name: Record runner memory and kernel process failures
         if: always()
         run: |
@@ -108,5 +125,6 @@ jobs:
             ${{ runner.temp }}/editor-overwrite-*
             ${{ runner.temp }}/runner-health
             ${{ runner.temp }}/browser-address
+            ${{ runner.temp }}/chat-recovery-*
           if-no-files-found: warn
           retention-days: 7
