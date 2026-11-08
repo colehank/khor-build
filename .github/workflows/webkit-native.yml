@@ -1,0 +1,82 @@
+name: Native WebKit proxy fixture comparison
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Public Khor revision with the concurrent proxy fixture
+        type: string
+        required: true
+      baseline_sha:
+        description: Public Khor revision with the previous fixture
+        type: string
+        default: 'a3068b984b3b8cd15a88ced0fd030fa7d4b63d32'
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - name: Fetch both exact public revisions
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$BASELINE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init source
+          git -C source -c credential.helper= fetch --depth=1 https://github.com/colehank/khor.git "$SOURCE_SHA" "$BASELINE_SHA"
+          git -C source checkout --detach "$BASELINE_SHA"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: source
+          cache-targets: false
+      - run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - name: Compile the isolated native driver
+        working-directory: source
+        run: |
+          mkdir -p "$RUNNER_TEMP/webkit-native"
+          xcrun swiftc -swift-version 5 apps/gui/core/tests/fixtures/webkit_loopback.swift -o "$RUNNER_TEMP/webkit-native-driver"
+      - name: Compare the existing and concurrent fixtures without changing assertions
+        working-directory: source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+          KHOR_WEBKIT_PROBE: ${{ runner.temp }}/webkit-native-driver
+        run: |
+          set -euo pipefail
+          test_name=web::loopback_tests::native_webkit_reaches_the_borrowed_loopback_origin
+          cargo test --locked -p khor-gui-core --lib "$test_name" --no-run
+          for iteration in 1 2 3; do
+            if cargo test --locked -p khor-gui-core --lib "$test_name" -- --ignored --nocapture --test-threads=1 > "$RUNNER_TEMP/webkit-native/baseline-$iteration.log" 2>&1; then
+              echo '0' > "$RUNNER_TEMP/webkit-native/baseline-$iteration.status"
+            else
+              echo "$?" > "$RUNNER_TEMP/webkit-native/baseline-$iteration.status"
+            fi
+          done
+          git checkout --detach "$SOURCE_SHA"
+          rustfmt --edition 2024 --emit stdout apps/gui/core/src/web.rs > "$RUNNER_TEMP/webkit-native/formatted-web.rs"
+          failed=0
+          for iteration in 1 2 3 4 5; do
+            if cargo test --locked -p khor-gui-core --lib "$test_name" -- --ignored --nocapture --test-threads=1 > "$RUNNER_TEMP/webkit-native/concurrent-$iteration.log" 2>&1; then
+              echo '0' > "$RUNNER_TEMP/webkit-native/concurrent-$iteration.status"
+            else
+              echo "$?" > "$RUNNER_TEMP/webkit-native/concurrent-$iteration.status"
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: webkit-native-comparison
+          path: ${{ runner.temp }}/webkit-native
+          retention-days: 7
