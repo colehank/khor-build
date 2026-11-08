@@ -90,7 +90,8 @@ jobs:
           KHOR_GATE_TMP: ${{ runner.temp }}/browser-address
         run: |
           mkdir -p "$KHOR_GATE_TMP"
-          npm run build
+          npx tsc --noEmit
+          npx vite build
           npm run browser-yield
       - name: Record runner memory and kernel process failures
         if: always()
