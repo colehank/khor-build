@@ -1,0 +1,65 @@
+name: Pinned browser regression
+run-name: Editor overwrite ${{ inputs.source_sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full public Khor source commit
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  editor-overwrite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch exact public source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init source
+          git -C source -c credential.helper= fetch --depth=1 https://github.com/colehank/khor.git "$SOURCE_SHA"
+          git -C source checkout --detach FETCH_HEAD
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22.19.0
+      - run: npm ci
+        working-directory: source/apps/gui
+      - run: npx playwright-core install --with-deps chromium webkit
+        working-directory: source/apps/gui
+      - name: Repeat exact two-editor behavior without changing assertions
+        working-directory: source/apps/gui
+        env:
+          PLAYWRIGHT_CHROMIUM_CHANNEL: ''
+          EDITOR_OVERWRITE_SCENARIOS: two-editors
+          EDITOR_OVERWRITE_WEBKIT: '1'
+        run: |
+          failed=0
+          for iteration in 1 2 3; do
+            if EDITOR_OVERWRITE_CHECK_DIR="$RUNNER_TEMP/editor-overwrite-$iteration" npm run editor-overwrite; then
+              echo "Iteration $iteration passed"
+            else
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Record runner memory and kernel process failures
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/runner-health"
+          free -h > "$RUNNER_TEMP/runner-health/memory.txt"
+          df -h > "$RUNNER_TEMP/runner-health/disk.txt"
+          sudo dmesg | tail -150 > "$RUNNER_TEMP/runner-health/kernel-tail.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: editor-overwrite-evidence
+          path: |
+            ${{ runner.temp }}/editor-overwrite-*
+            ${{ runner.temp }}/runner-health
+          if-no-files-found: warn
+          retention-days: 7
