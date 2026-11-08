@@ -9,6 +9,7 @@ on:
         type: string
 permissions:
   contents: read
+  actions: read
 jobs:
   editor-overwrite:
     runs-on: ubuntu-24.04
@@ -24,6 +25,21 @@ jobs:
           git -C source -c credential.helper= fetch --depth=1 https://github.com/colehank/khor.git "$SOURCE_SHA"
           git -C source checkout --detach FETCH_HEAD
           test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Reuse the source-matched public Quality frontend
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          repository: colehank/khor
+          run-id: '42444612307'
+          github-token: ${{ github.token }}
+          name: frontend
+          path: frontend
+      - name: Verify and restore the same generated frontend inputs
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python3 source/scripts/release_manifest.py verify --root frontend --sha "$SOURCE_SHA" --kind frontend --run-id '42444612307'
+          cp -R frontend/gen source/apps/gui/src/gen
+          cp -R frontend/dist source/apps/gui/dist
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22.19.0
