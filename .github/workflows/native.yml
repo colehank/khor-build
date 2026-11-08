@@ -13,7 +13,7 @@ on:
         required: true
         default: full
         type: choice
-        options: [dependencies, full, approval, close, contracts, files, release-preflight, ios-release-preflight, pair, keeper, startup, ssh-evidence, ssh, update-lab, update-lab-interrupt, cli-update-lab]
+        options: [dependencies, full, approval, close, contracts, files, release-preflight, ios-release-preflight, session-startup, pair, keeper, startup, ssh-evidence, ssh, update-lab, update-lab-interrupt, cli-update-lab]
 
 permissions:
   contents: read
@@ -49,6 +49,7 @@ jobs:
           cp scripts/update-lab.py "$package_dir/update-lab.py"
           cp scripts/cli-update-lab.py "$package_dir/cli-update-lab.py"
           cp scripts/release-preflight.py "$package_dir/release-preflight.py"
+          cp scripts/session-startup.py "$package_dir/session-startup.py"
           cp scripts/worker-storage.py "$package_dir/worker-storage.py"
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
           if [[ "$CHECK" = dependencies || "$CHECK" = files || "$CHECK" = release-preflight || "$CHECK" = ios-release-preflight ]]; then
