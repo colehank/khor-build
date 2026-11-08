@@ -60,8 +60,8 @@ else
     printf '{"test_threads":2,"repeats":1,"filters":["paths::p2_","paths::p3_","paths::p6_","hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=2 bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_ hop::f4_ hop::f4s_ hop::f4i_
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
-    printf '{"test_threads":1,"repeats":3,"filters":["paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    repeat_netlab paths::p7_
+    printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    repeat_netlab paths::p2_ paths::p3_ paths::p7_
   elif [[ "$DEV_TASK" == netlab-compare ]]; then
     # Performance comparisons run sequentially; retain all three outcomes
     # even when one iteration exposes the baseline's expected product red.
