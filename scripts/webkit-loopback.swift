@@ -13,7 +13,7 @@ final class Probe: NSObject, WKNavigationDelegate {
         let store = WKWebsiteDataStore.nonPersistent()
         if mode != "direct" {
             let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: NWEndpoint.Port(CommandLine.arguments[3])!)
-            let proxy = ProxyConfiguration(httpCONNECTProxy: endpoint, tlsOptions: nil)
+            var proxy = ProxyConfiguration(httpCONNECTProxy: endpoint, tlsOptions: nil)
             proxy.allowFailover = false
             if mode == "explicit" {
                 proxy.matchDomains = ["", "127.0.0.1", "localhost"]
