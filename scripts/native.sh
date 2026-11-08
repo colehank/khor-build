@@ -300,6 +300,14 @@ run_tests runtime-update-domain -p khor-runtime -p khor-update
 run_tests acp-setup -p khor-node --lib acp_management::tests
 run_tests acp-process -p khor-node --lib acp_process::tests
 cargo test --locked -p khor-runtime actual_standalone_agent -- --ignored --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/actual-agent-runtime.log"
+run_tests semantic-media -p khor-node --lib adaptor::media::tests
+run_tests semantic-claude -p khor-node --lib adaptor::claude::tests
+run_tests semantic-codex -p khor-node --lib adaptor::codex::tests
+run_tests setting-receipts -p khor-node --lib gui_host::setting_receipt_tests
+run_tests full-khor-history -p khor-node --lib khor_agent::history::tests
+run_tests redacted-summary -p khor-node --lib khor_agent::updates::tests
+run_tests native-file-handoff -p khor-gui-core --lib file_handoff::
+run_tests native-history-export -p khor-gui-core --lib history_export::
 npm ci --prefix apps/gui
 npm run build --prefix apps/gui
 cargo test --locked -p khor-gui --lib update -- --test-threads=1 2>&1 | tee "$REPORT_DIR/desktop-update-contracts.log"
