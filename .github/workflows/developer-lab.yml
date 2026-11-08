@@ -268,6 +268,15 @@ jobs:
           npm run sticky-fade
           npm run list-scroll-ui
           PLAYWRIGHT_CHROMIUM_CHANNEL='' WORKSPACE_CONTENT_DIR="$LAB_REPORT/workspace-content" npm run workspace-content-ui
+      - name: Check semantic history and message rendering
+        working-directory: snapshot/source/apps/gui
+        env:
+          LAB_BUNDLE: ${{ runner.temp }}/frontend
+          LAB_REPORT: ${{ runner.temp }}/checks
+          QUALITY_ENGINES: webkit
+        run: |
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' HISTORY_SEARCH_UI_EVIDENCE="$LAB_REPORT/history-search" npm run history-search-ui
+          PLAYWRIGHT_CHROMIUM_CHANNEL='' AI_ELEMENTS_OUT="$LAB_REPORT/ai-elements" npm run ai-elements
       - name: Exercise the complete production App in Chromium and WebKit
         working-directory: snapshot/source/apps/gui
         env:
@@ -286,15 +295,6 @@ jobs:
           PLAYWRIGHT_CHROMIUM_CHANNEL='' CHAT_POLL_CHECK_DIR="$LAB_REPORT/chat-poll" npm run chat-poll
           PLAYWRIGHT_CHROMIUM_CHANNEL='' CHAT_CANCEL_CHECK_DIR="$LAB_REPORT/chat-cancel" npm run chat-cancel
           PLAYWRIGHT_CHROMIUM_CHANNEL='' CHAT_RECOVERY_CHECK_DIR="$LAB_REPORT/chat-recovery" npm run chat-recovery
-      - name: Check semantic history and message rendering
-        working-directory: snapshot/source/apps/gui
-        env:
-          LAB_BUNDLE: ${{ runner.temp }}/frontend
-          LAB_REPORT: ${{ runner.temp }}/checks
-          QUALITY_ENGINES: webkit
-        run: |
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' HISTORY_SEARCH_UI_EVIDENCE="$LAB_REPORT/history-search" npm run history-search-ui
-          PLAYWRIGHT_CHROMIUM_CHANNEL='' AI_ELEMENTS_OUT="$LAB_REPORT/ai-elements" npm run ai-elements
       - name: Check pinned hot iteration
         working-directory: snapshot/source/apps/gui
         env:
