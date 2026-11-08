@@ -139,6 +139,8 @@ jobs:
           npm run links
           npm run terminal-link-intent
           npm run terminal-links-ui
+          TERMINAL_LINK_ENGINE=webkit TERMINAL_LINK_UI_DIR="$RUNNER_TEMP/terminal-links/webkit" npm run terminal-links-ui
+          npm run terminal-links-app
       - name: Record runner memory and kernel process failures
         if: always()
         run: |
