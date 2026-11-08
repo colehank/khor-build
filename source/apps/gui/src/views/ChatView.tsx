@@ -1,0 +1,2119 @@
+import {useReadableHistoryExport} from '@/hooks/use-readable-history-export';
+import {ReadFreshness} from '@/lib/read-freshness';
+import {useConfirmedSetting} from '@/hooks/use-confirmed-setting';
+import {CopyText} from '@/components/CopyText';
+import {useHistoryPrefetch} from '@/hooks/use-history-prefetch';
+import {useSessionDocuments} from '@/hooks/use-session-documents';
+import { listenNativeDragDrop } from "@/lib/native-events";
+import { awaitChatDraftReceipt, chatDraftOwner, completeChatDraft, discardChatDraft, rememberChatDraft, recoverableChatDrafts, settleChatDraft, subscribeChatDrafts, unconfirmedChatDrafts, type ChatDraft } from '@/lib/chat-drafts';
+import {useSessionDraft} from '@/hooks/use-session-draft';
+import {useUpdateBlocker} from '@/lib/update-readiness';
+import {unifiedSession,AcpHeader,SessionAdd} from "@/views/SessionPreferences";
+import {AgentInteraction,type InteractionRequest} from "@/components/AgentInteraction";
+import {chatAttachment} from "@/api";
+import {configOptions,type AgentProtocol} from "@/lib/acp-session";
+import { useReadingSession, type SessionReading } from "@/hooks/use-session-attention";
+import { offerTabAct } from "@/lib/tab-acts";
+import { failedNotice, offerNotice, rejoinNotice, type PillNotice } from "@/lib/pill-notices";
+import { takeHandOff, askOpenPath, askOpenUrl } from "@/lib/composer-handoff";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+
+import {
+  inApp,
+  type ChatFrame,
+  type Miss,
+} from "@/api";
+import { AgentContent } from "@/components/ai-elements/content";
+import { Bubble, BubbleContent } from "@/components/ui/ai/bubble";
+import { IconBack, IconSearch } from "@/components/icons";
+import { AgentConfirmation, AgentPlan, ToolDot, type AgentToolData, type AgentPlanEntry } from "@/components/ai-elements/agent";
+import { Markdown } from "@/components/Markdown";
+import { Waiting } from "@/components/RegionState";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { gui } from "@/gen/catalog";
+import { HIDDEN_MS, useHidden } from "@/hooks/use-hidden";
+import { useKeysTo } from "@/hooks/use-keys-to";
+import { useCoarse } from "@/hooks/use-coarse";
+import { useChatScroll } from "@/hooks/use-chat-scroll";
+import { BarSeat } from "@/components/SessionBar";
+import { sessionMark } from "@/components/BrandIcons";
+import { FileCard, MachineFilePick, PendingChips, SendInto, usePendingFiles } from "@/views/chat-files";
+import { LinkHomeProvider, useKnownFiles, useLinkHome, type LinkHome } from "@/views/linkHome";
+import { filesFolderIn, splitAttachments, withAttachments } from "@/lib/paths";
+import { Composer, COMPOSER_TEXT, ModeSeat, SendSeat, StopSeat, WhoSeat, useGrowingText, type AddOption, type Who } from "@/views/Composer";
+import { lasting, word } from "@/words";
+import { imeKey } from "@/lib/ime";
+import { applyAcpUpdate } from "@/lib/acp-view";
+import {AgentCommandMenu} from '@/components/AgentCommandMenu';
+import {agentCommandUpdate, matchingAgentCommands, type AgentCommand} from '@/lib/agent-commands';
+
+import { historyApi } from '@/lib/history-api';
+import { HistorySearch } from '@/components/history/HistorySearch';
+import { useHistoryExport } from '@/hooks/use-history-export';
+import type { FindHit } from '@/lib/history-find-model';
+import { historyReader, type HistoryReaderState } from '@/lib/history-reader';
+import { historyEntries, historyReferences } from '@/lib/history-window';
+import { paintHistory, retainHistoryIdentity, latestHistoryBody, historyContributionPoint, historyContributionPresent, type HistoryContributionPoint, type HistoryItem } from '@/lib/history-paint';
+import { HistoryRecords } from '@/components/history/HistoryRecords';
+
+/** Live control/state waits stay responsive while idle polling backs off. */
+const LIVE_MS = 50;
+const IDLE_MS = 500;
+/** How long one pushed wait is held open with nothing new (`chatWait`):
+    in the app, a visible conversation holds one wait at a time instead
+    of either beat above, and a frame shows the moment it lands (round
+    NET-2, piece 6). */
+const WAIT_MS = 1000;
+const FAILED_MS_MOST = 5000;
+/** One painted item, folded from the protocol's chunks. */
+type Item = (
+  | import("@/lib/acp-view").AcpPlan
+  | import("@/lib/acp-view").AcpCompaction
+  | import("@/lib/acp-view").AcpResource
+  | { who: "user"; text: string; token?: string }
+  | { who: "agent"; text: string }
+  | { who: "thought"; text: string }
+  | (AgentToolData & { who: "tool" })
+  | {
+      who: "ask";
+      ask: number;
+      title: string;
+      options: [string, string][];
+      /** The option id this ask was answered with, once the host says
+          so. `null` while it is still open, `""` for a refusal — the
+          three states are three pictures, and "answered with nothing"
+          is not the same as "still asking". */
+      answer: string | null;
+    }
+  | { who: "sys"; text: string }
+  | { who: "seal" }) & { historyKey?: string; historyEntries?: string[]; displayKey?: string };
+
+/** Canonical pages own all body content. Live paint holds only current
+ * optimistic inputs and bounded control notices; unresolved permissions remain actionable. */
+type Painting = { past: HistoryItem[]; live: Item[] };
+const BLANK: Painting = { past: [], live: [] };
+function boundedLive(items: Item[]): Item[] {
+  let transient = 0;
+  return items.slice().reverse().filter(item => {
+    if (item.who === 'ask' && item.answer === null) return true;
+    return ++transient <= 32;
+  }).reverse();
+}
+function acceptHistory(previous: Painting, entries: Parameters<typeof paintHistory>[0], references: Parameters<typeof paintHistory>[1] = []): Painting {
+  const recorded = new Set(entries.flatMap(entry => entry.frame.kind === 'prompt_recorded' ? [entry.frame.token] : []));
+  return { ...previous, past: retainHistoryIdentity(previous.past, paintHistory(entries, references)),
+    live: previous.live.filter(item => item.who !== 'user' || !item.token || !recorded.has(item.token)) };
+}
+
+type HistoryTextPoint = { tail: number; sampleFrom: number; sample: string; top: number; entries: string[]; contribution: HistoryContributionPoint | null };
+type SavedReading={before:string;entry:string;top:number;point:HistoryTextPoint|null};
+const readingPlaces=new Map<string,SavedReading>();
+const readingKey=(session:string,binding:string)=>JSON.stringify([session,binding]);
+
+function historyTextLength(root: HTMLElement): number {
+  const nodes = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let size = 0;
+  while (nodes.nextNode()) size += (nodes.currentNode as Text).length;
+  return size;
+}
+function historyTextSlice(root: HTMLElement, from: number, to: number): string {
+  const nodes = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let offset = 0, text = '';
+  while (nodes.nextNode() && offset < to) {
+    const node = nodes.currentNode as Text;
+    if (offset + node.length > from) text += node.data.slice(Math.max(0, from - offset), to - offset);
+    offset += node.length;
+  }
+  return text;
+}
+function historyTextRect(root: HTMLElement, at: number): DOMRect | null {
+  const nodes = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  while (nodes.nextNode()) {
+    const node = nodes.currentNode as Text;
+    if (at < offset + node.length) {
+      const range = root.ownerDocument.createRange();
+      range.setStart(node, at - offset); range.setEnd(node, at - offset + 1);
+      return range.getClientRects()[0] ?? null;
+    }
+    offset += node.length;
+  }
+  return null;
+}
+/** A bounded rendered-text point, scoped to the same retained source suffix.
+ * The short sample rejects changed Markdown text; it never identifies a message. */
+function captureHistoryTextPoint(root: HTMLElement, viewport: HTMLElement, item: HistoryItem): HistoryTextPoint | null {
+  const doc = root.ownerDocument as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const bounds = root.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+  const top = Math.max(bounds.top, view.top), bottom = Math.min(bounds.bottom, view.bottom);
+  const x = (Math.max(bounds.left, view.left) + Math.min(bounds.right, view.right)) / 2;
+  const line = parseFloat(getComputedStyle(root).lineHeight);
+  const y = Math.min(bottom, top + (Number.isFinite(line) ? line / 2 : (bottom - top) / 2));
+  const position = doc.caretPositionFromPoint?.(x, y);
+  const caret = position ? doc.createRange() : doc.caretRangeFromPoint?.(x, y);
+  if (!caret) return null;
+  if (position) { caret.setStart(position.offsetNode, position.offset); caret.collapse(true); }
+  if (!root.contains(caret.startContainer) || caret.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  const nodes = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let at = 0;
+  while (nodes.nextNode()) {
+    const node = nodes.currentNode as Text;
+    if (node === caret.startContainer) { at += caret.startOffset; break; }
+    at += node.length;
+  }
+  const length = historyTextLength(root);
+  at = Math.min(at, length - 1);
+  const rect = at >= 0 ? historyTextRect(root, at) : null;
+  if (!rect || !rect.height) return null;
+  const from = Math.max(0, at - 24), to = Math.min(length, at + 24);
+  const sample=historyTextSlice(root,from,to), sampleFrom=from-at;
+  return { tail: length - at, sampleFrom, sample, top: rect.top - view.top,
+    entries: item.historyEntries.slice(), contribution:historyContributionPoint(item,sample,sampleFrom) };
+}
+/** Search only the mounted bounded card for this short exact DOM sample.
+ * Chunking avoids constructing another whole rendered-message string. */
+function uniqueHistoryTextSample(root: HTMLElement, sample: string): number | null {
+  if(!sample || sample.length>48)return null;
+  const nodes=root.ownerDocument.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  let offset=0, carry='', found: number | null=null;
+  while(nodes.nextNode()){
+    const text=(nodes.currentNode as Text).data;
+    for(let start=0;start<text.length;start+=65536){
+      const chunk=text.slice(start,start+65536), joined=carry+chunk;
+      for(let at=joined.indexOf(sample);at>=0;at=joined.indexOf(sample,at+1)){
+        if(found!==null)return null;
+        found=offset-carry.length+at;
+      }
+      offset+=chunk.length;carry=sample.length>1?joined.slice(-(sample.length-1)):'';
+    }
+  }
+  return found;
+}
+function restoreHistoryTextPoint(root: HTMLElement, viewport: HTMLElement, point: HistoryTextPoint, item: HistoryItem): boolean {
+  let at: number;
+  if(point.contribution){
+    if(!historyContributionPresent(item,point.contribution,point.sample,point.sampleFrom))return false;
+    const sampleAt=uniqueHistoryTextSample(root,point.sample);
+    if(sampleAt===null)return false;
+    at=sampleAt-point.sampleFrom;
+  }else{
+    // Complex Markdown without proven source mapping retains the original
+    // strict suffix fallback; it never substitutes a different contribution.
+    const entries=item.historyEntries;
+    if (entries.length < point.entries.length || point.entries.some((key, index) => key !== entries[entries.length - point.entries.length + index])) return false;
+    at=historyTextLength(root)-point.tail;
+  }
+  if (at < 0 || historyTextSlice(root, at + point.sampleFrom, at + point.sampleFrom + point.sample.length) !== point.sample) return false;
+  const rect = historyTextRect(root, at);
+  if (!rect || !rect.height) return false;
+  viewport.scrollTop += rect.top - viewport.getBoundingClientRect().top - point.top;
+  return true;
+}
+
+/** One `ToolCallContent`, the protocol's three-tag union. */
+type ToolContent = {
+  type?: string;
+  content?: { type?: string; text?: string };
+  path?: string;
+  oldText?: string | null;
+  newText?: string;
+};
+
+type Update = import("@/lib/acp-view").AcpUpdate & {
+  sessionUpdate?: string;
+  /** **The protocol overloads this key.** On a message chunk it is one
+      content block; on a tool call it is a *list* of `ToolCallContent`.
+      One field with both shapes, narrowed at each reader, rather than
+      two names for one wire key — two names would let a reader take the
+      wrong one and get `undefined` rather than a type error. */
+  content?: { type?: string; text?: string } | ToolContent[];
+  title?: string | null;
+  /** `tool_call` and `tool_call_update` both name their call with it. */
+  toolCallId?: string;
+  kind?: string;
+  status?: string;
+  /** `tool_call` / `tool_call_update`: what the tool was given and what
+      it produced. `content` is the protocol's tagged union — `content`,
+      `diff` or `terminal`. */
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  locations?: { path?: string; line?: number }[];
+  /** `current_mode_update`: which mode the agent is in. */
+  currentModeId?: string;
+  /** `plan`: the agent's own list of what it is doing. */
+  entries?: { content?: string; status?: string; priority?: string }[];
+  /** `usage_update`: how much of the window this conversation holds. */
+  used?: number;
+  size?: number;
+  cost?: { amount?: number; currency?: string } | null;
+};
+
+/** This conversation's context reading, if this frame carries one.
+    Replaces rather than accumulates: `used` is the whole window's
+    occupancy at that moment, so the newest frame is simply the truth
+    and adding them up would be a number with no meaning. */
+function usageIn(frame: ChatFrame): { used: number; size: number; cost: Cost | null } | null {
+  const u = updateOf(frame);
+  if (u?.sessionUpdate !== "usage_update") return null;
+  // A size of zero is not a reading. The 垫片 will not send one (it
+  // reports nothing until the agent tells it the window), but a
+  // third-party agent might, and dividing by it paints Infinity%.
+  if (typeof u.used !== "number" || typeof u.size !== "number" || u.size <= 0) return null;
+  const c = u.cost;
+  return {
+    used: u.used,
+    size: u.size,
+    cost:
+      c && typeof c.amount === "number"
+        ? { amount: c.amount, currency: c.currency ?? "USD" }
+        : null,
+  };
+}
+
+/** The agent's plan, if this frame carries one.
+    **Replaces, never appends.** The protocol re-sends the whole list
+    every time any entry moves, so keeping the newest is the truth and
+    accumulating would paint the same three steps five times over.
+
+    **claude sends none of these**, measured 2026-08-30: its tool list
+    on this machine has 128 entries and not one of them is todo-shaped
+    (`Task`/`TaskOutput`/`TaskStop` are how it runs subagents, not how
+    it plans). An earlier note in this repo said the plan would come
+    from a `TodoWrite` tool; there is no such tool here. So this reads a
+    frame khor's own 垫片 will never send, for the same reason the title
+    does. */
+function planIn(frame: ChatFrame): PlanEntry[] | null {
+  const u = updateOf(frame);
+  if (u?.sessionUpdate !== "plan") return null;
+  return (u.entries ?? [])
+    .map((e) => ({ content: e.content ?? "", status: e.status ?? "pending" }))
+    .filter((e) => e.content);
+}
+
+type PlanEntry = AgentPlanEntry;
+
+/** One of the agent's own modes (`SessionMode`). */
+type ModeListed = { id: string; name: string; description?: string | null };
+/** One value a select offers (`SessionConfigSelectOption`). */
+type ValueListed = { value: string; name: string; description?: string | null };
+/** Values under a heading (`SessionConfigSelectGroup`). */
+type GroupListed = { group: string; name: string; options: ValueListed[] };
+/** One option (`SessionConfigOption`): the protocol tags the kind on
+    `type` and flattens the kind's fields beside it, so a select has
+    `currentValue: string` and `options`, a switch `currentValue: boolean`. */
+type OptionListed = {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  type?: string;
+  currentValue?: string | boolean;
+  options?: (ValueListed | GroupListed)[];
+};
+/** What the session can be set to and is set to — `ChatFrame::Settings`,
+    which the host sends whole on attach and on every change. */
+type Settings = {
+  modes: { currentModeId: string; availableModes: ModeListed[] } | null;
+  options: OptionListed[];
+  /** The model id, when the agent said it (khor's shims, in `_meta`;
+      the host holds it — `khor_acp::MODEL_META`). */
+  model: string | null;
+};
+
+/** The settings this frame carries, if it is one. Read loosely — the
+    body is the protocol's JSON, and a field this face does not know is
+    left where it is rather than refused. */
+function settingsIn(frame: ChatFrame): Settings | null {
+  if (frame.kind !== "settings") return null;
+  const carried = frame.settings;
+  if (typeof carried !== "object" || carried === null) return null;
+  const s = carried as { modes?: unknown; options?: unknown; model?: unknown };
+  const modes =
+    typeof s.modes === "object" && s.modes !== null
+      ? (s.modes as { currentModeId?: unknown; availableModes?: unknown })
+      : null;
+  return {
+    modes:
+      modes && typeof modes.currentModeId === "string"
+        ? {
+            currentModeId: modes.currentModeId,
+            availableModes: Array.isArray(modes.availableModes)
+              ? (modes.availableModes as ModeListed[])
+              : [],
+          }
+        : null,
+    options: configOptions(s.options),
+    model: typeof s.model === "string" && s.model.trim() ? s.model.trim() : null,
+  };
+}
+
+/**
+ * The model a conversation runs on, where it can be known: what the host
+ * holds (`settings.model`: codex's shim says it when the thread starts,
+ * claude's on its first turn), or else the agent's own `model` option —
+ * how an agent off the registry names it, when it does — by the value's
+ * id, which is the provider's spelling.
+ */
+function modelOf(settings: Settings | null): string | null {
+  if (!settings) return null;
+  const o = settings.options.find((x) => x.category === "model" && typeof x.currentValue === "string");
+  return typeof o?.currentValue === "string" && o.currentValue ? o.currentValue : settings.model;
+}
+
+/** The agent's name as a person knows it: the vendor's product for the
+    three khor knows, else the agent's own name for itself. */
+function agentName(category: string | null, said: string | null): string | null {
+  switch (category) {
+    case "claude":
+      return gui.vendor_claude;
+    case "codex":
+      return gui.accounts_provider_codex;
+    case "cursor":
+      return gui.vendor_cursor;
+    default:
+      return said;
+  }
+}
+
+/** A select's values, groups opened out, each with the heading it sat
+    under (`null` for the ungrouped). */
+function valuesOf(o: OptionListed): { heading: string | null; value: ValueListed }[] {
+  const out: { heading: string | null; value: ValueListed }[] = [];
+  for (const item of o.options ?? []) {
+    if ("options" in item && Array.isArray(item.options)) {
+      for (const value of item.options) out.push({ heading: item.name, value });
+    } else if ("value" in item) {
+      out.push({ heading: null, value: item });
+    }
+  }
+  return out;
+}
+
+/**
+ * A mode's name **inside the menu**, where every listed mode needs one
+ * to be picked by — so unlike `modeSaid` the ordinary mode has a word
+ * here. Known ids get this face's words (claude's four, codex's three —
+ * `codexagent::PRESETS`, whose read-only and full access mean what
+ * claude's 只读不改 and 全部自动批准 mean to a person); anything else is
+ * the agent's own name for it, and its id when it gave none.
+ */
+function modeWord(id: string, listed: ModeListed[]): string {
+  switch (id) {
+    case "default":
+      return gui.chat_mode_default;
+    case "plan":
+    case "read-only":
+      return gui.chat_mode_plan;
+    case "acceptEdits":
+      return gui.chat_mode_accept_edits;
+    case "bypassPermissions":
+    case "full-access":
+      return gui.chat_mode_bypass;
+    case "workspace":
+      return gui.chat_mode_codex_auto;
+    case "auto":
+      return gui.chat_mode_claude_auto;
+    default:
+      return listed.find((m) => m.id === id)?.name ?? id;
+  }
+}
+
+/** The menu's second line: exactly what the mode asks about and what it
+    does not — this face's words for the ids it knows, else the agent's
+    own description. */
+function modeNote(id: string, listed: ModeListed[]): string | null {
+  switch (id) {
+    case "default":
+      return gui.chat_mode_default_note;
+    case "plan":
+      return gui.chat_mode_plan_note;
+    case "acceptEdits":
+      return gui.chat_mode_accept_edits_note;
+    case "bypassPermissions":
+      return gui.chat_mode_bypass_note;
+    case "read-only":
+      return gui.chat_mode_codex_read_only_note;
+    case "workspace":
+      return gui.chat_mode_codex_auto_note;
+    case "full-access":
+      return gui.chat_mode_codex_full_access_note;
+    case "auto":
+      return gui.chat_mode_claude_auto_note;
+    default:
+      return listed.find((m) => m.id === id)?.description ?? null;
+  }
+}
+
+/**
+ * What to say about the mode the agent is in — **and `null` for the
+ * ordinary one**, which is the whole design.
+ *
+ * `default` is what nearly every session is, and a marker that is
+ * always there is not a marker (docs/UX.md 角标可归零). The three that
+ * do show are the ones where a reader's expectation would otherwise be
+ * wrong: one that will not touch a file, and two that will touch one
+ * without asking. A mode this face has never heard of is shown as the
+ * agent's own word rather than hidden — an unknown mode is still not
+ * the default, and「something is different here」is the fact.
+ */
+function modeSaid(id: string): string | null {
+  switch (id) {
+    case "default":
+    case "":
+      return null;
+    case "plan":
+      return gui.chat_mode_plan;
+    case "acceptEdits":
+      return gui.chat_mode_accept_edits;
+    case "bypassPermissions":
+      return gui.chat_mode_bypass;
+    case "auto":
+      return gui.chat_mode_claude_auto;
+    default:
+      return id;
+  }
+}
+
+/** The agent's own name for this conversation, if this frame carries
+    one. An empty string counts as "cleared": the protocol distinguishes
+    a field that was not sent from one sent as null, and this face's
+    `null` means "no title", which is what both of those come to here. */
+function titleIn(frame: ChatFrame): string | null | undefined {
+  const u = updateOf(frame);
+  if (u?.sessionUpdate !== "session_info_update") return undefined;
+  const t = u.title;
+  return typeof t === "string" && t.trim() ? t : null;
+}
+
+type Cost = { amount: number; currency: string };
+
+function updateOf(frame: ChatFrame): Update | null {
+  if (frame.kind !== "note") return null;
+  const carried = frame.update;
+  if (typeof carried !== "object" || carried === null) return null;
+  const inner = (carried as { update?: unknown }).update;
+  return typeof inner === "object" && inner !== null ? (inner as Update) : null;
+}
+
+/**
+ * Folds one frame into `out`, in place. Answers whether it painted
+ * anything — a `Turning` or a `Gone` carries no picture, and a poll
+ * that only brought those must not hand React a new array.
+ *
+ * Items are replaced rather than edited (`{ ...last, text: … }`): the
+ * array is what React is given, and an object mutated inside it is a
+ * change React has no way to see.
+ */
+function eat(out: Item[], frame: ChatFrame, paintUser: boolean): boolean {
+  if (frame.kind === "ask") {
+    out.push({
+      who: "ask",
+      ask: frame.ask,
+      title: frame.title,
+      options: frame.options,
+      answer: null,
+    });
+    return true;
+  }
+  if (frame.kind === "answered") {
+    // Ask state belongs to the live control stream, including a pending
+    // question repeated on attachment. Canonical history carries its body.
+    const at = out.findIndex((i) => i.who === "ask" && i.ask === frame.ask);
+    const seat = at < 0 ? null : out[at];
+    if (seat && seat.who === "ask") {
+      out[at] = { ...seat, answer: frame.option ?? "" };
+      return true;
+    }
+    return false;
+  }
+  // A turn that did not go is the session pill's (NOTICE-BRIEF), not a
+  // line of the conversation: the line itself is taken back.
+  if (frame.kind === "unsent") return true;
+  if (frame.kind === "refused") {
+    // A line of the conversation's own, because that is where the
+    // person is looking when it happens — and it says which of the two
+    // it was: one means wait, the other means the turn is already over.
+    const said =
+      frame.why === "turn-in-flight"
+        ? gui.chat_refused_turn_in_flight
+        : frame.why === "setting-refused"
+          ? gui.chat_refused_setting
+          : gui.chat_refused_no_turn;
+    out.push({ who: "sys", text: said });
+    return true;
+  }
+  if (frame.kind === "turn") {
+    // 中断 gets a line; the calm endings are the list row's to say.
+    if (frame.stop !== "EndTurn" && frame.stop !== "Cancelled") {
+      out.push({ who: "sys", text: word("errored") });
+    }
+    // The seal stops the next turn's first words running into this
+    // turn's last ones. It is filtered out before painting.
+    out.push({ who: "seal" });
+    return true;
+  }
+  const u = updateOf(frame);
+  if (!u) return false;
+  return applyAcpUpdate(out, u, paintUser);
+}
+
+/**
+ * How long the running turn has been running, ticking once a second.
+ *
+ * **Its own component because a clock must not repaint a
+ * conversation.** The first version held `now` in `ChatView` and
+ * re-rendered the whole item list every second — on top of the live
+ * poll, and for a number four characters wide. Here the tick is local:
+ * one text node changes, and the stream above it is not touched.
+ *
+ * The interval exists only while this is mounted, which is only while a
+ * turn runs — an idle conversation has no timer at all.
+ */
+function BusyFor({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [since]);
+  return (
+    <span data-chat-busy-for style={{ color: "var(--state-busy)" }}>
+      {gui.chat_busy_for(lasting(Math.max(0, now - since)))}
+    </span>
+  );
+}
+
+/** One poll's worth of frames, folded into the picture. Answers the
+    same object when nothing was painted, so React stops there. */
+function absorb(paint: Painting, frames: ChatFrame[]): Painting {
+  const live = paint.live.slice();
+  let moved = false;
+  for (const frame of frames) {
+    if (frame.kind === 'ask' || frame.kind === 'answered' || frame.kind === 'refused' || frame.kind === 'unsent')
+      moved = eat(live, frame, false) || moved;
+  }
+  if (!moved) return paint;
+  return {...paint, live: boundedLive(live)};
+}
+
+/** Every session reads bounded canonical pages; hosted sessions also keep a control attachment. */
+export function ChatView({
+  id,
+  still: recorded = false,
+  binding,
+  watch = true,
+  ended = false,
+  category = null,
+  machine = null,
+  home = null,
+  onReading,
+}: {
+  id: string;
+  onReading?: SessionReading;
+  watch?: boolean;
+  /** Ended live hosts do not attach. Stored content uses the read-only branch. */
+  ended?: boolean;
+  /** The machine this conversation runs on, by the name a person reads
+      (`SessionRow::home`) — what a file's caption says it is on. */
+  home?: string | null;
+  /** The far machine this conversation lives on — `null` for one held
+      here. What a long wait names. */
+  machine?: string | null;
+  /** The row's vendor (`SessionRow::category`): which mark and which
+      name the composer's who seat wears. */
+  category?: string | null;
+} & ({ still: true; binding: string } | { still?: false; binding?: never })) {
+  const still = recorded;
+  const [paint, setPaint] = useState<Painting>(BLANK);
+  const [history, setHistory] = useState<HistoryReaderState | null>(null);
+  const historyView = useRef<ReturnType<typeof historyReader> | null>(null);
+  const [historyEpoch, setHistoryEpoch] = useState(0);
+  const [historyBinding, setHistoryBinding] = useState<{ id: string; binding: string } | null>(null);
+  const sourceBinding = historyBinding?.id === id && (!still || historyBinding.binding === binding) ? historyBinding.binding : null;
+  const historyExport = useHistoryExport(id, sourceBinding);
+  const readableExport=useReadableHistoryExport(id,sourceBinding,category??"对话");
+  const [findingHistory, setFindingHistory] = useState(false);
+  const stopHistorySearch = useRef<(() => void) | null>(null);
+  const historyMatch = useRef<FindHit | null>(null);
+  const [matchedEntry, setMatchedEntry] = useState<string | null>(null);
+  const [captureWhy, setCaptureWhy] = useState<string | null>(null);
+  const captureNow = useRef<(() => void) | null>(null);
+  const historyAnchor = useRef<{ key: string; top: number; ticket: number; point: HistoryTextPoint | null } | null>(null);
+  const resumeReading=useRef<{saved:SavedReading;ticket:number}|null>(null);
+
+  const [loaded, setLoaded] = useState(false);
+  /** The agent's own commands, as of the last frame that carried a set. */
+  const [commands, setCommands] = useState<AgentCommand[]>([]);
+  const [gone, setGone] = useState(false);
+  // **Why it never opened, in the node's own words, and a way to try
+  // again** (round NET-FIX, audit/net.md F9): a machine that cannot be
+  // reached used to read 「没有找到这段对话的记录」, as though the
+  // conversation did not exist. And while it is being opened, the wait
+  // is said (`Waiting`) rather than an empty page.
+  const [openWhy, setOpenWhy] = useState<string | null>(null);
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  const attachedChat = useRef<ReturnType<typeof chatAttachment> | null>(null);
+  const withChat = <T,>(work: (view: ReturnType<typeof chatAttachment>) => Promise<T>): Promise<T> => {
+    const view = attachedChat.current;
+    return view?.id === id ? work(view) : Promise.reject(new Error("chat view is not attached"));
+  };
+  const [attempt, setAttempt] = useState(0);
+  // **The tab pill's third seat is this conversation's re-attach**
+  // (UX-33): the same attempt its 重试 makes.
+  useEffect(() => offerTabAct(id, { kind: "reload", run: () => setAttempt((n) => n + 1) }), [id]);
+  const [inTurn, setInTurn] = useState(false);
+  const [turnStatus,setTurnStatus]=useState('');
+  /** When the running turn started. Cleared with the turn, so a
+      finished conversation counts nothing — and see `waiting` below for
+      why a duration is the one thing worth adding to a screen that
+      already shows the stream. */
+  const [turnSince, setTurnSince] = useState<number | null>(null);
+  /** This conversation's own context window, as the agent last reported
+      it. `null` until an agent says — never a default: the whole reason
+      the 垫片 learns the size instead of tabulating it is that a made-up
+      denominator draws a gauge nobody measured. */
+  const [usage, setUsage] = useState<{ used: number; size: number; cost: Cost | null } | null>(null);
+  /** The agent's own name for this conversation, if it has one.
+      **claude never sends this** — measured 2026-08-30 off a real
+      `--output-format stream-json` run: it writes an `ai-title` record
+      into its transcript on disk and puts nothing on the stream. It is
+      read here because other ACP agents do send it, and the face
+      learning to read a field is what makes attaching one of them a
+      matter of configuration rather than of code. */
+  const [title, setTitle] = useState<string | null>(null);
+  /** The agent's plan, as of the last frame that carried one. */
+  const [plan, setPlan] = useState<PlanEntry[]>([]);
+  /** The mode the agent is in, when it has said. */
+  const [mode, setMode] = useState<string | null>(null);
+  /** What the session can be set to, as the host last told it —
+      `null` until a `settings` frame, which most agents never send. */
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const measuredModel=useRef<string|null>(null);
+  const [protocol,setProtocol]=useState<AgentProtocol|null>(null);
+  const [interactions,setInteractions]=useState<{ask:number;request:InteractionRequest}[]>([]);
+  const [notice,setNotice]=useState<{title:string;message?:string;severity?:string}|null>(null);
+  const [controlError,setControlError]=useState<string|null>(null);
+  const control=(operation:string,payload:Record<string,unknown>={})=>withChat(view => view.control(crypto.randomUUID(),operation,payload)).catch(e=>setControlError(String(e)));
+  /** The directory on the conversation's machine its files go to, picked
+      above the box (「存到」, `SendInto`); `null` is its receive location.
+      Read as each file is added: a file is put there when it is chosen. */
+  const [into, setInto] = useState<string | null>(null);
+  /** The files going along with the line being written (round CHAT,
+      `chat-files`): each put on the conversation's machine as it is
+      chosen, cleared by sending like the text beside them. ⚠️ 墓碑:
+      `shots` carried pictures as base64 inside the prompt, gated on the
+      agent's capabilities; every file is now a path on the machine, and
+      a picture also rides inline where the agent takes pictures. */
+  const files = usePendingFiles({
+    put: (file, target) => withChat(view => view.put(file, target)),
+    putPaths: (paths, target) => withChat(view => view.putPaths(paths, target)),
+  }, into, id);
+  const [pickOpen, setPickOpen] = useState(false);
+  /** A terminal block handed to the next conversation (roadmap 2.3), as
+      `[name, text]`: it rides as the prompt's own text, there being no
+      file on any machine to point at. Cleared by sending. */
+  const [docs, setDocs] = useSessionDocuments(id, () => {
+    const handed = takeHandOff();
+    return handed ? [handed] : [];
+  });
+  /** A turn with attachments on its way: bytes sent and in all, from the
+      poll (`ChatBatch.sending`); `null` when nothing is crossing. */
+  const [sending, setSending] = useState<[number, number] | null>(null);
+  /** Which tool lines are open. **Closed by default and per line**: a
+      conversation is read for what was said, and twenty shell commands
+      unfolded is a transcript of the machine rather than of the work.
+      Keyed by the protocol's own id, so a line keeps its state while
+      new frames land above and below it. */
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  /** Handshake capabilities govern live controls; journal availability
+      independently governs whether recorded content can be read. */
+  const [facts, setFacts] = useState<{
+    /** The agent's own name for itself (ACP `agentInfo`). */
+    name: string | null;
+    replays: boolean;
+    needsLogin: boolean;
+    /** The gate on attaching a picture at all. */
+    images: boolean;
+    /** The gate on attaching a file's contents. */
+    embeds: boolean;
+  } | null>(null);
+  const [text, setText] = useSessionDraft("gui:"+id);
+  /** Which line of the "/" menu is under the keyboard. */
+  const [pick, setPick] = useState(0);
+  // Where the reader is standing, and whether anything landed while they
+  // were away. Two facts, not one: leaving the tail is the reader's own
+  // doing and needs no announcement, while text arriving behind their
+  // back does — and a single flag would have to pick one of those to
+  // lie about. Both are cleared by arriving at the bottom, which is the
+  // only way this pair can go to zero (docs/UX.md 角标可归零).
+  const { scroller, column: chatColumn, away, fresh, onScroll, captureDisclosure, toBottom, capturePositionTicket, acceptRestoredPosition, following, readingLatest } = useChatScroll(paint);
+  const rememberReading=()=>{
+    const element=scroller.current;
+    if(!sourceBinding||!element||!history?.loaded||history.busy||resumeReading.current)return;
+    const key=readingKey(id,sourceBinding);
+    if(following.current){readingPlaces.delete(key);return;}
+    const top=element.getBoundingClientRect().top;
+    const node=[...element.querySelectorAll<HTMLElement>('[data-history-key]')].find(node=>node.getBoundingClientRect().bottom>top);
+    const item=paint.past.find(item=>(item.displayKey??item.historyKey)===node?.dataset.historyKey);
+    const page=history.window.pages.find(page=>page.entries.some(entry=>item?.historyEntries.includes(entry.key)));
+    if(!node||!item||!page)return;
+    const entry=item.historyEntries.find(key=>page.entries.some(candidate=>candidate.key===key));
+    if(!entry)return;
+    readingPlaces.delete(key);readingPlaces.set(key,{before:page.newer,entry,top:node.getBoundingClientRect().top-top,point:captureHistoryTextPoint(node,element,item)});
+    while(readingPlaces.size>64)readingPlaces.delete(readingPlaces.keys().next().value!);
+  };
+  const box = useRef<HTMLTextAreaElement>(null);
+  const coarse = useCoarse();
+  // The box takes the keys the moment this pane opens, and any key
+  // typed at a button afterwards (`useKeysTo`). Off while there is no
+  // box to take them: a recorded conversation has nowhere to speak
+  // into, and an ended one has nobody listening.
+  useKeysTo(box, !still && !gone);
+  /** How long to wait before asking again, and the way to stop waiting. */
+  const hidden = useHidden();
+  const pace = useRef(IDLE_MS);
+  /** The last line handed to the host, until it says what became of it. */
+  const sent = useRef("");
+  const pollNow = useRef<() => void>(() => {});
+  /** The last turn as it went, for 重试 on a turn that did not go. */
+  const lastSay = useRef<ChatDraft | null>(null);
+  const currentSession = useRef(id);
+  currentSession.current = id;
+  const reader = useRef<object>({});
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const composer = useRef({session: id, text, documents: docs, attachments: files.items});
+  composer.current = {session: id, text, documents: docs, attachments: files.items};
+  useUpdateBlocker("attachments", docs.length > 0 || files.items.length > 0);
+  const savedDrafts = useSyncExternalStore(subscribeChatDrafts, () => recoverableChatDrafts(id));
+  const composerEmpty = () => {
+    const now = composer.current;
+    return now.session === id && now.text.length === 0 && now.documents.length === 0 && now.attachments.length === 0;
+  };
+  const discardDraft = (draft: ChatDraft) => {
+    discardChatDraft(id, draft.token, draft.owner);
+    setUnsent(was => was?.id === `say:${draft.token}` ? null : was);
+  };
+  const addDraft = (draft: ChatDraft) => {
+    if (!mounted.current || currentSession.current !== id || draft.session !== id || chatDraftOwner(id) !== draft.owner || !recoverableChatDrafts(id).some(entry => entry.draft === draft && entry.reason !== "unconfirmed")) return;
+    const now = composer.current;
+    const next = now.text && draft.text ? `${now.text}\n\n${draft.text}` : now.text || draft.text;
+    const documents = [...now.documents, ...draft.documents];
+    composer.current = {session: id, text: next, documents, attachments: [...now.attachments, ...draft.attachments]};
+    setText(next);
+    setDocs(documents);
+    files.restore(draft.attachments);
+    discardDraft(draft);
+  };
+  const addDraftNow = useRef(addDraft);
+  addDraftNow.current = addDraft;
+  const emptyComposerNow = useRef(composerEmpty);
+  emptyComposerNow.current = composerEmpty;
+  /** **A turn that did not go, and the session reconnecting, on its pill**
+      (NOTICE-BRIEF): offered by this conversation's id. */
+  const [unsent, setUnsent] = useState<PillNotice | null>(null);
+  const consideredDrafts = useRef(new Set<string>());
+  useEffect(() => {
+    if (still || ended) return;
+    const retained = new Set(savedDrafts.map(entry => entry.draft.token));
+    consideredDrafts.current = new Set([...consideredDrafts.current].filter(token => retained.has(token)));
+    for (const {draft, reason} of savedDrafts) {
+      if (reason !== "cancelled" || consideredDrafts.current.has(draft.token)) continue;
+      consideredDrafts.current.add(draft.token);
+      // A former view can archive a late receipt. Its current same-session
+      // consumer decides whether the composer is still empty enough to restore.
+      const currentTurn = lastSay.current === null || lastSay.current.token === draft.token;
+      if (currentTurn && emptyComposerNow.current()) addDraftNow.current(draft);
+    }
+  }, [savedDrafts, id, still, ended]);
+  useEffect(() => (unsent ? offerNotice(id, unsent) : undefined), [id, unsent]);
+  const [stall, setStall] = useState<Miss | null>(null);
+  const [stallSince, setStallSince] = useState(0);
+  useReadingSession(id, loaded && !hidden && !away && !openWhy && !stall, onReading);
+  useEffect(() => {
+    if (!stall || gone) return;
+    return offerNotice(
+      id,
+      rejoinNotice({
+        stall,
+        machine: machine ?? null,
+        since: stallSince || Date.now(),
+      }),
+    );
+  }, [id, stall, stallSince, gone, machine]);
+  /** Says the last turn again, painted as it was the first time. */
+  const retryDraft = useRef<(draft: ChatDraft) => void>(() => {});
+
+  useEffect(() => {
+    let stopped = false;
+    let draftOwner = chatDraftOwner(id);
+    const reading = {};
+    reader.current = reading;
+    setPaint(BLANK);
+    setCaptureWhy(null);
+    setHistoryBinding(null); setFindingHistory(false); setMatchedEntry(null); historyMatch.current = null;
+    setLoaded(false);
+    setInteractions([]);setProtocol(null);setNotice(null);setControlError(null);setSettings(null);setUsage(null);
+    let cursor = 0;
+    if (ended && !still) {
+      // Over, and no record to read: nothing to open and nothing to retry.
+      setOpenWhy(null);
+      setGone(true);
+      return;
+    }
+    let historyCleanup: (() => void) | null = null;
+    const installHistory = (readBinding: string, before?: string) => {
+      historyCleanup?.();
+      let disposed = false;
+      historyAnchor.current = null;
+      setHistoryEpoch(epoch => epoch + 1);
+      setPaint(previous => ({...previous, past: []})); setHistory(null); setLoaded(false); setGone(false); setOpenWhy(null);
+      if (still) { setTitle(null); setPlan([]); }
+      setOpen(new Set()); toBottom();
+      const saved=readingPlaces.get(readingKey(id,readBinding));
+      resumeReading.current=saved?{saved,ticket:capturePositionTicket()}:null;
+      if(saved){following.current=false;readingLatest.current=false;}
+      setHistoryBinding({ id, binding: readBinding });
+      const source = historyApi(id, readBinding);
+      let previousPages: HistoryReaderState['window']['pages'] | null = null;
+      const element = scroller.current;
+      const style = element ? getComputedStyle(element) : null;
+      // Padding remains even when flex has no space for readable content.
+      // Keep this content-box fact separate from scroll/anchor coordinates.
+      let contentHeight = element && style
+        ? Math.max(0, element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) : 0;
+      const view = historyReader(source, state => {
+        if (stopped || disposed) return;
+        setHistory(state); setLoaded(state.loaded);
+        if (previousPages !== state.window.pages) {
+          previousPages = state.window.pages;
+          setPaint(previous => acceptHistory(state.reset ? {...previous, past: []} : previous, historyEntries(state.window), historyReferences(state.window)));
+          if (state.reset) {
+            setFindingHistory(false); setMatchedEntry(null); historyMatch.current = null;
+            historyAnchor.current = null;resumeReading.current=null;readingPlaces.delete(readingKey(id,readBinding));
+            setHistoryEpoch(epoch => epoch + 1); setOpen(new Set()); toBottom();
+          }
+        } else if (!state.busy) historyAnchor.current = null;
+      }, () => !document.hidden && contentHeight > 0 && readingLatest.current, {
+        schedule: (run, delay) => window.setTimeout(run, delay), cancel: timer => window.clearTimeout(timer),
+      }, watch);
+      historyView.current = view;
+      const visibility = () => {
+        if (document.hidden || contentHeight <= 0) {
+          stopHistorySearch.current?.(); setFindingHistory(false);
+          historyExport.stop();
+          view.pause();
+        }
+        else view.resume();
+      };
+      const observer = new ResizeObserver(entries => {
+        const entry = entries.find(entry => entry.target === element);
+        if (entry) contentHeight = entry.contentRect.height;
+        visibility();
+      });
+      if (element) observer.observe(element);
+      document.addEventListener('visibilitychange', visibility);
+      if(saved)void view.at(saved.before);else void view.start(before);
+      historyCleanup = () => {
+        disposed = true; observer.disconnect();
+        document.removeEventListener('visibilitychange', visibility);
+        if (historyView.current === view) historyView.current = null;
+        void view.dispose().then(result => {
+          if (result.failures) console.warn('History cleanup failed', result);
+        });
+      };
+    };
+    if (still) {
+      if (!binding) { setGone(true); setOpenWhy(gui.content_no_source); return; }
+      installHistory(binding);
+      return () => { stopped = true; historyCleanup?.(); };
+    }
+    const attachment = chatAttachment(id);
+    attachedChat.current = attachment;
+    let captureToken: string | null = null;
+    let wakeVersion = 0;
+    let captureVersion = 0;
+    let captureTimer: number | null = null;
+    let captureFailures = 0;
+    let captureTransient = false;
+    let captureAwaiting = false;
+    let finished = false;
+    const retryCapture = () => {
+      if (captureTimer !== null || stopped || finished) return;
+      captureFailures = Math.min(3, captureFailures + 1);
+      captureTimer = window.setTimeout(() => {
+        captureTimer = null;
+        if (stopped || finished) return;
+        if (document.hidden || !scroller.current?.clientHeight) retryCapture();
+        else capture(false);
+      }, Math.min(5000, 500 * 2 ** captureFailures));
+    };
+    const capture = (reset = true) => {
+      if (captureTimer !== null) { window.clearTimeout(captureTimer); captureTimer = null; }
+      if (reset) captureFailures = 0;
+      const token = crypto.randomUUID().replaceAll('-', '');
+      captureToken = token;
+      captureVersion = wakeVersion;
+      captureAwaiting = true;
+      void attachment.capture(token).catch(error => {
+        if (!stopped && captureToken === token) {
+          captureAwaiting = false;
+          setCaptureWhy(String(error));
+        }
+      });
+    };
+    const receiveCapture = (frame: Extract<ChatFrame, {kind: 'captured'}>) => {
+      if (stopped || frame.token !== captureToken) return;
+      captureAwaiting = false;
+      if (frame.result.kind === 'available') {
+        if (captureTimer !== null) { window.clearTimeout(captureTimer); captureTimer = null; }
+        captureTransient = false; captureFailures = 0; setCaptureWhy(null);
+        installHistory(frame.result.binding, frame.result.cursor);
+        if (wakeVersion > captureVersion) historyView.current?.wake();
+      } else {
+        captureTransient = frame.result.reason === 'not_ready';
+        setCaptureWhy(gui.history_read_failed);
+        if (captureTransient) retryCapture();
+      }
+    };
+    captureNow.current = capture;
+    // A self-scheduling wait rather than an interval, because the wait
+    // changes length: an interval would have to be torn down and rebuilt
+    // to change pace, and two of them briefly overlapping is two polls
+    // racing on one cursor.
+    let timer: number | null = null;
+    let asking = false;
+    let retryDelay = 0;
+    let retryNotBefore = 0;
+    const freshness=new ReadFreshness(Date.now());let observing=false;
+    const freshnessTimer=window.setInterval(()=>{
+      if(stopped||finished||!observing||document.hidden||!freshness.stale(Date.now()))return;
+      setStall(was=>was??{kind:'other',machine:machine??null,raw:'读取暂时中断'});
+      setStallSince(since=>since||Date.now());
+    },1000);
+    const tick = () => {
+      if (stopped || finished) return;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      // A poll already in the air will schedule the next one itself;
+      // calling in on top of it would fork the loop in two.
+      if (asking) return;
+      const remaining = retryNotBefore - Date.now();
+      if (remaining > 0) {
+        timer = window.setTimeout(tick, remaining);
+        return;
+      }
+      asking = true;
+      let outcome: "live" | "ended" | "failed" = "failed";
+      const pushed = inApp && pace.current !== HIDDEN_MS;
+      (pushed ? attachment.wait(cursor, WAIT_MS) : attachment.poll(cursor))
+        .then((batch) => {
+          // Receipts may arrive after this view was switched away. They can
+          // settle the original open tab, but never paint or call its old API.
+          const recovered = new Map<string, ChatDraft>();
+          const retired = batch.gone || batch.frames.some(frame => frame.kind === "send_cancelled" && frame.reconnect);
+          const inactive = stopped || currentSession.current !== id || reader.current !== reading;
+          const receiptReader = inactive ? reading : undefined;
+          for (const frame of batch.frames) {
+            if (frame.kind === "send_committed" && draftOwner) completeChatDraft(id, frame.token, draftOwner, receiptReader);
+            if (frame.kind === "send_cancelled" || frame.kind === "unsent") {
+              const draft = settleChatDraft(id, frame.token, frame.kind === "send_cancelled" ? "cancelled" : "failed", draftOwner, receiptReader);
+              if (draft) recovered.set(draft.token, draft);
+            }
+          }
+          if (batch.lost || retired) unconfirmedChatDrafts(id, draftOwner, inactive ? {reader: reading} : undefined);
+          if (inactive) return;
+          cursor = batch.next;
+          setSending(batch.sending_of > 0 ? [batch.sending, batch.sending_of] : null);
+          freshness.success(Date.now());
+          const held = retired ? null : (batch.stall ?? null);
+          setStall((was) => (was && held && was.kind === held.kind && was.raw === held.raw ? was : held));
+          setStallSince((t) => (held ? t || Date.now() : 0));
+          for (const frame of batch.frames) {
+            if (frame.kind !== "send_cancelled" && frame.kind !== "unsent") continue;
+            const draft = frame.token ? recovered.get(frame.token) : undefined;
+            if (frame.kind === "send_cancelled" && frame.reconnect) setOpenWhy(gui.chat_upload_stopped_reconnect);
+            if (draft) {
+              const currentTurn = lastSay.current === null || lastSay.current.token === draft.token;
+              setPaint(previous => {
+                const live = previous.live.filter(item => item.who !== "user" || item.token !== draft.token);
+                return live.length === previous.live.length ? previous : {...previous, live};
+              });
+              if (lastSay.current?.token === draft.token) {
+                lastSay.current = null;
+                sent.current = "";
+                setInTurn(false);
+              }
+              if (frame.kind === "send_cancelled" && currentTurn && emptyComposerNow.current()) addDraftNow.current(draft);
+            }
+            if (frame.kind === "unsent") {
+              const notice: PillNotice = failedNotice({
+                id: `say:${frame.token ?? "legacy"}`,
+                miss: frame.miss,
+                machine: machine ?? null,
+                what: "say",
+                retry: () => { if (draft) retryDraft.current(draft); },
+                cancel: () => {
+                  if (!mounted.current || currentSession.current !== id) return;
+                  setUnsent(was => was === notice ? null : was);
+                  if (draft && emptyComposerNow.current()) addDraftNow.current(draft);
+                },
+              });
+              // Old/null receipts can explain failure without guessing which
+              // newer message or draft they belong to.
+              if (!draft) notice.acts = notice.acts.filter(action => action.key === "cancel");
+              setUnsent(notice);
+            }
+          }
+          if (batch.lost) capture();
+          if (batch.frames.length) {
+            for (const frame of batch.frames) {
+              if (frame.kind === 'content_changed') {
+                wakeVersion += 1;
+                historyView.current?.wake();
+                if (!historyView.current && captureTransient && !captureAwaiting && !document.hidden && scroller.current?.clientHeight) capture(false);
+              }
+              if (frame.kind === 'captured') receiveCapture(frame);
+            }
+            for(const f of batch.frames){
+              if(f.kind==='turn'||f.kind==='gone')setInTurn(false);
+              if(f.kind==='turning'){setInTurn(true);setTurnStatus('正在处理');}
+              if(f.kind==='turn')setTurnStatus(f.stop==='Cancelled'?'已停止':'回复完成');
+              if(f.kind==='ask'||f.kind==='elicit')setTurnStatus('等待确认');
+            }
+            for (const f of batch.frames) {
+              if (f.kind === "agent") {
+                setFacts({
+                  name: f.name,
+                  replays: f.replays,
+                  needsLogin: f.needs_login,
+                  images: f.images,
+                  embeds: f.embeds,
+                });
+              }
+            }
+            // A refused line never reached the agent, so this face is
+            // not in a turn — and the words are given back rather than
+            // retyped. Only into an empty box: whatever was typed in
+            // the meantime is newer than this and outranks it.
+            if (batch.frames.some((f) => f.kind === "refused" && f.why === "turn-in-flight")) {
+              setInTurn(false);
+              const back = sent.current;
+              sent.current = "";
+              if (back) {
+                // **Taken back off the screen.** It was painted the
+                // moment it was typed, as though it had gone; it did
+                // not go, and leaving it there is the transcript
+                // claiming this person said something they did not.
+                // Only the tail, and only if it is still that line —
+                // anything after it belongs to somebody else's turn.
+                setPaint((prev) => {
+                  const last = prev.live[prev.live.length - 1];
+                  if (!last || last.who !== "user" || last.text !== back) return prev;
+                  return { ...prev, live: prev.live.slice(0, -1) };
+                });
+                // And handed back, so it need not be retyped. Only into
+                // an empty box: whatever was typed since is newer than
+                // this and outranks it.
+                setText((now) => (now.trim() ? now : back));
+              }
+            }
+            for (const f of batch.frames) {
+              if(f.kind==='capabilities')setProtocol(f.capabilities as AgentProtocol);
+              if(f.kind==='elicit')setInteractions(now=>now.some(v=>v.ask===f.ask)?now:[...now,{ask:f.ask,request:f.request as InteractionRequest}]);
+              if(f.kind==='elicit_answered')setInteractions(now=>now.filter(v=>v.ask!==f.ask));
+              if(f.kind==='gone'){setInteractions([]);setNotice(null);}
+              if(f.kind==='control_result')setControlError(f.error);
+              if(f.kind==='note'){
+                const u=(f.update as {update?:{sessionUpdate?:string;title?:string;description?:string;severity?:string}})?.update;
+                if(u?.sessionUpdate==='notice')setNotice({title:u.title??'',message:u.description,severity:u.severity});
+              }
+              const list = agentCommandUpdate(updateOf(f));
+              if (list) setCommands(list);
+              const u = usageIn(f);
+              if (u) setUsage(u);
+              const t = titleIn(f);
+              if (t !== undefined) setTitle(t);
+              const pl = planIn(f);
+              if (pl) setPlan(pl);
+              const u2 = updateOf(f);
+              if(u2?.sessionUpdate==='compaction_update')setUsage(null);
+              if (u2?.sessionUpdate === "current_mode_update" && u2.currentModeId) {
+                setMode(u2.currentModeId);
+              }
+              const st = settingsIn(f);
+              if(st){const model=modelOf(st);if(measuredModel.current!==null&&measuredModel.current!==model)setUsage(null);measuredModel.current=model;setSettings(st);}
+            }
+            setPaint((prev) => absorb(prev, batch.frames));
+          }
+          if (retired) {
+            if (captureTimer !== null) { window.clearTimeout(captureTimer); captureTimer = null; }
+                    setGone(true);
+          }
+          outcome = retired ? "ended" : "live";
+        })
+        .catch(() => {
+          freshness.failure();
+          // A failed wait may return immediately; it has not paid a beat.
+        })
+        .finally(() => {
+          asking = false;
+          if (stopped) return;
+          finished = outcome === "ended";
+          if (finished) return;
+          retryDelay = outcome === "failed"
+            ? Math.min(FAILED_MS_MOST, retryDelay === 0 ? LIVE_MS * 2 : retryDelay * 2)
+            : 0;
+          const nextPace = document.hidden ? HIDDEN_MS : pace.current;
+          const nextPushed = inApp && nextPace !== HIDDEN_MS;
+          const after = Math.max(retryDelay, nextPushed ? 0 : nextPace);
+          // Pace/visibility kicks must not bypass an outstanding failure wait.
+          retryNotBefore = retryDelay > 0 ? Date.now() + retryDelay : 0;
+          timer = window.setTimeout(tick, after);
+        });
+    };
+    pollNow.current = tick;
+    // An unreachable host is an over conversation, not an error of this
+    // pane's own: the host holds the agent, so no host means no one to
+    // talk to (`gui_host` — the host file's pids are one process).
+    setGone(false);
+    setOpenWhy(null);
+    setOpenedAt(Date.now());
+    attachment.open()
+      .then((fresh) => {
+        if (stopped) return;
+        setOpenedAt(null);observing=true;freshness.success(Date.now());
+        draftOwner ??= chatDraftOwner(id);
+        if (fresh) {
+          unconfirmedChatDrafts(id, draftOwner, {reader: reading, except: true});
+          if (lastSay.current?.reader !== reading) {
+            lastSay.current = null;
+            sent.current = "";
+            setInTurn(false);
+            setSending(null);
+          }
+        }
+        capture();
+        tick();
+      })
+      .catch((e: unknown) => {
+        if (stopped) return;
+        setOpenedAt(null);
+        setOpenWhy(String((e as { message?: string })?.message ?? e));
+        setGone(true);
+      });
+    return () => {
+      stopped = true;window.clearInterval(freshnessTimer);
+      if (timer !== null) window.clearTimeout(timer);
+      if (captureTimer !== null) window.clearTimeout(captureTimer);
+      if (captureNow.current === capture) captureNow.current = null;
+      pollNow.current = () => {};
+      if (attachedChat.current === attachment) attachedChat.current = null;
+      historyCleanup?.();
+      void attachment.dispose().then(result => {
+        if (result.failures) console.warn("Chat attachment cleanup failed", result);
+      });
+    };
+  }, [binding, id, still, ended, attempt, watch]);
+
+  useLayoutEffect(() => {
+    const anchor = historyAnchor.current;
+    const element = scroller.current;
+    if (!anchor || !element) return;
+    const node = [...element.querySelectorAll<HTMLElement>('[data-history-key]')]
+      .find(candidate => candidate.dataset.historyKey === anchor.key);
+    if (node) {
+      acceptRestoredPosition(anchor.ticket, () => {
+        const item = paint.past.find(item => (item.displayKey ?? item.historyKey) === anchor.key);
+        if (!anchor.point || !item || !restoreHistoryTextPoint(node, element, anchor.point, item))
+          element.scrollTop += node.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.top;
+      });
+    }
+    historyAnchor.current = null;
+  }, [paint, acceptRestoredPosition]);
+  useEffect(()=>{
+    const element=dropBox.current as (HTMLDivElement&{__find?:()=>boolean})|null;
+    if(!element||!sourceBinding)return;
+    const find=()=>{setFindingHistory(true);return true;};
+    element.__find=find;
+    return()=>{if(element.__find===find)delete element.__find;};
+  },[sourceBinding]);
+  useLayoutEffect(()=>{
+    const pending=resumeReading.current,element=scroller.current;
+    if(!pending||!element||!history?.loaded||history.busy||history.error)return;
+    const item=paint.past.find(item=>item.historyEntries.includes(pending.saved.entry));
+    const node=[...element.querySelectorAll<HTMLElement>('[data-history-key]')].find(node=>node.dataset.historyKey===(item?.displayKey??item?.historyKey));
+    if(node&&item)acceptRestoredPosition(pending.ticket,()=>{
+      if(!pending.saved.point||!restoreHistoryTextPoint(node,element,pending.saved.point,item))element.scrollTop+=node.getBoundingClientRect().top-element.getBoundingClientRect().top-pending.saved.top;
+    });
+    resumeReading.current=null;
+  },[paint,history,acceptRestoredPosition]);
+  const jumpHistoryMatch = (hit: FindHit) => {
+    following.current = false; readingLatest.current = false;
+    historyAnchor.current = null;
+    historyMatch.current = hit; setMatchedEntry(hit.entry);
+    void historyView.current?.at(hit.before);
+  };
+  useLayoutEffect(() => {
+    const match = historyMatch.current;
+    if (!match || history?.busy) return;
+    if (history?.error) { historyMatch.current = null; return; }
+    const element = scroller.current;
+    const item = paint.past.find(item => item.historyEntries.includes(match.entry));
+    const node = [...(element?.querySelectorAll<HTMLElement>('[data-history-key]') ?? [])]
+      .find(candidate => candidate.dataset.historyKey === (item?.displayKey ?? item?.historyKey));
+    if (!node) return;
+    if (item?.who === 'tool') setOpen(previous => new Set([...previous, item.id]));
+    node.scrollIntoView({ block: 'center' });
+    historyMatch.current = null;
+  }, [paint, history?.busy, history?.error]);
+
+  const loadOlderHistory = () => {
+    const element = scroller.current;
+    if (element) {
+      const top = element.getBoundingClientRect().top;
+      const node = [...element.querySelectorAll<HTMLElement>('[data-history-key]')]
+        .find(candidate => candidate.getBoundingClientRect().bottom > top);
+      if (node?.dataset.historyKey) {
+        const item = paint.past.find(item => (item.displayKey ?? item.historyKey) === node.dataset.historyKey);
+        historyAnchor.current = { key: node.dataset.historyKey, top: node.getBoundingClientRect().top - top,
+          ticket: capturePositionTicket(), point: item ? captureHistoryTextPoint(node, element, item) : null };
+      }
+      following.current = false; readingLatest.current = false;
+    }
+    void historyView.current?.older();
+  };
+
+  useHistoryPrefetch(scroller,history,loadOlderHistory,()=>{void historyView.current?.newer();});
+
+  const latestBody = useMemo(() => history
+    ? latestHistoryBody(paint.past, historyEntries(history.window)) : null, [paint.past, history?.window]);
+
+  // The paces, and one rule covering all of them: **a shorter pace has
+  // to take effect at once, a longer one never does.** Waiting out a
+  // whole gap to notice a turn started hands back the latency the fast
+  // pace exists to remove, and the same is true of coming back to a
+  // window that has been dawdling at ten seconds. Slowing down needs no
+  // kick — the wait already in flight is the last fast one, and the next
+  // is scheduled at the new length.
+  //
+  // **That is what makes this able to go back to zero**: nothing
+  // remembers a pace, it is read fresh at each scheduling, so a state
+  // that has gone away simply stops being read.
+  useEffect(() => {
+    const next = hidden ? HIDDEN_MS : inTurn ? LIVE_MS : IDLE_MS;
+    const shorter = next < pace.current;
+    pace.current = next;
+    if (shorter) pollNow.current();
+  }, [inTurn, hidden]);
+
+  /**
+   * The running turn's clock: started when a turn starts, stopped when
+   * it stops, ticking once a second in between.
+   *
+   * **Derived from `inTurn` rather than set beside it.** A turn begins
+   * and ends in four places (a `turning` frame, a `Turn` frame, a send
+   * that threw, and the send itself), and a clock started at three of
+   * them is a clock that is sometimes null while a turn runs — the kind
+   * of drift nothing goes red for. One effect, one source.
+   *
+   * The ticking lives in `BusyFor`, which is mounted only while a turn
+   * runs — so an idle conversation carries no timer, and a running one
+   * repaints one text node rather than its whole stream.
+   */
+  useEffect(() => {
+    setTurnSince(inTurn ? Date.now() : null);
+  }, [inTurn]);
+
+  // The box is as tall as what has been typed into it (`useGrowingText`).
+  useGrowingText(box, text, still, gone);
+
+  /** A paste: the files on the clipboard go along with the line. */
+  const takePaste = (e: React.ClipboardEvent) => {
+    const wanted = [...e.clipboardData.items]
+      .filter((i) => i.kind === "file")
+      .map((i) => i.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (wanted.length === 0) return;
+    e.preventDefault();
+    files.addFiles(wanted);
+  };
+  /** ＋'s picker: any file, several at once — on a phone the system's own
+      sheet (photos, the camera, Files), on a Mac the open panel. */
+  const picker = useRef<HTMLInputElement>(null);
+  /** Files can go along while there is somebody to say them to. */
+  const canAttach = !still && !gone;
+  const outer = useLinkHome();
+  // **The conversation's files folder is painted too** (round CHAT item
+  // 2): what the agent says about a file it was handed names it there,
+  // outside any project. Found from the paths already said.
+  const folder = useMemo(() => {
+    for (const i of [...paint.past, ...paint.live]) {
+      const f = "text" in i ? filesFolderIn(i.text) : null;
+      if (f) return f;
+    }
+    return null;
+  }, [paint]);
+  const inFolder = useKnownFiles(home ?? "", folder ?? "");
+  const chatHome = useMemo<LinkHome>(() => {
+    const base: LinkHome = outer ?? {
+      machine: home ?? machine ?? "", root: "", known: () => false,
+      see: () => {}, open: () => {},
+    };
+    const target = home ?? base.machine;
+    return {
+      ...base,
+      open: (abs, line) => askOpenPath(target, abs, false, line),
+      openPage: url => askOpenUrl(target, url),
+      more: folder === null ? undefined : { root: folder, known: inFolder.known, see: inFolder.see },
+    };
+  }, [outer, home, machine, folder, inFolder.known, inFolder.see]);
+  const openFile = (abs: string) => chatHome.open(abs, null);
+  const dropBox = useRef<HTMLDivElement>(null);
+  const [dropping, setDropping] = useState(false);
+  // **In the app a drop is tauri's**, which hands over the real paths
+  // (the HTML5 drop never fires with anything useful there; the terminal
+  // pane's note): files this device has, put on the conversation's
+  // machine like any other (`chat_put_paths`). The position is checked
+  // against this pane's box, the event being the window's.
+  useEffect(() => {
+    if (!inApp || !canAttach) return;
+    return listenNativeDragDrop((e) => {
+      const box = dropBox.current?.getBoundingClientRect();
+      if (e.payload.type === "leave" || !box) {
+        setDropping(false);
+        return;
+      }
+      // Physical pixels, the page's box is CSS ones.
+      const x = e.payload.position.x / devicePixelRatio;
+      const y = e.payload.position.y / devicePixelRatio;
+      const over = x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+      if (e.payload.type !== "drop") {
+        setDropping(over);
+        return;
+      }
+      setDropping(false);
+      if (over && e.payload.paths.length > 0) files.addLocalPaths(e.payload.paths);
+    });
+    // `files`' adders are fresh closures each render; the subscription
+    // is per conversation, and the adders read only setters and `id`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, canAttach]);
+  /** The agent's own settings, in its own words, for ＋'s menu. The
+      change is asked of the host and the control follows the answer
+      (`settings` frame), never its own press. */
+  const confirmedSettings=new Map<string,string|boolean>((settings?.options??[]).map(option=>[option.id,option.currentValue as string|boolean]));
+  if(settings?.modes)confirmedSettings.set('mode:',settings.modes.currentModeId);
+  const settingRequest=useConfirmedSetting(confirmedSettings);
+  const addOptions: AddOption[] = (settings?.options ?? []).map((o) =>
+    o.type === "boolean"
+      ? {
+          kind: "switch",
+          id: o.id,
+          category: o.category,
+          name: o.name,
+          note: o.description ?? null,
+          on: o.currentValue === true,
+          onToggle: () => settingRequest.request({key:o.id,value:o.currentValue!==true,name:o.name,run:()=>withChat(view=>view.setOption(o.id,o.currentValue!==true))}),
+        }
+      : {
+          kind: "values",
+          id: o.id,
+          category: o.category,
+          name: o.name,
+          note: o.description ?? null,
+          current: String(o.currentValue ?? ""),
+          values: valuesOf(o).map((v) => ({
+            value: v.value.value,
+            name: v.value.name,
+            note: v.value.description ?? null,
+            heading: v.heading,
+          })),
+          onPick: (v) => settingRequest.request({key:o.id,value:v,name:o.name,run:()=>withChat(view=>view.setOption(o.id,v))}),
+        },
+  );
+  /** Who is answering, for the capsule's who seat. */
+  const who: Who = {
+    Mark: sessionMark("gui", category),
+    name: agentName(category, facts?.name ?? null),
+    model: modelOf(settings),
+    usage: usage ? { used: usage.used, size: usage.size } : null,
+  };
+  /** The mode: a menu where the agent offers modes; the word alone where
+      it only reports one that is not the ordinary one; nothing else. */
+  const modeSeat = settings?.modes ? (
+    <ModeSeat
+      current={settings.modes.currentModeId}
+      word={modeWord(settings.modes.currentModeId, settings.modes.availableModes)}
+      // **The menu always holds the mode the session is in** (V09). One
+      // the agent went into by itself and does not list (claude's own
+      // `auto`) heads the menu, chosen, and is not pressable.
+      choices={[
+        ...(settings.modes.availableModes.some((m) => m.id === settings.modes?.currentModeId)
+          ? []
+          : [
+              {
+                id: settings.modes.currentModeId,
+                name: modeWord(settings.modes.currentModeId, settings.modes.availableModes),
+                note: modeNote(settings.modes.currentModeId, settings.modes.availableModes),
+                fixed: true,
+              },
+            ]),
+        ...settings.modes.availableModes.map((m) => ({
+          id: m.id,
+          name: modeWord(m.id, settings.modes?.availableModes ?? []),
+          note: modeNote(m.id, settings.modes?.availableModes ?? []),
+        })),
+      ]}
+      onPick={v=>settingRequest.request({key:"mode:",value:v,name:"执行权限",run:()=>withChat(view=>view.setMode(v))})}
+    />
+  ) : mode !== null && modeSaid(mode) !== null ? (
+    <ModeSeat current={mode} word={modeSaid(mode) ?? mode} />
+  ) : null;
+
+  const issueDraft = (draft: ChatDraft) => {
+    withChat(view => view.id === draft.session ? view.say(draft.full, [...draft.images], [...draft.documents], draft.token) : Promise.reject(new Error("draft belongs to another session"))).catch(() => {
+      awaitChatDraftReceipt(draft.session, draft.token, draft.owner);
+      if (mounted.current && currentSession.current === draft.session && reader.current === draft.reader && lastSay.current?.token === draft.token) setInTurn(false);
+    });
+  };
+  const hasComposerContent=!!text.trim()||files.items.length>0||docs.length>0;
+  const canSend=hasComposerContent&&!inTurn&&!gone&&files.ready&&facts!==null&&!facts.needsLogin;
+  const say = () => {
+    const line = text.trim();
+    if (!canSend) return;
+    const owner = chatDraftOwner(id);
+    if (!owner) return;
+    const placed = files.items.filter(file => file.path !== null);
+    const full = withAttachments(line, placed.map(file => file.path as string));
+    const images = facts?.images ? placed.flatMap(file => file.inline ? [file.inline] : []) : [];
+    const draft = rememberChatDraft({owner, reader: reader.current, session: id, token: crypto.randomUUID(), text, full, images, documents: docs, attachments: files.items});
+    if (!draft) return;
+    composer.current = {session: id, text: "", documents: [], attachments: []};
+    setText("");
+    setInTurn(true);
+    files.clear();
+    setDocs([]);
+    setPaint(previous => ({...previous, live: boundedLive([...previous.live, {who: "user", text: full, token: draft.token}])}));
+    sent.current = line;
+    lastSay.current = draft;
+    setUnsent(null);
+    issueDraft(draft);
+  };
+  retryDraft.current = previous => {
+    if (!mounted.current || currentSession.current !== id || previous.session !== id || inTurn || gone) return;
+    const owner = chatDraftOwner(id);
+    if (!owner || owner !== previous.owner || !recoverableChatDrafts(id).some(entry => entry.draft === previous && entry.reason === "failed")) return;
+    const draft = rememberChatDraft({...previous, owner, reader: reader.current, token: crypto.randomUUID()});
+    if (!draft) return;
+    discardChatDraft(id, previous.token, previous.owner);
+    setInTurn(true);
+    setPaint(paint => ({...paint, live: boundedLive([...paint.live, {who: "user", text: draft.full, token: draft.token}])}));
+    sent.current = draft.text.trim();
+    lastSay.current = draft;
+    setUnsent(null);
+    issueDraft(draft);
+  };
+
+  // The "/" menu: the agent's own commands, filtered by what has been
+  // typed so far. Open only while the box holds a single slash-word —
+  // a space means the command is chosen and what follows is its
+  // argument, which is the agent's business and not this menu's.
+  const commandMenuId=useId();
+  const menu = matchingAgentCommands(commands, text);
+  const complete = (name: string) => {
+    // A trailing space: it closes the menu and leaves room for an
+    // argument, and `say` trims it back off for a command that takes
+    // none.
+    setText(`/${name} `);
+    setPick(0);
+  };
+
+  // The past then the live half, with the seals dropped. Recomputed
+  // only when the picture actually moved — `absorb` answers the same
+  // object otherwise, so a poll that brought nothing paintable stops
+  // here rather than walking the list again.
+  const items = useMemo(
+    () =>
+      [...paint.past, ...paint.live].filter(
+        (i): i is Exclude<Item, { who: "seal" }> => i.who !== "seal",
+      ),
+    [paint],
+  );
+  // **A turn is running — for the whole of it, and for how long.**
+  //
+  // 忙碌 in the conversation, wearing the state's own clothes rather
+  // than restating them: no hue of its own, the mark beside it carries
+  // the breath keyframe and the reduced-motion guard (`ToolDot`,
+  // app.css). Reusing the word is also why no seventh one gets invented
+  // here — this is not a new thing called "thinking".
+  //
+  // **The rule this replaces**: it used to appear only until the first
+  // chunk landed, on the reasoning that "the stream itself is then the
+  // indicator and a second one would be noise". True of a turn that is
+  // *printing*; false of the case a person actually asks about. A tool
+  // call two minutes deep prints nothing, and **a stream that has
+  // stopped moving looks exactly like a stream that has finished** —
+  // the reader is left with a static screen and no way to tell which.
+  //
+  // So it stands for the whole turn, and it carries the one fact the
+  // stream cannot: how long. That is also what keeps it from being
+  // noise — it is not restating what is already on screen.
+  const waiting = inTurn;
+  return (
+    <LinkHomeProvider value={chatHome}>
+    <div
+      ref={dropBox}
+      data-chat-drop={dropping || undefined}
+      data-chat-searchable
+      onKeyDownCapture={event => {
+        if (sourceBinding && !imeKey(event) && !event.altKey && !event.shiftKey && (/Mac|iPhone|iPad/.test(navigator.userAgent) ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) && event.key.toLowerCase() === 'f') {
+          event.preventDefault(); event.stopPropagation(); setFindingHistory(true);
+          dropBox.current?.querySelector<HTMLInputElement>('[data-history-search] input')?.focus();
+        }
+      }}
+      className="flex min-h-0 flex-1 flex-col"
+      // **Files dropped on the conversation go along with the next line**
+      // (round CHAT): in a browser the drop carries `File`s; in the app
+      // tauri takes the drop first and hands over paths (below).
+      onDragOver={(e) => {
+        if (!canAttach || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setDropping(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setDropping(false);
+      }}
+      onDrop={(e) => {
+        setDropping(false);
+        if (!canAttach || e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        files.addFiles([...e.dataTransfer.files]);
+      }}
+    >
+      <span className="sr-only" role="status">{turnStatus}</span>
+      {home !== null && (
+        <MachineFilePick
+          open={pickOpen}
+          onOpenChange={setPickOpen}
+          machine={home}
+          shown={home}
+          onPick={(p) => files.addPaths([p])}
+        />
+      )}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      {readableExport.notice&&<div role="status" className="flex items-center gap-in px-row text-caption">{readableExport.notice}{readableExport.busy&&<Button size="sm" variant="ghost" onClick={readableExport.cancel}>取消</Button>}</div>}
+      {sourceBinding && <HistorySearch key={`${id}:${sourceBinding}:${historyEpoch}`} id={id} binding={sourceBinding}
+        stop={stopHistorySearch} exporter={historyExport} open={findingHistory} onClose={() => { setFindingHistory(false); setMatchedEntry(null); }} onJump={jumpHistoryMatch} />}
+      <div
+        ref={scroller}
+        data-chat-scroll
+        onScroll={()=>{onScroll();rememberReading();}}
+        onClickCapture={captureDisclosure}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-3 [overflow-anchor:none]"
+      >
+        {/* **The reading column, and the one place it is set.** The pane
+            is as wide as the window lets it be; a line of prose is not.
+            Unbounded, this face measured 88 Chinese characters to a
+            line at a 1482 window — two and a half times the top of the
+            band a paragraph is read in, and the width at which the eye
+            stops finding the start of the next line.
+
+            It caps the *whole* conversation rather than each turn, so
+            the person's own bubble hangs off the same right edge the
+            agent's text ends at. Centred, because in the wide posture
+            this pane sits beside a list and a column pinned left would
+            leave the reading against the divider.
+
+            `text-read` is on this element and not further in **because
+            the cap is an em** (`--measure`): both classes have to ride
+            together or the column comes out narrower than it says.
+
+            The size lives here and the ink lives on the children for a
+            second reason, found while proving the gate fires: handing
+            `Markdown` both at once (`text-read text-read-ink`) loses
+            the size. It goes through `cn()`, and tailwind-merge reads
+            `text-read-ink` as another font-size — it has no way to know
+            the tail of that name is a colour — so it drops the class it
+            thinks was superseded. Measured: the paragraph came back at
+            the shell's base with the theme's own leading.
+
+            `break-words`: **a word longer than the column breaks inside
+            it** (afix-a; the audit's S2 found a URL running off 留言's
+            bubble, and this column's own lines — an error, a request's
+            title — had no wrap either). `break-word`, not `anywhere`: it
+            leaves a table's widths alone, which scrolls in its frame. */}
+        <div ref={chatColumn} data-chat-column data-selectable className="mx-auto w-full max-w-measure space-y-1 break-words text-read">
+        {/* **The agent's own name for this conversation.** Scrolls with
+            the conversation rather than sitting in a fixed header: it
+            names the thing below it, and a title pinned over a
+            conversation somebody has scrolled two screens into is
+            labelling something no longer on screen.
+
+            khor's own row already has a name (`token-63`), which is the
+            *session's* — where it lives and what it is. This is the
+            agent's, which is what it is *about*, and the two are not
+            competing for one slot.
+
+            **Nothing draws it today from claude**, which sends no such
+            frame (it writes `ai-title` to its transcript and puts it on
+            no stream). It is here for the agents in the registry that
+            do, and because a face that cannot read a field is the
+            reason attaching one of them would otherwise need code. */}
+        {history && <div className="space-y-in py-row" data-history-controls>
+          {history?.window.older && <Button size="sm" disabled={history.busy} onClick={loadOlderHistory}>{gui.history_older}</Button>}
+          {history?.reset && <p role="status" className="text-caption text-muted-foreground">{gui.history_changed}</p>}
+          {history?.error != null && <div role="alert" className="text-caption text-destructive">
+            {gui.history_read_failed} <Button size="sm" onClick={() => void historyView.current?.retry()}>{gui.region_retry}</Button>
+          </div>}
+        </div>}
+        {!still && captureWhy && <div role="alert" data-chat-capture-error className="text-caption text-destructive">
+          {captureWhy} <Button size="sm" onClick={() => captureNow.current?.()}>{gui.region_retry}</Button>
+        </div>}
+        {title && (
+          <div data-chat-title className="pb-1 text-title-md font-title text-foreground">
+            {title}
+          </div>
+        )}
+        {!items.some(item=>item.who==='plan')&&<AgentPlan key={id} entries={plan} />}
+        {openedAt !== null && items.length === 0 && (
+          <Waiting
+            since={openedAt}
+            machine={machine}
+            onCancel={() => {
+              setOpenedAt(null);
+              setOpenWhy(machine ? gui.waiting_stopped(machine) : gui.waiting_stopped_here);
+              setGone(true);
+            }}
+            onRetry={() => setAttempt((n) => n + 1)}
+          />
+        )}
+        {facts && items.length === 0 && facts.needsLogin && (
+          <div data-chat-facts className="pb-1 text-caption text-muted-foreground">
+            {gui.chat_needs_login}
+          </div>
+        )}
+        {/* An empty conversation says so, once and quietly (V18) — never
+            a blank page; not while a turn is coming, and not over the
+            line above when that one explains the emptiness better. */}
+        {facts && items.length === 0 && !inTurn && !facts.needsLogin && loaded && (
+          <div data-chat-empty className="pt-group text-center text-callout text-muted-foreground">
+            {gui.chat_empty}
+          </div>
+        )}
+        {items.map((item, i) => {
+          const content = item.who === "user" ? (
+            // **The files a line carried are cards under it** (round CHAT
+            // item 2), not the `@<path>` lines the agent was told them
+            // in (`lib/paths`).
+            (() => {
+              const { words, paths } = splitAttachments(item.text);
+              return (
+                <div role="article" aria-label="你" key={item.displayKey ?? item.historyKey ?? i} className="flex flex-col items-end gap-in py-row">
+                  {words && (
+                    <Bubble align="end" variant="muted"><BubbleContent data-said className="text-read"><Markdown text={words} /></BubbleContent></Bubble>
+                  )}
+                  {words&&<div className="flex items-center gap-in"><CopyText text={words}/>{!still&&!gone&&<Button size="sm" variant="ghost" onClick={()=>{
+                    setText(now=>now?`${now}\n\n${item.text}`:item.text);box.current?.focus();
+                  }}>带回输入</Button>}</div>}
+                  {paths.map((p, j) => (
+                    <FileCard
+                      key={`${j} ${p}`}
+                      machine={home ?? ""}
+                      shown={home ?? ""}
+                      path={p}
+                      onOpen={() => openFile(p)}
+                    />
+                  ))}
+                </div>
+              );
+            })()
+          ) : item.who === "agent" || item.who === "thought" || item.who === "tool" || item.who === "compaction" || item.who === "resource" || item.who === "plan" ? (
+            <AgentContent key={item.displayKey ?? item.historyKey ?? (item.who === "tool" ? `${id}:${item.id}` : `${id}:${i}`)} item={item}
+              streaming={inTurn && !still && history?.window.latest === true && item === latestBody} active={inTurn}
+              open={item.who === "tool" && open.has(item.id)} onOpenFile={openFile}
+              onOpenChange={(shown) => { if (item.who === "tool") setOpen((now) => {
+                const next = new Set(now); if (shown) next.add(item.id); else next.delete(item.id); return next;
+              }); }} />
+          ) : item.who === "ask" ? (
+            <AgentConfirmation
+              key={`${id}:${item.ask}`}
+              title={item.title}
+              options={item.options}
+              answer={item.answer}
+              canAnswer={!still && !gone}
+              onAnswer={(option) => withChat(view => view.answer(item.ask, option))}
+            />
+          ) : (
+            <div key={item.displayKey ?? item.historyKey ?? i} className="text-caption" style={{ color: "var(--state-errored)" }}>
+              {item.text}
+            </div>
+          );
+          return item.historyKey ? <div key={`${historyEpoch}:${item.displayKey ?? item.historyKey}`} data-history-key={item.displayKey ?? item.historyKey} className={matchedEntry && item.historyEntries?.includes(matchedEntry) ? 'rounded-md bg-brand-wash' : undefined}>{content}</div> : content;
+        })}
+        {history && sourceBinding && <HistoryRecords key={`${id}:${sourceBinding}:${historyEpoch}`} references={historyReferences(history.window)} exporter={historyExport} showExportStatus={!findingHistory}
+          read={(cursor, from, signal) => historyView.current?.record(cursor, from, signal) ?? Promise.resolve(null)} />}
+        {history && !history.window.latest && <Button size="sm" disabled={history.busy}
+          onClick={() => void historyView.current?.newer()}>{gui.history_newer}</Button>}
+        {notice&&<div data-chat-notice role={notice.severity==='error'?'alert':'status'} className="rounded-md bg-fill p-row text-callout"><strong>{notice.title}</strong>{notice.message&&<p>{notice.message}</p>}<Button size="sm" onClick={()=>setNotice(null)}>关闭</Button></div>}
+        {controlError&&<p role="alert" className="text-destructive">{controlError}</p>}
+        {savedDrafts.map(({draft, reason}) => (
+          <div key={draft.token} data-chat-cancelled-draft={draft.token} data-reason={reason} className="flex min-w-0 flex-wrap items-center gap-in py-in text-callout">
+            <div className="min-w-0 flex-1">
+              <p className="text-muted-foreground">{reason === "unconfirmed" ? gui.chat_send_unconfirmed : reason === "failed" ? gui.notice_say_failed_short(home ?? machine ?? gui.machine_here) : gui.chat_cancelled_draft}</p>
+              <p className="truncate">{(draft.text || [...draft.attachments.map(file => file.name), ...draft.documents.map(([name]) => name)].join(" · ")).slice(0, 160)}</p>
+            </div>
+            {reason !== "unconfirmed" && <Button size="sm" data-chat-draft-add onClick={() => addDraft(draft)} className="min-h-touch pointer-fine:min-h-ctl-md">{gui.chat_add_draft}</Button>}
+            <Button size="sm" variant="ghost" data-chat-draft-drop onClick={() => discardDraft(draft)} className="min-h-touch pointer-fine:min-h-ctl-md">{gui.chat_discard_draft}</Button>
+          </div>
+        ))}
+        {interactions.map(({ask,request})=><AgentInteraction key={`${id}:${ask}`} request={request} onAnswer={response=>withChat(view => view.respond(ask,response))}/>)}
+        {waiting && (
+          <div data-chat-thinking className="flex items-center gap-1.5 text-caption">
+            <ToolDot status="in_progress" />
+            {turnSince === null ? (
+              <span data-chat-busy-for style={{ color: "var(--state-busy)" }}>
+                {word("busy")}
+              </span>
+            ) : (
+              <BusyFor since={turnSince} />
+            )}
+          </div>
+        )}
+        </div>
+      </div>
+      {/* The way back to the tail. It hangs over the conversation rather
+          than inside it: a strip that took a row of its own would move
+          the text under it every time somebody scrolled. Absent at the
+          bottom — that is what makes it able to go to zero, and it is
+          why the fresh flag is cleared in the same breath. */}
+      {away && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center pb-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            data-chat-bottom
+            data-fresh={fresh}
+            className="pointer-events-auto shadow"
+            onClick={() => { toBottom(); if (history && !history.window.latest) void historyView.current?.latest(); }}
+          >
+            {/* The back chevron, turned to point the way this goes.
+                Turned rather than drawn again: a second glyph would be
+                the same shape at a different stroke ratio the first time
+                somebody redrew it by eye (icons.tsx — one family). */}
+            <IconBack className="-rotate-90" />
+            {fresh ? gui.new_below : gui.to_bottom}
+          </Button>
+        </div>
+      )}
+      </div>
+      {/* **On the narrow face the footer is the session bar's second
+          row** (`components/SessionBar`, 2026-10-02: 「where a terminal
+          has its row of accessory keys, a chat has its input box」) —
+          above the deck (2026-10-13); the deck sits on the keyboard.
+          On the wide face it stands here, as it always did. */}
+      <BarSeat at="above">{unifiedSession && <AcpHeader who={who} mode={modeSeat} options={addOptions} protocol={protocol} onControl={control} disabled={inTurn||settingRequest.pending} pending={settingRequest.pending} />}
+      {settingRequest.pending&&<p role="status" className="px-row text-caption text-muted-foreground">正在应用{settingRequest.name}</p>}
+      {settingRequest.error&&<div role="alert" className="flex items-center gap-in px-row text-caption text-destructive">未能确认{settingRequest.name}，保留当前设置<Button size="sm" variant="ghost" onClick={settingRequest.retry}>重试</Button></div>}
+      {/* A recorded past has no channel to speak into: no input, and
+          the only thing its footer can say is that the record is
+          missing. */}
+      {still ? (
+        // The read-only face says so where the input would be — without
+        // this line, "no input" reads as a bug, not as the 接管 ruling
+        // (a live TUI is the one mouth).
+        //
+        // **The 接管 offer used to stand here and no longer does.** It
+        // changes what the session *is*, and the acts that do that now
+        // live together on the row's own menu (`SessionsList`, 转成对话)
+        // rather than one of them growing a button inside the pane that
+        // merely looks at it.
+        <div className="flex-none px-row pt-xxs pb-in">
+          <div className="flex items-center gap-2 px-2 py-1.5 text-callout">
+            <span data-chat-readonly className="min-w-0 flex-1 text-muted-foreground">
+              {ended ? gui.chat_over : gone ? (openWhy ?? gui.chat_no_record) : gui.chat_readonly}
+            </span>
+            {sourceBinding && <Button data-history-find-open size="icon" variant="ghost" aria-label={gui.history_find} onClick={() => setFindingHistory(true)}><IconSearch /></Button>}
+            {gone && openWhy && !ended && (
+              <Button data-chat-retry size="sm" onClick={() => setAttempt((n) => n + 1)}>
+                {gui.region_retry}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
+      <div className="flex-none px-row pt-xxs pb-in">
+        {/* The composer stands in the column the conversation is read in.
+            At the pane's full width it would be a control several times
+            wider than the text it writes into, and the eye would have to
+            cross that gap to find what it just said.
+
+            The rule stays on the outer element so the conversation is
+            still divided from the composer by a line across the pane —
+            it separates two regions, and half a line would say the
+            column ends rather than that the reading does. The measure
+            and `text-read` ride together here for the reason they do
+            above. */}
+        <div className="mx-auto w-full max-w-measure text-read">
+        {/* **The conversation's own context, above the box it fills.**
+            Placed here and not in the header because it is consulted
+            *before typing* — the decision it feeds is "keep going or
+            start a new conversation", and that decision is made with a
+            hand already on the box.
+
+            A share, not a token count: `32126 / 1000000` is two
+            six-digit numbers nobody acts on, and the one thing a person
+            does act on is how full it is. The count stays in the DOM
+            (`data-chat-usage`) for anything that wants to assert on it.
+
+            Absent until an agent reports a window — see `usageIn`. A
+            face that showed "0%" while it had no denominator would be
+            claiming an empty context, which for a conversation with
+            history behind it is the opposite of true. */}
+        {/* **What is different about this session, above the box.**
+            Beside the context reading and for the same reason: both are
+            things a person checks before typing, and neither is worth a
+            row of its own. */}
+        {/* ⚠️ 墓碑 (the redesign, 2026-10-02): a row above the box held the
+            mode's popup button and the agent's other settings, and a
+            marker said the mode when it could not be changed. The mode
+            is a word inside the capsule now (`ModeSeat`), and the other
+            settings are in ＋'s menu (`AddSeat`). */}
+        {/* ⚠️ 墓碑 (the redesign, 2026-10-02): the context share and the
+            cost were a line above the box (「上下文 41%」, 「$0.38」). The
+            share is the dial in the capsule's who seat now (`WhoSeat`),
+            and the cost is gone from the composer (the owner: 「右边不写
+            美元」). */}
+        {gone ? (
+          // Never opened is not the same as over: the node's sentence
+          // (a machine that cannot be reached, say) and 重试 — only a
+          // conversation that really ended reads 对话已结束.
+          openWhy ? (
+            <div className="flex items-center gap-2 px-2 py-1.5 text-callout">
+              <span data-chat-unopened className="min-w-0 flex-1 text-muted-foreground">
+                {openWhy}
+              </span>
+              <Button data-chat-retry size="sm" onClick={() => setAttempt((n) => n + 1)}>
+                {gui.region_retry}
+              </Button>
+            </div>
+          ) : (
+            <div className="px-2 py-1.5 text-callout text-muted-foreground">{gui.chat_over}</div>
+          )
+        ) : (
+          // While a turn runs the send is refused and the way out sits
+          // next to it: a turn that never ends used to leave 关闭 the
+          // session as the only exit, which throws the conversation
+          // away to get rid of one stuck line (found live — an agent's
+          // request to its own API never came back, and the row read
+          // 忙碌 for as long as anyone waited).
+          //
+          // Bottom-aligned, not centred: the box is the only thing in
+          // this row that changes height, and centring would walk the
+          // two buttons up the screen line by line as somebody typed.
+          <>
+          {/* **What is going to be sent, before it is sent.** A paste
+              that vanished into state with nothing on screen is a
+              person pressing 发送 without knowing what goes along.
+
+              Numbered, not named: a pasted screenshot has no filename,
+              and「图 1」is the only honest identity it has right now.
+              Each one can be taken back off — the picture is still on
+              the clipboard, so this undoes the attaching and not the
+              having. */}
+          {/* Where a file put from here lands on the conversation's
+              machine, and the way to choose another directory there
+              (STORE-BRIEF phase 2) — the 留言's line, the same component. */}
+          {home !== null && files.items.length > 0 && (
+            <SendInto machine={machine ?? ""} name={home} into={into} onInto={setInto} className="pb-xxs" />
+          )}
+          {sending && (
+            <div data-chat-sending className="px-2 pb-1 text-caption tabular-nums text-muted-foreground">
+              {gui.chat_sending((sending[0] / 1e6).toFixed(1), (sending[1] / 1e6).toFixed(1))}
+            </div>
+          )}
+          <PendingChips items={files.items} onRemove={files.remove} />
+          {docs.length > 0 && (
+            <div data-chat-shots className="flex flex-wrap items-center gap-1.5 px-2 pb-1 text-caption">
+              {docs.map(([name], i) => (
+                <span
+                  key={`d${i}`}
+                  data-chat-doc
+                  className="flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-muted-foreground"
+                >
+                  {gui.chat_file(name)}
+                  <button
+                    data-chat-doc-drop
+                    aria-label={gui.remove}
+                    className="min-h-touch min-w-touch px-1 pointer-fine:min-h-0 pointer-fine:min-w-0"
+                    onClick={() => setDocs((now) => now.filter((_, k) => k !== i))}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="relative flex items-end">
+            {/* The agent's own commands, above the box that will carry
+                them. Absolute so opening it does not push the
+                conversation up — a list that moves the text you are
+                reading is worse than no list. */}
+            <AgentCommandMenu id={commandMenuId} commands={menu} pick={pick} onPick={complete} />
+            {/* ＋'s picker: any file, into the same path a paste takes. */}
+            {canAttach && (
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                hidden
+                data-chat-file-input
+                onChange={(e) => {
+                  const list = [...(e.target.files ?? [])];
+                  e.target.value = "";
+                  files.addFiles(list);
+                }}
+              />
+            )}
+            <Composer
+              lead={
+                <SessionAdd
+                  destination={home !== null ? <SendInto machine={machine ?? ""} name={home} into={into} onInto={setInto} /> : null}
+                  onAttach={canAttach ? () => picker.current?.click() : undefined}
+                  onAttachMachine={
+                    canAttach && home ? { label: gui.chat_attach_machine_title(home), pick: () => setPickOpen(true) } : undefined
+                  }
+                  options={addOptions}
+                  onFind={sourceBinding?()=>setFindingHistory(true):undefined}
+                  onExport={readableExport.available?readableExport.run:undefined} exportBusy={readableExport.busy}
+                />
+              }
+              // The seat gives way while there is text to send, where the
+              // text would otherwise keep too little (a phone with the
+              // longest mode word); it is back when the box is empty or a
+              // turn runs.
+              seatYields={!inTurn && !!text.trim()}
+              trail={
+                <>
+                  {!unifiedSession && modeSeat}
+                  {!unifiedSession && <WhoSeat who={who} tip={!coarse} />}
+                  {/* Send only while there is something to send and the
+                      agent can take it; during a turn the interrupt
+                      stands in its seat. At rest with an empty box,
+                      neither: the mode is the capsule's last thing. */}
+                  {!inTurn && hasComposerContent && (
+                    <SendSeat onSend={say} disabled={!canSend} busy={files.busy} />
+                  )}
+                  {inTurn && (
+                    <StopSeat
+                      tip={!coarse}
+                      onStop={() => {
+                        // The turn's own ending is what clears the box:
+                        // this asks, the host answers with a `Turn` frame
+                        // like any other ending. Painting it stopped here
+                        // would be a guess about somebody else's process.
+                        const stopping = lastSay.current?.token;
+                        const stoppingReader = reader.current;
+                        setControlError(null);
+                        withChat(view => view.stop()).catch((error: unknown) => {
+                          if (mounted.current && currentSession.current === id && reader.current === stoppingReader && lastSay.current?.token === stopping) {
+                            setControlError(String((error as {message?: string})?.message ?? error));
+                          }
+                        });
+                      }}
+                    />
+                  )}
+                </>
+              }
+            >
+            {/* The box is never closed while the conversation is alive.
+                It used to be `disabled` for the length of a turn, which
+                threw away the one thing there is to do while waiting:
+                write the next line. What a running turn takes away is
+                the *sending*. */}
+            <Textarea
+              ref={box}
+              data-chat-input
+              aria-label="消息"
+              aria-controls={menu.length?commandMenuId:undefined}
+              aria-expanded={menu.length>0}
+              aria-activedescendant={menu.length?`${commandMenuId}-${Math.min(pick,menu.length-1)}`:undefined}
+              onPaste={takePaste}
+              rows={1}
+              value={text}
+              placeholder="发消息…"
+              // The soft keyboard's return key says what Enter does here:
+              // it sends (Shift+Enter, on a keyboard that has one, breaks
+              // the line).
+              enterKeyHint="send"
+              onChange={(e) => {
+                setText(e.target.value);
+                setPick(0);
+              }}
+              onKeyDown={(e) => {
+                // Composition first, and before every branch below: mid-
+                // 组词 the Enter that picks a candidate is the IME's, and
+                // a face that read it would send a half-typed word and
+                // eat the choice. `imeKey`: `isComposing` **or** keyCode
+                // 229, because WebKit hands the input method's keys over
+                // with 229 while `isComposing` is still false (`lib/ime`).
+                if (imeKey(e)) return;
+                if (menu.length > 0) {
+                  // While the menu is open the keys belong to it: Enter
+                  // chooses rather than sends, because a half-typed
+                  // command name is not a thing to say to an agent.
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    const step = e.key === "ArrowDown" ? 1 : menu.length - 1;
+                    setPick((p) => (p + step) % menu.length);
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    complete(menu[Math.min(pick, menu.length - 1)].name);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    // Escape leaves the text alone and closes the menu
+                    // the only way it can be closed: by no longer being
+                    // a bare slash-word.
+                    e.preventDefault();
+                    setText(`${text} `);
+                    return;
+                  }
+                }
+                // Enter sends, Shift+Enter breaks the line. Prevented
+                // either way once it is Enter-without-shift: when the
+                // turn refuses the send, the alternative is a newline
+                // appearing as the answer to a press that meant "go",
+                // which reads as the box having eaten the line.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  say();
+                }
+              }}
+              data-composer-text
+              className={COMPOSER_TEXT}
+            />
+            </Composer>
+          </div>
+          </>
+        )}
+        </div>
+      </div>
+      )}
+      </BarSeat>
+      {/* ⚠️ 墓碑 (round UX-3): the keyboard switch in the bar. The box raises
+          the keyboard and a drag down over the content lowers it
+          (`SessionScreen`); a third way was a second door. */}
+    </div>
+    </LinkHomeProvider>
+  );
+}
