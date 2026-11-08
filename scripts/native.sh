@@ -68,7 +68,8 @@ case "${CHECK:-full}" in
     run_tests borrowed-loopback -p khor-gui-core --lib web::loopback_tests
     xcrun swiftc -swift-version 5 "$SOURCE_PACKAGE/webkit-loopback.swift" -o "$REPORT_DIR/webkit-probe"
     export KHOR_WEBKIT_PROBE="$REPORT_DIR/webkit-probe"
-    run_tests borrowed-native-webkit -p khor-gui-core --lib web::loopback_tests::native_webkit_reaches_the_borrowed_loopback_origin --ignored
+    cargo test --locked -p khor-gui-core --lib web::loopback_tests::native_webkit_reaches_the_borrowed_loopback_origin -- --ignored --test-threads=1 2>&1 | tee "$REPORT_DIR/borrowed-native-webkit.log"
+    grep -Eq '^test result: ok\. 1 passed;' "$REPORT_DIR/borrowed-native-webkit.log"
     npm ci --prefix apps/gui
     npm run build --prefix apps/gui
     cargo check --locked -p khor-gui --lib
