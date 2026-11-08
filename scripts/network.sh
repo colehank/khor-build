@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: test a materialized source snapshot on disposable Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -64,6 +64,12 @@ else
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
     printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     repeat_netlab paths::p2_ paths::p3_ paths::p7_
+  elif [[ "$DEV_TASK" == netlab-recovery ]]; then
+    printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    repeat_netlab paths::p2_ paths::p3_
+  elif [[ "$DEV_TASK" == netlab-stability ]]; then
+    printf '{"test_threads":1,"repeats":1,"filters":["paths::p1_","paths::p1j_","paths::p1s_","paths::p5_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p1_ paths::p1j_ paths::p1s_ paths::p5_
   elif [[ "$DEV_TASK" == netlab-hop ]]; then
     printf '{"test_threads":1,"repeats":3,"filters":["hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     repeat_netlab hop::f4_ hop::f4s_ hop::f4i_
@@ -73,6 +79,7 @@ else
     printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p6_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     repeat_netlab paths::p2_ paths::p3_ paths::p6_
   else
-    bash scripts/netlab.sh
+    printf '{"test_threads":8,"repeats":1,"filters":[]}\n' > "$REPORT_DIR/measurement-mode.json"
+    NETLAB_TEST_THREADS=8 bash scripts/netlab.sh
   fi
 fi
