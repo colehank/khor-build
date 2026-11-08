@@ -10,7 +10,7 @@ on:
       task:
         type: choice
         default: editor-overwrite
-        options: [editor-overwrite, browser-yield, chat-recovery]
+        options: [editor-overwrite, browser-yield, chat-recovery, scroll-lifecycle]
       frontend_run:
         type: string
         default: '42444612307'
@@ -110,6 +110,24 @@ jobs:
             fi
           done
           exit "$failed"
+      - name: Repeat the exact commit touch case in both engines
+        if: ${{ inputs.task == 'scroll-lifecycle' }}
+        working-directory: source/apps/gui
+        env:
+          PLAYWRIGHT_CHROMIUM_CHANNEL: ''
+          QUALITY_HEADLESS: '1'
+          QUALITY_ENGINES: chrome,webkit
+          QUALITY_ONLY: commit-touch
+        run: |
+          failed=0
+          for iteration in 1 2 3; do
+            if QUALITY_OUT="$RUNNER_TEMP/scroll-replay-$iteration" npm run scroll-lifecycle; then
+              echo "Iteration $iteration passed"
+            else
+              failed=1
+            fi
+          done
+          exit "$failed"
       - name: Record runner memory and kernel process failures
         if: always()
         run: |
@@ -126,5 +144,6 @@ jobs:
             ${{ runner.temp }}/runner-health
             ${{ runner.temp }}/browser-address
             ${{ runner.temp }}/chat-recovery-*
+            ${{ runner.temp }}/scroll-replay-*
           if-no-files-found: warn
           retention-days: 7
