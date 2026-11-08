@@ -48,6 +48,10 @@ if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-v
     cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
       --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
       --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
+    # The path filter omits our relay-home, QAD and interface regressions.
+    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
+      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
+      --lib khor_ 2>&1 | tee "$REPORT_DIR/iroh-home-unit.log"
   else
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
     cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
