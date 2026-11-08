@@ -50,6 +50,7 @@ jobs:
           cp scripts/cli-update-lab.py "$package_dir/cli-update-lab.py"
           cp scripts/release-preflight.py "$package_dir/release-preflight.py"
           cp scripts/session-startup.py "$package_dir/session-startup.py"
+          cp scripts/webkit-loopback.swift "$package_dir/webkit-loopback.swift"
           cp scripts/worker-storage.py "$package_dir/worker-storage.py"
           printf '%s\n' "$SOURCE_SHA" > "$package_dir/source-sha.txt"
           if [[ "$CHECK" = dependencies || "$CHECK" = files || "$CHECK" = release-preflight || "$CHECK" = ios-release-preflight ]]; then

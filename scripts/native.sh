@@ -62,7 +62,16 @@ sync_swift_mirror() {
 }
 case "${CHECK:-full}" in
   borrow)
+    rustfmt --edition 2024 --emit stdout apps/gui/core/src/web.rs > "$REPORT_DIR/formatted-web.rs"
+    rustfmt --edition 2024 --emit stdout apps/gui/src-tauri/src/phone_page.rs > "$REPORT_DIR/formatted-phone_page.rs"
+    rustfmt --edition 2024 --config skip_children=true --emit stdout apps/gui/src-tauri/src/lib.rs > "$REPORT_DIR/formatted-lib.rs"
     run_tests borrowed-loopback -p khor-gui-core --lib web::loopback_tests
+    xcrun swiftc -swift-version 5 "$SOURCE_PACKAGE/webkit-loopback.swift" -o "$REPORT_DIR/webkit-probe"
+    export KHOR_WEBKIT_PROBE="$REPORT_DIR/webkit-probe"
+    run_tests borrowed-native-webkit -p khor-gui-core --lib web::loopback_tests::native_webkit_reaches_the_borrowed_loopback_origin --ignored
+    npm ci --prefix apps/gui
+    npm run build --prefix apps/gui
+    cargo check --locked -p khor-gui --lib
     exit 0
     ;;
   session-startup)
