@@ -1,5 +1,5 @@
 name: Pinned browser regression
-run-name: Editor overwrite ${{ inputs.source_sha }}
+run-name: Browser ${{ inputs.task }} ${{ inputs.source_sha }}
 on:
   workflow_dispatch:
     inputs:
@@ -7,6 +7,16 @@ on:
         description: Full public Khor source commit
         required: true
         type: string
+      task:
+        type: choice
+        default: editor-overwrite
+        options: [editor-overwrite, browser-yield]
+      frontend_run:
+        type: string
+        default: '42444612307'
+      baseline_sha:
+        type: string
+        default: '20a8909377f9392d89336c0f549f5b73ce3eb186'
 permissions:
   contents: read
   actions: read
@@ -18,6 +28,7 @@ jobs:
       - name: Fetch exact public source
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -25,19 +36,27 @@ jobs:
           git -C source -c credential.helper= fetch --depth=1 https://github.com/colehank/khor.git "$SOURCE_SHA"
           git -C source checkout --detach FETCH_HEAD
           test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          [[ "$BASELINE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git -C source -c credential.helper= fetch --depth=1 https://github.com/colehank/khor.git "$BASELINE_SHA"
+          python3 - <<'PY'
+          import os, subprocess
+          changed = subprocess.check_output(['git', '-C', 'source', 'diff', '--name-only', os.environ['BASELINE_SHA'], os.environ['SOURCE_SHA']], text=True).splitlines()
+          assert all(path.startswith(('apps/gui/src/', 'apps/gui/scripts/')) for path in changed), changed
+          PY
       - name: Reuse the source-matched public Quality frontend
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           repository: colehank/khor
-          run-id: '42444612307'
+          run-id: ${{ inputs.frontend_run }}
           github-token: ${{ github.token }}
           name: frontend
           path: frontend
       - name: Verify and restore the same generated frontend inputs
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+          FRONTEND_RUN: ${{ inputs.frontend_run }}
         run: |
-          python3 source/scripts/release_manifest.py verify --root frontend --sha "$SOURCE_SHA" --kind frontend --run-id '42444612307'
+          python3 source/scripts/release_manifest.py verify --root frontend --sha "$BASELINE_SHA" --kind frontend --run-id "$FRONTEND_RUN"
           cp -R frontend/gen source/apps/gui/src/gen
           cp -R frontend/dist source/apps/gui/dist
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
@@ -48,6 +67,7 @@ jobs:
       - run: npx playwright-core install --with-deps chromium webkit
         working-directory: source/apps/gui
       - name: Repeat exact two-editor behavior without changing assertions
+        if: ${{ inputs.task == 'editor-overwrite' }}
         working-directory: source/apps/gui
         env:
           PLAYWRIGHT_CHROMIUM_CHANNEL: ''
@@ -63,6 +83,15 @@ jobs:
             fi
           done
           exit "$failed"
+      - name: Check production address handling and browser ownership
+        if: ${{ inputs.task == 'browser-yield' }}
+        working-directory: source/apps/gui
+        env:
+          KHOR_GATE_TMP: ${{ runner.temp }}/browser-address
+        run: |
+          mkdir -p "$KHOR_GATE_TMP"
+          npm run build
+          npm run browser-yield
       - name: Record runner memory and kernel process failures
         if: always()
         run: |
@@ -77,5 +106,6 @@ jobs:
           path: |
             ${{ runner.temp }}/editor-overwrite-*
             ${{ runner.temp }}/runner-health
+            ${{ runner.temp }}/browser-address
           if-no-files-found: warn
           retention-days: 7
