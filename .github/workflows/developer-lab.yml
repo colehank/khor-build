@@ -96,12 +96,18 @@ jobs:
           else
             echo 'Release contracts unavailable; generate this source instead.'
           fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: colehank/khor
+          ref: ad07fd728254e50dbdb7102838dad856c24f6f0d
+          path: lab-contract-baseline
+          persist-credentials: false
       - name: Reuse matching contracts from a verified Lab build
         id: lab-contracts
         if: steps.released-contracts.outputs.ready != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CONTRACT_RUN: '42494702886'
+          CONTRACT_RUN: '42500534763'
         run: |
           if ! gh run download "$CONTRACT_RUN" --repo colehank/khor-build --name developer-lab-frontend --dir "$RUNNER_TEMP/contract-source"; then
             echo 'Compatible Lab artifact unavailable; generate contracts normally.'
@@ -110,12 +116,14 @@ jobs:
           if python3 - <<'PYVERIFY'
           import json, os, pathlib, subprocess, sys
           sys.path.insert(0, 'snapshot/source/scripts')
-          from khor_lab.contract import digest
+          from khor_lab.contract import generated_digest
           run = json.loads(subprocess.check_output(['gh', 'api', 'repos/colehank/khor-build/actions/runs/' + os.environ['CONTRACT_RUN']]))
           assert run['path'] == '.github/workflows/developer-lab.yml' and run['conclusion'] == 'success'
-          assert run['head_sha'] == 'd00812692f37c7666e83f09db6c88a3c5076321e'
+          assert run['head_sha'] == '82f1cf60aa202b32e7c5db0914a5d19d42050795'
           cached = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'contract-source/lab-manifest.json').read_text())
-          assert cached['native_contract'] == digest(pathlib.Path('snapshot/source'))
+          assert cached['base_commit'] == 'ad07fd728254e50dbdb7102838dad856c24f6f0d'
+          assert cached['tree'] == 'bdff588f65950486597d85680cee51926accda5a'
+          assert generated_digest(pathlib.Path('snapshot/source')) == generated_digest(pathlib.Path('lab-contract-baseline'))
           PYVERIFY
           then
             if gh run download "$CONTRACT_RUN" --repo colehank/khor-build --name developer-lab-contracts --dir "$RUNNER_TEMP/contract-gen"; then
