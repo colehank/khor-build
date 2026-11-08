@@ -66,7 +66,11 @@ case "${CHECK:-full}" in
     rustfmt --edition 2024 --emit stdout apps/gui/src-tauri/src/phone_page.rs > "$REPORT_DIR/formatted-phone_page.rs"
     rustfmt --edition 2024 --config skip_children=true --emit stdout apps/gui/src-tauri/src/lib.rs > "$REPORT_DIR/formatted-lib.rs"
     run_tests borrowed-loopback -p khor-gui-core --lib web::loopback_tests
-    xcrun swiftc -swift-version 5 "$SOURCE_PACKAGE/webkit-loopback.swift" -o "$REPORT_DIR/webkit-probe"
+    webkit_fixture=apps/gui/core/tests/fixtures/webkit_loopback.swift
+    if [[ ! -f "$webkit_fixture" ]]; then
+      webkit_fixture="$SOURCE_PACKAGE/webkit-loopback.swift"
+    fi
+    xcrun swiftc -swift-version 5 "$webkit_fixture" -o "$REPORT_DIR/webkit-probe"
     export KHOR_WEBKIT_PROBE="$REPORT_DIR/webkit-probe"
     cargo test --locked -p khor-gui-core --lib web::loopback_tests::native_webkit_reaches_the_borrowed_loopback_origin -- --ignored --test-threads=1 2>&1 | tee "$REPORT_DIR/borrowed-native-webkit.log"
     grep -Eq '^test result: ok\. 1 passed;' "$REPORT_DIR/borrowed-native-webkit.log"
