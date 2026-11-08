@@ -61,6 +61,10 @@ sync_swift_mirror() {
   cp "$SOURCE_PACKAGE/swift-rs-sha.txt" "$REPORT_DIR/swift-rs-sha.txt"
 }
 case "${CHECK:-full}" in
+  borrow)
+    run_tests borrowed-loopback -p khor-gui-core --lib web::loopback_tests
+    exit 0
+    ;;
   session-startup)
     python3 "$SOURCE_PACKAGE/session-startup.py"
     exit 0
