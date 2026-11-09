@@ -95,6 +95,21 @@ class NetlabVZTest(unittest.TestCase):
             self.assertEqual((root / 'keep').read_text(), 'unchanged')
             self.assertFalse((root / 'runs').exists())
 
+    def test_ssh_success_without_the_current_boot_ready_marker_is_not_readiness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lease = object.__new__(vz.Lease)
+            lease.run, lease.phase = Path(directory), 'fixture'
+            lease.owner, lease.process = {'report_dir': directory}, Foreground()
+            empty = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+            ready = subprocess.CompletedProcess([], 0, stdout='KHOR_GUEST_READY iid-123\n', stderr='')
+            with patch.object(vz, 'status', return_value={'status': 'Running'}), \
+                 patch.object(vz, 'command', side_effect=[empty, ready]) as command, \
+                 patch.object(vz.time, 'sleep'):
+                lease.ready()
+            self.assertEqual(command.call_count, 2)
+            self.assertIn('/run/lima-boot-done', command.call_args.args[-1])
+            self.assertIn('LIMA_CIDATA_IID', command.call_args.args[-1])
+
     def supervise_fixture(self, *, stop_timeout=False, wrong_group=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

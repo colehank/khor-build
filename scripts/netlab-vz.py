@@ -25,8 +25,17 @@ IMAGE_SHA = '50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e'
 IMAGE_URL = 'https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-arm64.img'
 OWNER = {'schema': 1, 'owner': 'colehank/khor-build development netlab'}
 
+READY_PROBE = r'''
+set -eu
+test "$(uname -s)" = Linux
+current="$(sudo -n sed -n 's/^LIMA_CIDATA_IID=//p' /mnt/lima-cidata/lima.env)"
+test -n "$current"
+test "$(cat /run/lima-boot-done)" = "$current"
+printf 'KHOR_GUEST_READY %s\n' "$current"
+'''
+
 GUEST_PROBE = r'''
-set -euo pipefail
+set -euxo pipefail
 test "$(uname -s)" = Linux
 sudo -n apt-get update
 sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iproute2 nftables conntrack
@@ -119,8 +128,8 @@ def config(image):
                 mounts=[], containerd=dict(system=False, user=False),
                 ssh=dict(loadDotSSHPubKeys=False, forwardAgent=False, forwardX11=False, forwardX11Trusted=False),
                 portForwards=[dict(guestIP='0.0.0.0', proto='any', guestPortRange=[1, 65535], ignore=True)],
-                propagateProxyEnv=False, rosetta=dict(enabled=False, binfmt=False),
-                networkOpts=dict(hostLoopback=False), vmOpts=dict(vz=dict(diskImageFormat='raw')))
+                propagateProxyEnv=False, networkOpts=dict(hostLoopback=False),
+                vmOpts=dict(vz=dict(diskImageFormat='raw', rosetta=dict(enabled=False, binfmt=False))))
 
 
 def clean_env(run):
@@ -273,8 +282,10 @@ class Lease:
             if observed and observed.get('status') == 'Running':
                 try:
                     result = command(self.run, 'shell', '--workdir', '/', instance(self.run),
-                                     '/bin/sh', '-c', 'test "$(uname -s)" = Linux', timeout=20)
-                    if result.returncode == 0:
+                                     '/bin/sh', '-c', READY_PROBE, timeout=20)
+                    record(Path(self.owner['report_dir']) / ('readiness-' + self.phase + '.json'),
+                           dict(returncode=result.returncode, stdout=result.stdout[-4096:], stderr=result.stderr[-4096:]))
+                    if result.returncode == 0 and result.stdout.startswith('KHOR_GUEST_READY iid-'):
                         return
                 except subprocess.TimeoutExpired:
                     pass  # Running may precede the first usable SSH session.
@@ -367,8 +378,9 @@ def main():
             result['vm_booted'] = True
             completed = command(run, 'shell', '--workdir', '/', instance(run), '/bin/bash', '-lc', GUEST_PROBE, timeout=600)
             (report / 'guest-probe.log').write_text(completed.stdout + '\n' + completed.stderr)
+            record(report / 'guest-probe-command.json', dict(returncode=completed.returncode, stdout_bytes=len(completed.stdout.encode()), stderr_bytes=len(completed.stderr.encode())))
             if completed.returncode:
-                raise RuntimeError('guest capability probe failed')
+                raise RuntimeError('guest capability probe failed (exit ' + str(completed.returncode) + ')')
             caps = [json.loads(line.removeprefix('KHOR_NETLAB_CAPS ')) for line in completed.stdout.splitlines() if line.startswith('KHOR_NETLAB_CAPS ')]
             if len(caps) != 1 or caps[0].get('system') != 'Linux':
                 raise ValueError('guest capability receipt missing')
