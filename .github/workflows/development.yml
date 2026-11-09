@@ -11,7 +11,7 @@ on:
       task:
         required: true
         type: choice
-        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, net-node, net-vendor, net-wan-build, net-wan-lifetime, net-congestion, netlab-vz-probe, netlab-smoke, netlab-dynamic, netlab-compare, netlab-hop, netlab-recovery, netlab-stability, netlab-stalls, netlab-diagnostic, netlab-hop-diagnostic, netlab]
+        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, net-node, net-vendor, net-wan-build, net-wan-lifetime, net-wan-peer, net-congestion, netlab-vz-probe, netlab-smoke, netlab-dynamic, netlab-compare, netlab-hop, netlab-recovery, netlab-stability, netlab-stalls, netlab-diagnostic, netlab-hop-diagnostic, netlab]
         default: fast
       executor:
         description: Standard lanes or the existing Mac worker for portable network checks
@@ -23,6 +23,9 @@ on:
         type: string
       bundle_sha256:
         description: SHA-256 of the optional Mac source bundle
+        type: string
+      wan_run_id:
+        description: Optional owned WAN experiment ID, required for net-wan-peer
         type: string
       request_id:
         description: Client receipt ID
@@ -224,6 +227,9 @@ jobs:
           retention-days: 7
 
   network-mac:
+    permissions:
+      contents: read
+      statuses: write
     if: inputs.executor == 'mac'
     concurrency:
       group: mac-mini-worker
@@ -243,11 +249,13 @@ jobs:
           DEV_TASK: ${{ inputs.task }}
           BUNDLE_BLOB: ${{ inputs.bundle_blob_sha }}
           BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+          WAN_RUN_ID: ${{ inputs.wan_run_id }}
         run: |
           set -euo pipefail
           [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
-          case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-congestion|netlab-vz-probe) ;; *) exit 2 ;; esac
+          case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-vz-probe) ;; *) exit 2 ;; esac
+          if [[ "$DEV_TASK" == net-wan-peer ]]; then [[ "$WAN_RUN_ID" =~ ^[0-9a-f]{16}$ ]]; fi
           if [[ -n "$BUNDLE_BLOB$BUNDLE_SHA256" ]]; then
             [[ "$BUNDLE_BLOB" =~ ^[0-9a-f]{40}$ ]]
             [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
@@ -352,6 +360,16 @@ jobs:
           else
             /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a /bin/bash "$NETWORK_CONTROL_DIR/scripts/network.sh" 2>&1 | tee "$REPORT_DIR/task.log"
           fi
+      - name: Run isolated WAN peer under the existing guard
+        if: inputs.task == 'net-wan-peer'
+        env:
+          WAN_RUN_ID: ${{ inputs.wan_run_id }}
+          KHOR_WAN_CAPABILITY: ${{ secrets[format('KHOR_WAN_{0}', inputs.wan_run_id)] }}
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
+        run: |
+          set -euo pipefail
+          /Users/z13/khor-builder/bin/run-build /usr/bin/python3 "$NETWORK_CONTROL_DIR/scripts/wan-probe-peer.py"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

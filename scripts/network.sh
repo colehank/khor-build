@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -58,11 +58,11 @@ check_format() {
   ) > "$REPORT_DIR/format.patch" || return 1
   return 1
 }
-if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime ]]; then
+if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime || "$DEV_TASK" == net-wan-peer ]]; then
   check_format || exit 1
   if [[ "$DEV_TASK" == net-unit ]]; then
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
-  elif [[ "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime ]]; then
+  elif [[ "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime || "$DEV_TASK" == net-wan-peer ]]; then
     cargo build --locked -p khor-node --example net_wan_probe 2>&1 | tee "$REPORT_DIR/wan-build.log"
     python3 - "$CARGO_TARGET_DIR/debug/examples/net_wan_probe" "$REPORT_DIR" <<'PYTHON'
 import hashlib,json,os,pathlib,sys

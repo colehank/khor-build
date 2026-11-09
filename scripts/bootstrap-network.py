@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 MAX_BUNDLE = 64 * 1024 * 1024
 CONTROL_FILES = ["prepare-development.py", "native.sh", "development.sh", "package-lab.py",
-                 "update-lab.py", "cli-update-lab.py", "worker-storage.py", "network.sh", "netlab-vz.py", "wan-probe-lease.py"]
+                 "update-lab.py", "cli-update-lab.py", "worker-storage.py", "network.sh", "netlab-vz.py", "wan-probe-lease.py", "wan-probe-peer.py"]
 
 
 def api(path, maximum):
