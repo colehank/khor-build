@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-nat-rebind|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -114,9 +114,14 @@ else
     check_format || exit 1
     printf '{"layer":"fixture","slo":false,"measurement_revision":"ipv6_renumber_v1","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::mobility::"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::mobility:: --ignored
-  elif [[ "$DEV_TASK" == netlab-nat-rebind ]]; then
+  elif [[ "$DEV_TASK" == netlab-nat-rebind || "$DEV_TASK" == netlab-nat-rebind-lifecycle ]]; then
     check_format || exit 1
-    printf '{"layer":"node","slo":false,"scenario_revision":"node_nat_port_rebind_v1","calibration_revision":"nat_port_rebind_calibration_v1","calibration_required":true,"measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::rebind::r0_","paths::rebind::r1_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    diagnostic=off
+    if [[ "$DEV_TASK" == netlab-nat-rebind-lifecycle ]]; then
+      diagnostic=lifecycle
+      export NETLAB_DIAGNOSTICS=lifecycle
+    fi
+    printf '{"layer":"node","slo":false,"scenario_revision":"node_nat_port_rebind_v1","calibration_revision":"nat_port_rebind_calibration_v1","calibration_required":true,"measurement_revision":"attempt_outcomes_v4","diagnostic":"%s","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::rebind::r0_","paths::rebind::r1_"]}\n' "$diagnostic" > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::rebind::r0_ --ignored
     grep -RFq '[netlab-rebind-calibration]' "$REPORT_DIR/netlab"
     grep -RFq 'test result: ok. 1 passed; 0 failed;' "$REPORT_DIR/netlab"

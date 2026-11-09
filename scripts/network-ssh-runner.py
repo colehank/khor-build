@@ -16,7 +16,7 @@ from urllib.request import urlopen
 
 
 OWNER = {'schema': 1, 'owner': 'khor feat/net netlab'}
-TASKS = {'net-unit', 'net-node', 'netlab-measure-check', 'netlab-cpu-check', 'netlab-mobility-calibrate', 'netlab-mobility-node', 'netlab-mobility-roam', 'netlab-peer-mobility', 'netlab-nat-rebind', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-hop-ownership', 'netlab-hop-lifecycle', 'netlab-smoke', 'netlab-recovery', 'netlab-dynamic', 'netlab-compare',
+TASKS = {'net-unit', 'net-node', 'netlab-measure-check', 'netlab-cpu-check', 'netlab-mobility-calibrate', 'netlab-mobility-node', 'netlab-mobility-roam', 'netlab-peer-mobility', 'netlab-nat-rebind', 'netlab-nat-rebind-lifecycle', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-hop-ownership', 'netlab-hop-lifecycle', 'netlab-smoke', 'netlab-recovery', 'netlab-dynamic', 'netlab-compare',
          'netlab-hop', 'netlab-stability', 'netlab-stalls', 'netlab-diagnostic',
          'netlab-hop-diagnostic', 'netlab'}
 RUST_COMPONENTS = {
