@@ -1,0 +1,326 @@
+//! A board's documents: the khor-wide conversations (`wide/<name>`, the
+//! broadcast first), ridden on the chat CRDT. Read state lives in the
+//! seen CRDT the node owns; this type takes the watermark and answers
+//! with a row. ⚠️ 墓碑 (STORE-BRIEF phase 5): this was the device-chat
+//! kind, a machine's `chat/<机器>` window with a row per machine; that
+//! session kind is gone, and the broadcast is the one conversation.
+
+use std::path::PathBuf;
+
+use khor_catalog::msg;
+use khor_core::{DeviceId, Event, Kind, Millis, Session, SessionId, State, StateStamp, kind};
+use khor_sync::chat::{ChatDoc, Fate, Message, Sender, board_dir, open_channel};
+use khor_sync::store::Loaded;
+
+/// One channel's readout.
+pub struct ChannelLog {
+    pub messages: Vec<Message>,
+    /// Blocks that would not read — a missing slice of conversation the
+    /// caller must be able to mention.
+    pub broken: usize,
+}
+
+/// What `tell` did. `at` is the new message's timestamp — the caller
+/// persists it as the seen watermark (telling implies looking).
+///
+/// **`send` deliberately does not.** Telling implies looking because a
+/// line's content *is* the line; an offer's is a payload that has not
+/// arrived anywhere yet, so nobody has looked at anything. The full
+/// reasoning is at the one site that drops it, `Node::send`.
+pub struct Told {
+    pub msg_id: String,
+    pub at: i64,
+    pub row: Session,
+    pub event: Event,
+}
+
+pub struct ChatKind {
+    root: PathBuf,
+    me: Sender,
+    /// This process's writer peer (one per live writer — see
+    /// `ChatDoc::new`).
+    peer: u64,
+}
+
+impl ChatKind {
+    pub fn new(root: PathBuf, me: Sender) -> ChatKind {
+        ChatKind {
+            root,
+            me,
+            peer: ChatDoc::fresh_peer(),
+        }
+    }
+
+    /// A board's directory: a machine's channel, or a khor-wide
+    /// conversation (`wide/<name>`, `khor_sync::chat::board_dir`). Every
+    /// method here takes either; only the row and the fate differ.
+    fn dir(&self, channel: &str) -> Result<PathBuf, String> {
+        board_dir(&self.root, channel)
+            .ok_or_else(|| msg::bad_channel_name(format_args!("{channel:?}")))
+    }
+
+    fn load(&self, channel: &str) -> Result<Loaded<ChatDoc>, String> {
+        open_channel(&self.dir(channel)?, self.peer)
+    }
+
+    /// A khor-wide board is its own session id (`wide/all`).
+    fn session_id(channel: &str) -> SessionId {
+        SessionId(channel.to_owned())
+    }
+
+    /// A file message **this machine offered**. It is not unread here,
+    /// and no watermark says so — the watermark is the person's decision
+    /// and it replicates, while this is a fact about a seat.
+    ///
+    /// The sender's seat already refuses to speak the six words about
+    /// its own file messages ([`crate::transfer::TransferKind::message_delivery`]
+    /// answers `Delivery`, "not a state word", 发端中性词批). Unread is
+    /// the same question asked of the row: 完成/未看 on a file message
+    /// means *a file arrived here and nobody looked*, and on the seat
+    /// that offered it nothing arrived. Same seat test as over there
+    /// (`m.from.id` against this device), and it must stay the same one:
+    /// two answers to "is this my own offer" is how the chip and the row
+    /// come to disagree.
+    ///
+    /// Text is untouched on purpose — for a line, the watermark already
+    /// does this job and does it person-wide, which is the tested rule
+    /// (`tests/pairing.rs`: own words never count as unread, on any
+    /// device).
+    fn i_offered(&self, m: &Message) -> bool {
+        matches!(m.body, khor_sync::chat::MsgBody::Files(_)) && m.from.id == self.me.id
+    }
+
+    /// The row a channel's messages make, **taking the messages rather
+    /// than the document**: the caller that reads this document on the
+    /// list's beat wants the messages too, and one read has to serve
+    /// both (`row_and_log`). Handed a document it would re-derive the
+    /// message list a second time, which is the cheap half of the same
+    /// mistake `row` used to make with the expensive one.
+    pub(crate) fn row_from(
+        &self,
+        channel: &str,
+        home: DeviceId,
+        msgs: &[Message],
+        watermark: i64,
+        snapshots: Option<&khor_sync::seen::SeenDoc>,
+    ) -> Session {
+        let unread = msgs
+            .iter()
+            .filter(|m| {
+                m.at > watermark
+                    && !snapshots.is_some_and(|s| s.message_seen(channel, &m.id, m.at))
+                    && !self.i_offered(m)
+            })
+            .count() as u64;
+        let at = msgs.last().map(|m| m.at.max(0) as u64).unwrap_or(0);
+        Session {
+            observation: None,
+            can_control: false,
+            activity: Vec::new(),
+            id: Self::session_id(channel),
+            kind: Kind(kind::BROADCAST.to_owned()),
+            title: channel.to_owned(),
+            home,
+            // docs/SESSION.md device chat: unseen content = Done, seen =
+            // Idle; the first four words are unreachable (no process).
+            state: Some(StateStamp {
+                state: if unread > 0 { State::Done } else { State::Idle },
+                at: Millis(at),
+            }),
+            unread,
+            // Never dead: the other machine can always speak again, so
+            // there is no state this row cannot move out of on its own.
+            dead: false,
+            // Always vouched-for: the words here (完成/空闲) are derived
+            // from the replicated document itself, which cannot go
+            // stale-behind-a-crash the way a process's last report can.
+            unbacked: false,
+            // Khor's own, not a vendor's: a device chat is a thing this
+            // product makes, and there is no agent behind it to name.
+            category: Some(khor_core::category::KHOR.to_owned()),
+            // The row's preview: the newest message still standing. A
+            // retracted one is skipped (its slot stays, its words must
+            // not); a kind this version cannot read previews as nothing
+            // rather than as blank text (MsgBody::Unknown's rule).
+            last: msgs.iter().rev().filter(|m| !m.retracted).find_map(|m| {
+                if let Some(c) = &m.command {
+                    if c.agent.is_some() && !c.stdout.is_empty() {
+                        return Some(khor_core::preview(&c.stdout));
+                    }
+                }
+                match &m.body {
+                    khor_sync::chat::MsgBody::Text(t) => Some(khor_core::preview(t)),
+                    khor_sync::chat::MsgBody::Files(fs) => Some(khor_core::preview(
+                        &fs.iter()
+                            .map(|f| f.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    )),
+                    khor_sync::chat::MsgBody::Unknown(_) => None,
+                }
+            }),
+            via: None,
+            term: false,
+            // **No place, and that is not a gap.** A conversation with
+            // another machine does not happen in a directory — nothing
+            // was recorded because there was nothing to record, and the
+            // list groups these together as such rather than pretending
+            // somebody forgot.
+            place: None,
+            mux: false,
+            doing: None,
+        }
+    }
+
+    /// Writes one composed message (`ChatDoc::post`): words, the
+    /// machines it was pushed to, the files it carries.
+    pub fn post(
+        &self,
+        channel: &str,
+        home: DeviceId,
+        text: &str,
+        to: &[khor_sync::chat::Target],
+        files: &[khor_sync::chat::FileRef],
+    ) -> Result<Told, String> {
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        self.push(
+            channel,
+            home,
+            |doc| doc.post(&self.me, text, to, files),
+            serde_json::json!({ "text": text, "files": names, "from": self.me.name }),
+        )
+    }
+
+    fn push(
+        &self,
+        channel: &str,
+        home: DeviceId,
+        write: impl FnOnce(&ChatDoc) -> Result<String, String>,
+        payload: serde_json::Value,
+    ) -> Result<Told, String> {
+        let loaded = self.load(channel)?;
+        let mut store = loaded.store;
+        let msg_id = write(&loaded.doc)?;
+        store.flush(&loaded.doc)?;
+        let msgs = loaded.doc.messages();
+        // The watermark is this message's own `at` — not the list max: a
+        // merged-in line stamped ahead of us must not get auto-seen.
+        let at = msgs
+            .iter()
+            .find(|m| m.id == msg_id)
+            .map(|m| m.at)
+            .unwrap_or(0);
+        let row = self.row_from(channel, home, &msgs, at, None);
+        let event = Event {
+            session: row.id.clone(),
+            seq: msgs.len() as u64,
+            at: row.activity_at().ok_or("chat has no recorded activity")?,
+            payload: serde_json::to_vec(&payload).map_err(|e| e.to_string())?,
+        };
+        Ok(Told {
+            msg_id,
+            at,
+            row,
+            event,
+        })
+    }
+
+    /// Writes how a file message's move stands on this machine (its
+    /// receiver), under this machine's own key: a khor-wide message has
+    /// many receivers (`ChatDoc::set_fate_of`).
+    pub fn set_fate(&self, channel: &str, msg_id: &str, fate: &Fate) -> Result<(), String> {
+        let loaded = self.load(channel)?;
+        let mut store = loaded.store;
+        loaded.doc.set_fate_of(msg_id, &self.me.id, fate)?;
+        store.flush(&loaded.doc).map(|_| ())
+    }
+
+    /// How a file message's move stands on this machine, read the way
+    /// [`Self::set_fate`] writes it.
+    pub fn fate_here(&self, _channel: &str, m: &Message) -> Option<Fate> {
+        m.fates.get(&self.me.id).cloned()
+    }
+
+    pub fn log(&self, channel: &str) -> Result<ChannelLog, String> {
+        let loaded = self.load(channel)?;
+        Ok(ChannelLog {
+            messages: loaded.doc.messages(),
+            broken: loaded.broken.len(),
+        })
+    }
+
+    pub fn agent_config(&self) -> Result<Option<khor_sync::chat::AgentConfig>, String> {
+        self.agent_config_in(crate::wide::BROADCAST)
+    }
+
+    pub fn set_agent_config(&self, config: &khor_sync::chat::AgentConfig) -> Result<(), String> {
+        self.set_agent_config_in(crate::wide::BROADCAST, config)
+    }
+
+    pub(crate) fn agent_config_in(
+        &self,
+        board: &str,
+    ) -> Result<Option<khor_sync::chat::AgentConfig>, String> {
+        Ok(self.load(board)?.doc.agent_config())
+    }
+
+    pub(crate) fn set_agent_config_in(
+        &self,
+        board: &str,
+        config: &khor_sync::chat::AgentConfig,
+    ) -> Result<(), String> {
+        let loaded = self.load(board)?;
+        loaded.doc.set_agent_config(config)?;
+        let mut store = loaded.store;
+        store.flush(&loaded.doc).map(|_| ())
+    }
+
+    pub(crate) fn agent_conversation(
+        &self,
+        board: &str,
+    ) -> Result<Option<khor_sync::chat::AgentConversation>, String> {
+        if !self.dir(board)?.is_dir() {
+            return Ok(None);
+        }
+        Ok(self.load(board)?.doc.agent_conversation())
+    }
+
+    pub(crate) fn set_agent_conversation(
+        &self,
+        board: &str,
+        conversation: &khor_sync::chat::AgentConversation,
+        config: Option<&khor_sync::chat::AgentConfig>,
+    ) -> Result<(), String> {
+        let loaded = self.load(board)?;
+        loaded.doc.set_agent_conversation(conversation)?;
+        if let Some(config) = config {
+            loaded.doc.set_agent_config(config)?;
+        }
+        let mut store = loaded.store;
+        store.flush(&loaded.doc).map(|_| ())
+    }
+
+    pub fn command(
+        &self,
+        channel: &str,
+        record: &khor_sync::chat::CommandRecord,
+    ) -> Result<String, String> {
+        // Receipt ids are stable, unlike appended messages. Serialize the
+        // local find-or-insert across GUI, serve, and retried requests.
+        let dir = self.dir(channel)?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(dir.join(".command-lock"))
+            .map_err(|e| e.to_string())?;
+        lock.lock().map_err(|e| e.to_string())?;
+        let loaded = self.load(channel)?;
+        let id = loaded.doc.command(&self.me, record)?;
+        let mut store = loaded.store;
+        store.flush(&loaded.doc)?;
+        Ok(id)
+    }
+}
