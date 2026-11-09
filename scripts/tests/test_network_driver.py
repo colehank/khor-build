@@ -8,6 +8,73 @@ import unittest
 
 
 class NetworkDriverTest(unittest.TestCase):
+    def test_wan_build_records_identity_without_running_or_exporting_the_binary(self):
+        import hashlib
+        driver = Path(__file__).resolve().parents[1] / 'network.sh'
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',
+                   GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@localhost',
+                   GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@localhost')
+        for mode in ['normal', 'missing', 'symlink']:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / 'source'
+                source.mkdir()
+                def git(*args):
+                    return subprocess.check_output(['git', '-C', str(source), *args], env=env, text=True).strip()
+                git('init', '-q')
+                (source / 'README.md').write_text('no buildable product; Python stubs only\n')
+                git('add', '.')
+                git('-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fixture')
+                package = root / 'package'
+                package.mkdir()
+                git('clone', '--bare', '--quiet', str(source), str(package / 'source.git'))
+                identity = dict(build_commit=git('rev-parse', 'HEAD'), tree=git('rev-parse', 'HEAD^{tree}'))
+                (package / 'source.json').write_text(json.dumps(identity))
+                binary = root / 'bin'
+                binary.mkdir()
+                cargo = binary / 'cargo'
+                cargo.write_text('#!' + sys.executable + '\n' + r'''
+import json,os,pathlib,sys
+trace=pathlib.Path(os.environ['MOCK_TRACE'])
+calls=json.loads(trace.read_text()) if trace.exists() else []
+calls.append(sys.argv[1:]);trace.write_text(json.dumps(calls))
+if sys.argv[1]=='build' and os.environ['MOCK_BINARY_MODE']!='missing':
+    target=pathlib.Path(os.environ['CARGO_TARGET_DIR'])/'debug/examples/net_wan_probe'
+    target.parent.mkdir(parents=True)
+    contents=b'not an executable product; identity fixture only\n'
+    if os.environ['MOCK_BINARY_MODE']=='symlink':
+        other=target.with_name('other');other.write_bytes(contents);other.chmod(0o700);target.symlink_to(other)
+    else:
+        target.write_bytes(contents);target.chmod(0o700)
+''')
+                cargo.chmod(0o700)
+                rustc = binary / 'rustc'
+                rustc.write_text('#!/bin/sh\nprintf "stub; no Rust executed\\n"\n')
+                rustc.chmod(0o700)
+                report, runner, target = root / 'report', root / 'runner', root / 'target'
+                runner.mkdir()
+                outcome = subprocess.run(['bash', str(driver)], text=True, capture_output=True,
+                    env=dict(env, PATH=str(binary)+os.pathsep+env['PATH'], DEV_TASK='net-wan-build',
+                        SOURCE_PACKAGE=str(package), RUNNER_TEMP=str(runner), REPORT_DIR=str(report),
+                        CARGO_TARGET_DIR=str(target), CARGO_BUILD_JOBS='2', GITHUB_RUN_ID='stub',
+                        GITHUB_SHA='control-fixture', MOCK_TRACE=str(root/'calls.json'), MOCK_BINARY_MODE=mode))
+                self.assertEqual(json.loads((root/'calls.json').read_text()),
+                    [['fmt','--all','--','--check'], ['build','--locked','-p','khor-node','--example','net_wan_probe']])
+                if mode != 'normal':
+                    self.assertNotEqual(outcome.returncode, 0)
+                    self.assertFalse((report/'wan-binary.json').exists())
+                    continue
+                self.assertEqual(outcome.returncode, 0, outcome.stdout+outcome.stderr)
+                manifest = json.loads((report/'wan-binary.json').read_text())
+                actual = target/'debug/examples/net_wan_probe'
+                self.assertEqual(manifest['source']['tree'], identity['tree'])
+                self.assertEqual(manifest['path'], str(actual))
+                self.assertEqual(manifest['sha256'], hashlib.sha256(actual.read_bytes()).hexdigest())
+                self.assertFalse(manifest['executed'])
+                self.assertEqual(sorted(p.name for p in report.iterdir()),
+                    ['environment.json','format.log','source.json','wan-binary.json','wan-build.log'])
+
     def test_congestion_keeps_a_failed_round_and_runs_the_remaining_rounds(self):
         driver = Path(__file__).resolve().parents[1] / "network.sh"
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
