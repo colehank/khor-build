@@ -87,7 +87,7 @@ else
     printf '{"layer":"fixture","slo":false,"measurement_revision":"checked_affinity_v3","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::cpu::"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::cpu:: --ignored
   elif [[ "$DEV_TASK" == netlab-hop-reference ]]; then
-    printf '{"layer":"node","slo":false,"reference":"hop_reference_v1","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":3,"ignored":true,"filters":["hop::reference::fr_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"layer":"node","slo":false,"reference":"hop_reference_v2","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":3,"ignored":true,"filters":["hop::reference::fr_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     reference_status=0
     repeat_netlab hop::reference::fr_ --ignored || reference_status=$?
     python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"

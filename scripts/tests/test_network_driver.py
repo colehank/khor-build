@@ -192,7 +192,7 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                     if task == 'netlab-hop-ownership':
                         self.assertEqual(mode['diagnostic'], 'lifecycle')
                     else:
-                        self.assertEqual(mode['reference'], 'hop_reference_v1')
+                        self.assertEqual(mode['reference'], 'hop_reference_v2')
                         self.assertTrue(mode['ignored'])
                     self.assertTrue((report / 'attempts.json').is_file())
 
