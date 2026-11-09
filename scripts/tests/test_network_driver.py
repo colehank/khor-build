@@ -112,6 +112,8 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 6, True),
             ("netlab-hop-reference", ["hop::reference::fr_", "--ignored"], 3, None, 7, False),
             ("netlab-hop-reference", ["hop::reference::fr_", "--ignored"], 3, None, 6, True),
+            ("netlab-hop-reference-lifecycle", ["hop::reference::fr_automatic_", "--ignored"], 3, "lifecycle", 7, False),
+            ("netlab-hop-reference-lifecycle", ["hop::reference::fr_automatic_", "--ignored"], 3, "lifecycle", 6, True),
             ("netlab-measure-check", ["paths::attempts::", "--ignored"], 1, None, 0, False),
             ("netlab-measure-check", ["paths::attempts::", "--ignored"], 1, None, 6, True),
         ]:
@@ -185,7 +187,7 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                                      [str(report / 'netlab'), '--calibration'])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
                     self.assertTrue((report / 'attempt-calibration.json').is_file())
-                elif task in {'netlab-hop-ownership', 'netlab-hop-reference'}:
+                elif task in {'netlab-hop-ownership', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle'}:
                     self.assertEqual(json.loads((root / 'verify.json').read_text()),
                                      [str(report / 'netlab')])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
@@ -194,6 +196,8 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                     else:
                         self.assertEqual(mode['reference'], 'hop_reference_v2')
                         self.assertTrue(mode['ignored'])
+                        if task == 'netlab-hop-reference-lifecycle':
+                            self.assertEqual(mode['diagnostic'], 'lifecycle')
                     self.assertTrue((report / 'attempts.json').is_file())
 
 
