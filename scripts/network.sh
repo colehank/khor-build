@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -129,11 +129,13 @@ else
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::rebind::r1_ --ignored || mobility_status=$?
     python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
     exit "$mobility_status"
-  elif [[ "$DEV_TASK" == netlab-peer-mobility ]]; then
+  elif [[ "$DEV_TASK" == netlab-peer-mobility || "$DEV_TASK" == netlab-peer-mobility-samples ]]; then
     check_format || exit 1
-    printf '{"layer":"node","slo":false,"scenario_revision":"peer_relay_replug_v1","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"diagnostic":"lifecycle","filters":["hop::mobility::pm_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    diagnostic=lifecycle
+    if [[ "$DEV_TASK" == netlab-peer-mobility-samples ]]; then diagnostic=1; fi
+    printf '{"layer":"node","slo":false,"scenario_revision":"peer_relay_replug_v1","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"diagnostic":"%s","filters":["hop::mobility::pm_"]}\n' "$diagnostic" > "$REPORT_DIR/measurement-mode.json"
     mobility_status=0
-    NETLAB_DIAGNOSTICS=lifecycle NETLAB_TEST_THREADS=1 bash scripts/netlab.sh hop::mobility::pm_ --ignored || mobility_status=$?
+    NETLAB_DIAGNOSTICS="$diagnostic" NETLAB_TEST_THREADS=1 bash scripts/netlab.sh hop::mobility::pm_ --ignored || mobility_status=$?
     python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
     exit "$mobility_status"
   elif [[ "$DEV_TASK" == netlab-mobility-roam ]]; then
