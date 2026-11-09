@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -58,11 +58,11 @@ check_format() {
   ) > "$REPORT_DIR/format.patch" || return 1
   return 1
 }
-if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build ]]; then
+if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime ]]; then
   check_format || exit 1
   if [[ "$DEV_TASK" == net-unit ]]; then
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
-  elif [[ "$DEV_TASK" == net-wan-build ]]; then
+  elif [[ "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime ]]; then
     cargo build --locked -p khor-node --example net_wan_probe 2>&1 | tee "$REPORT_DIR/wan-build.log"
     python3 - "$CARGO_TARGET_DIR/debug/examples/net_wan_probe" "$REPORT_DIR" <<'PYTHON'
 import hashlib,json,os,pathlib,sys
@@ -72,6 +72,18 @@ source=json.loads((report/'source.json').read_text())
 manifest=dict(schema=1,path=str(binary),sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),bytes=stat.st_size,source=source,executed=False,storage='mutable build cache; reverify hash under guard before owned runtime copy')
 (report/'wan-binary.json').write_text(json.dumps(manifest,indent=2)+'\n')
 PYTHON
+    if [[ "$DEV_TASK" == net-wan-lifetime ]]; then
+      wan_status=0
+      python3 "$(dirname "$0")/wan-probe-lease.py" --check "$REPORT_DIR/wan-binary.json" "$REPORT_DIR" || wan_status=$?
+      python3 - "$REPORT_DIR" <<'PYTHON'
+import json,pathlib,sys
+report=pathlib.Path(sys.argv[1]);path=report/'wan-binary.json';manifest=json.loads(path.read_text());contracts=report/'wan-lifetime-contracts.json'
+manifest['executed']=any(r.get('lifecycle',{}).get('worker_pid') for r in json.loads(contracts.read_text())['results']) if contracts.exists() else None
+manifest['execution_scope']='isolated lifetime contracts; no mint, pair or WAN business'
+path.write_text(json.dumps(manifest,indent=2)+'\n')
+PYTHON
+      exit "$wan_status"
+    fi
   elif [[ "$DEV_TASK" == net-vendor ]]; then
     # Excluded dependencies cannot run their dev-dependencies from the root
     # workspace. Use each committed package lock, and make iroh test our noq

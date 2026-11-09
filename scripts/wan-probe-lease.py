@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 import re
 import select
+import secrets
 import shutil
 import signal
 import socket
@@ -248,8 +249,102 @@ def run(configuration):
             kill_bridge=config.get('kill_bridge_after_ready', False))
 
 
+def check_contracts(manifest_file, report):
+    """Mac CI fallback: no mint/pair RPC, only real resident lifetime contracts."""
+    assert platform.system() == 'Darwin'
+    manifest = json.loads(manifest_file.read_text())
+    results = []
+    with admission('mac') as (fd, base, _target):
+        owned_base(base)
+        inputs = base.parent/'wan-input'
+        expected = dict(schema=1, owner='khor feat/net wan inputs', uid=os.getuid())
+        if not inputs.exists():
+            inputs.mkdir(mode=0o700)
+            record(inputs/'owner.json', expected)
+        assert inputs.is_dir() and not inputs.is_symlink() and inputs.stat().st_uid == os.getuid()
+        assert json.loads((inputs/'owner.json').read_text()) == expected
+        for mode in ['stop', 'eof', 'kill']:
+            run_id = secrets.token_hex(8)
+            root = base/(run_id+'-mac')
+            config = dict(schema=1, run_id=run_id, role='mac', binary=manifest,
+                source_tree=manifest['source']['tree'], snapshot_commit=manifest['source']['snapshot_commit'],
+                guardian_commit=os.environ.get('GITHUB_SHA'), guardian_sha256=digest(Path(__file__).resolve()),
+                kill_bridge_after_ready=mode=='kill')
+            path = inputs/(run_id+'-mac.json')
+            record(path, config)
+            error = None
+            with (inputs/(run_id+'-controller.log')).open('xb') as stderr:
+                process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), str(path)],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, pass_fds=(fd,))
+                try:
+                    if mode != 'kill':
+                        assert select.select([process.stdout], [], [], 110)[0], 'readiness deadline'
+                        ready = json.loads(process.stdout.readline())
+                        assert ready['seq']==0 and ready['ok'] and ready['data']['run_id']==run_id
+                        if mode == 'stop':
+                            process.stdin.write(b'{"seq":1,"op":"stop"}\n')
+                            process.stdin.flush()
+                            assert select.select([process.stdout], [], [], 65)[0], 'stop reply deadline'
+                            stopped = json.loads(process.stdout.readline())
+                            assert stopped['seq']==1 and stopped['ok'] and stopped['data']['resident_joined']
+                        process.stdin.close()
+                        process.stdin = None
+                    assert process.wait(timeout=165 if mode=='kill' else 75)==0, 'guardian failed'
+                except BaseException as failure:
+                    error = type(failure).__name__ + ': ' + str(failure)
+                finally:
+                    if process.stdin is not None:
+                        process.stdin.close()
+                        process.stdin = None
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=60)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                    process.stdout.close()
+            lifecycle = json.loads((root/'lifecycle.json').read_text()) if (root/'lifecycle.json').exists() else {}
+            remaining = owned_processes(root) if root.exists() else []
+            forced = bool(remaining)
+            if remaining:
+                for row in remaining:
+                    os.kill(row['pid'], signal.SIGTERM)
+                until = time.monotonic()+5
+                while owned_processes(root) and time.monotonic()<until:
+                    time.sleep(0.1)
+                for row in owned_processes(root):
+                    os.kill(row['pid'], signal.SIGKILL)
+                remaining = owned_processes(root)
+            final = lifecycle.get('worker_final') or {}
+            passed = (not error and not forced and not remaining and lifecycle.get('resident_joined')
+                and lifecycle.get('worker_returncode')==0 and final.get('run_id')==run_id and final.get('role')=='mac'
+                and not (root/'lease.sock').exists())
+            result = dict(schema=1, run_id=run_id, role='mac', mode=mode, passed=bool(passed),
+                source=manifest['source'], binary_sha256=manifest['sha256'], guardian_sha256=config['guardian_sha256'],
+                lifecycle=lifecycle, remaining_owned_processes=remaining, forced_cleanup=forced, error=error,
+                limits=['Isolated real Node lifetime; no pairing, WAN business, phone or energy proof'])
+            record(report/('wan-lease-'+mode+'.json'), result)
+            results.append(result)
+            print(json.dumps(dict(mode=mode, passed=bool(passed), resident_joined=lifecycle.get('resident_joined'),
+                remaining=len(remaining), error=error)), flush=True)
+            if passed:
+                assert json.loads((root/'owner.json').read_text()) == dict(schema=1, owner='khor feat/net wan', uid=os.getuid(), run_id=run_id, role='mac')
+                for name in ['home', 'tmux']:
+                    shutil.rmtree(root/name)
+                (root/'probe').unlink()
+                (root/'worker.log').unlink()
+            else:
+                break  # Keep this owned diagnostic state; do not launch more residents.
+    complete = len(results)==3 and all(result['passed'] for result in results)
+    record(report/'wan-lifetime-contracts.json', dict(schema=1, passed=complete, results=results))
+    return 0 if complete else 1
+
+
 if __name__ == '__main__':
     try:
+        if len(sys.argv) == 4 and sys.argv[1] == '--check':
+            raise SystemExit(check_contracts(Path(sys.argv[2]), Path(sys.argv[3])))
         if len(sys.argv) == 4 and sys.argv[1] == '--bridge':
             raise SystemExit(bridge(Path(sys.argv[2]), int(sys.argv[3])))
         if len(sys.argv) == 2:

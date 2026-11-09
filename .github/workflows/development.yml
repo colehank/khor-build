@@ -11,7 +11,7 @@ on:
       task:
         required: true
         type: choice
-        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, net-node, net-vendor, net-wan-build, net-congestion, netlab-vz-probe, netlab-smoke, netlab-dynamic, netlab-compare, netlab-hop, netlab-recovery, netlab-stability, netlab-stalls, netlab-diagnostic, netlab-hop-diagnostic, netlab]
+        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard, net-unit, net-node, net-vendor, net-wan-build, net-wan-lifetime, net-congestion, netlab-vz-probe, netlab-smoke, netlab-dynamic, netlab-compare, netlab-hop, netlab-recovery, netlab-stability, netlab-stalls, netlab-diagnostic, netlab-hop-diagnostic, netlab]
         default: fast
       executor:
         description: Standard lanes or the existing Mac worker for portable network checks
@@ -247,7 +247,7 @@ jobs:
           set -euo pipefail
           [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
-          case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-congestion|netlab-vz-probe) ;; *) exit 2 ;; esac
+          case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-congestion|netlab-vz-probe) ;; *) exit 2 ;; esac
           if [[ -n "$BUNDLE_BLOB$BUNDLE_SHA256" ]]; then
             [[ "$BUNDLE_BLOB" =~ ^[0-9a-f]{40}$ ]]
             [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
