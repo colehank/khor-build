@@ -1,0 +1,40 @@
+/target
+.DS_Store
+# Added by code-review-graph
+.code-review-graph/
+
+# 给 agent 用的工具配置,不是这个仓的东西——留在工作区,不进树。
+# 它们本来一直挂在 `git status` 的未跟踪清单里,而那份噪音差点被扫进
+# 两次提交(2026-09-09)。
+CLAUDE.md
+.mcp.json
+.claude/
+AGENTS.md
+.agents/
+.codex/
+.codebuddy/
+.gemini/
+.kiro/
+.qoder/
+.vscode/
+.githooks/
+opencode.jsonc
+
+# A khor store is never part of this repo. It lands here only by
+# accident — `KHOR_HOME=` with an empty value makes the node treat the
+# working directory as its home and mint a fresh identity in it, which
+# is how `.khor/identity.key` reached a commit on 2026-09-13. A private
+# key is not a thing to rely on noticing.
+.khor/
+
+# Compiled Pi runtime; release builds embed it into the native executable.
+/apps/agent/dist/
+
+# Per-worktree Pi dependencies, including local dependency links.
+/apps/agent/node_modules
+
+# Python test runner bytecode.
+__pycache__/
+
+# Developer-specific Lab defaults; project defaults are lab.config.json.
+.khor-lab.local.json
