@@ -100,3 +100,8 @@ from the build step. Bundles are capped at 64 MiB; both optional inputs omitted
 retain the old checkout path. Retire a bundle branch only after terminal evidence
 is saved and its commit matches that request's receipt. The API transport does
 not make source branches release inputs or bypass source validation.
+
+`net-congestion` first requires the actual UDP direction calibration to pass
+exactly one test. Timed rounds then retain every request outcome with record
+schema v2. The `independent_fifo_v2` road model schedules directions separately;
+results from the older shared FIFO are not a product-policy comparison.

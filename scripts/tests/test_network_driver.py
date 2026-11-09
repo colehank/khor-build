@@ -80,6 +80,7 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
             self.assertEqual(mode['layer'], 'noq')
             self.assertEqual(mode['repeats'], 3)
             self.assertTrue(mode['calibration_required'])
+            self.assertEqual(mode['road_model'], 'independent_fifo_v2')
             self.assertEqual(json.loads((report / "source.json").read_text())['tree'], tree)
             # A failed calibration must stop before any timed measurement.
             failed_runner = root / "failed-runner"
