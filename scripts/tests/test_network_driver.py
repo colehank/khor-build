@@ -38,12 +38,15 @@ import json, os, sys
 from pathlib import Path
 trace = Path(os.environ['MOCK_TRACE'])
 calls = json.loads(trace.read_text()) if trace.exists() else []
-round_index = sum(call['args'][0] == 'test' for call in calls)
+round_index = sum('--ignored' in call['args'] for call in calls)
 calls.append({'args': sys.argv[1:], 'cc_only': os.environ.get('CC_ONLY'),
               'rtt': os.environ.get('CC_RTT_MS')})
 trace.write_text(json.dumps(calls))
 print('stub round', round_index)
-sys.exit(8 if sys.argv[1] == 'test' and round_index == 0 else 0)
+if 'road_directions_do_not_wait_for_each_others_future_packets' in sys.argv:
+    print('test result: ok. 1 passed; 0 failed;')
+    sys.exit(9 if os.environ.get('MOCK_CALIBRATION_RED') else 0)
+sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
 ''')
             cargo.chmod(0o755)
             rustc = binary / "rustc"
@@ -62,7 +65,8 @@ sys.exit(8 if sys.argv[1] == 'test' and round_index == 0 else 0)
             self.assertEqual(result.returncode, 8, result.stderr)
             calls = json.loads(trace.read_text())
             self.assertEqual(calls[0]['args'], ['fmt', '--all', '--', '--check'])
-            tests = calls[1:]
+            self.assertIn('road_directions_do_not_wait_for_each_others_future_packets', calls[1]['args'])
+            tests = calls[2:]
             self.assertEqual(len(tests), 3)
             for call in tests:
                 self.assertEqual(call['args'], ['test', '--locked', '-p', 'khor-net', '--test',
@@ -75,7 +79,23 @@ sys.exit(8 if sys.argv[1] == 'test' and round_index == 0 else 0)
             self.assertFalse(mode['slo'])
             self.assertEqual(mode['layer'], 'noq')
             self.assertEqual(mode['repeats'], 3)
+            self.assertTrue(mode['calibration_required'])
             self.assertEqual(json.loads((report / "source.json").read_text())['tree'], tree)
+            # A failed calibration must stop before any timed measurement.
+            failed_runner = root / "failed-runner"
+            failed_runner.mkdir()
+            failed_report = root / "failed-report"
+            failed_trace = root / "failed-calls.json"
+            failed = subprocess.run(["bash", str(driver)], text=True, capture_output=True,
+                                    env=dict(env, PATH=str(binary) + os.pathsep + env['PATH'],
+                                             DEV_TASK="net-congestion", SOURCE_PACKAGE=str(package),
+                                             RUNNER_TEMP=str(failed_runner), REPORT_DIR=str(failed_report),
+                                             GITHUB_RUN_ID="stub", GITHUB_SHA="control-fixture",
+                                             CARGO_BUILD_JOBS="2", MOCK_TRACE=str(failed_trace),
+                                             MOCK_CALIBRATION_RED="1"))
+            self.assertEqual(failed.returncode, 9, failed.stderr)
+            self.assertEqual(len(json.loads(failed_trace.read_text())), 2)
+            self.assertEqual(len(list(failed_report.glob('congestion-*.log'))), 0)
 
 
 if __name__ == "__main__":

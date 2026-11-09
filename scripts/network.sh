@@ -55,7 +55,11 @@ if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-v
   elif [[ "$DEV_TASK" == net-congestion ]]; then
     # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
     # and repeat sequentially, without another timed case sharing the runtime.
-    printf '{"measurement_version":2,"layer":"noq","slo":false,"test_threads":1,"repeats":3,"rtt_ms":300,"loss_pct_per_direction":2,"mbit_per_direction":20,"queue_ms":200,"bulk_seconds":20,"seeds":["9e3779b97f4a7c15","2545f4914f6cdd1d"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"measurement_version":2,"road_model":"shared_fifo_v1","calibration_required":true,"layer":"noq","slo":false,"test_threads":1,"repeats":3,"rtt_ms":300,"loss_pct_per_direction":2,"mbit_per_direction":20,"queue_ms":200,"bulk_seconds":20,"seeds":["9e3779b97f4a7c15","2545f4914f6cdd1d"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    cargo test --locked -p khor-net --test congestion \
+      road_directions_do_not_wait_for_each_others_future_packets \
+      -- --exact --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/road-calibration.log"
+    grep -Fq 'test result: ok. 1 passed; 0 failed;' "$REPORT_DIR/road-calibration.log"
     congestion_status=0
     for congestion_repeat in 1 2 3; do
       printf '[congestion-repeat] %s/3\n' "$congestion_repeat"
