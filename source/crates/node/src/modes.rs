@@ -1,0 +1,449 @@
+//! The terminal modes a byte stream switched on, kept for the bytes a
+//! replay no longer holds.
+//!
+//! # Why
+//!
+//! A replay is the tail of a stream: the host's ring ([`crate::host`])
+//! and the app's feed (`khor_gui_core::term`) both trim their heads. A
+//! mode is set **once** — a tmux client sends `ESC [ ? 1049 h` when it
+//! attaches and never again, however long it then draws — so once the
+//! head is trimmed past it, every later attacher replays a screen
+//! drawn for the alternate buffer into the normal one. Measured
+//! 2026-10-01 (the owner: 「初次进入一个 tmux 会话的标签，滚鼠标滚轮
+//! 页面没有变化；把窗口缩放一下就能滚了」): after 1.5 MB through a tmux
+//! viewer, a fresh attach in a real WKWebView left xterm in the
+//! `normal` buffer with application cursor keys off, while tmux sat in
+//! the alternate screen. The wheel then scrolled xterm's own, nearly
+//! empty, scrollback — nothing moved, nothing reached tmux — and a
+//! resize "fixed" it only because the program's repaint scrolled lines
+//! into that wrong buffer's history for the wheel to find.
+//!
+//! So whoever trims a replay's head feeds the trimmed bytes through a
+//! [`Modes`], and a replay starts with [`Modes::preamble`]: the modes
+//! as they stood at the oldest byte still held. Preamble + tail is then
+//! the same terminal state as the whole stream would have left.
+//!
+//! # What is tracked, and what is not
+//!
+//! The DEC private modes (`CSI ? Pm h` / `l`) that change how a
+//! terminal *behaves* rather than what it shows — the buffer, cursor
+//! keys, the mouse, paste, focus reports, wrap and cursor visibility —
+//! and the keypad (`ESC =` / `ESC >`). A full reset (`ESC c`) forgets
+//! them all. Everything else is skipped by a parser that only knows
+//! enough grammar to not mistake a string (OSC, DCS, …) for a mode.
+//! Not a screen model: what a screen *shows* comes back from the tail
+//! and from the repaint an attach's resize asks for.
+
+use std::collections::BTreeMap;
+
+/// The modes worth carrying across a trimmed head, each with the value
+/// a freshly reset terminal has. The three alternate-screen spellings
+/// come first so a preamble switches buffers before it sets anything a
+/// buffer switch could reset.
+const TRACKED: &[(u16, bool)] = &[
+    (47, false),
+    (1047, false),
+    (1049, false),
+    // DECCKM: cursor keys send `ESC O A` rather than `ESC [ A`.
+    (1, false),
+    // DECAWM and DECTCEM — on by default.
+    (7, true),
+    (25, true),
+    // Mouse reporting (X10's 9 too), its encodings, focus reports.
+    (9, false),
+    (1000, false),
+    (1002, false),
+    (1003, false),
+    (1004, false),
+    (1005, false),
+    (1006, false),
+    (1015, false),
+    // Bracketed paste.
+    (2004, false),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Parse {
+    #[default]
+    Ground,
+    Esc,
+    /// Inside `CSI`; `private` once a leading `?` was seen, `foreign`
+    /// once a byte made it some other sequence than a DEC mode set;
+    /// `lead` a leading `>`, `<` or `=` (the kitty keyboard protocol's).
+    Csi {
+        private: bool,
+        foreign: bool,
+        started: bool,
+        lead: u8,
+    },
+    /// Inside a string (OSC, DCS, SOS, PM, APC) until BEL or `ESC \`.
+    Str,
+    /// `ESC` seen inside a string — `\` ends it, anything else is data.
+    StrEsc,
+}
+
+/// See the module head.
+#[derive(Debug, Clone, Default)]
+pub struct Modes {
+    parse: Parse,
+    params: Vec<u16>,
+    current: Option<u16>,
+    /// Only modes that were ever set or reset; the rest are default.
+    set: BTreeMap<u16, bool>,
+    keypad: bool,
+    /// The kitty keyboard protocol's flag stacks, main screen then
+    /// alternate (`CSI > flags u` pushes, `CSI < n u` pops, `CSI = f ; m u`
+    /// sets): a program that asked once — Claude Code at its start — and
+    /// then drew for hours still expects them after a trimmed head.
+    kitty: [Vec<u16>; 2],
+    /// xterm's modifyOtherKeys level (`CSI > 4 ; v m`), which tmux asks
+    /// of its outer terminal once, at attach, when `extended-keys` is on.
+    other_keys: u16,
+}
+
+/// The kitty protocol's stack bound, as the face keeps it
+/// (`apps/gui/src/lib/term-kitty.ts`).
+const KITTY_MAX: usize = 16;
+
+impl Modes {
+    /// Eats bytes in stream order. Sequences may be split across calls
+    /// anywhere — the parse state carries over.
+    pub fn feed(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.byte(b);
+        }
+    }
+
+    fn byte(&mut self, b: u8) {
+        // CAN and SUB abort any sequence, in every state.
+        if b == 0x18 || b == 0x1a {
+            self.parse = Parse::Ground;
+            return;
+        }
+        match self.parse {
+            Parse::Ground => {
+                if b == 0x1b {
+                    self.parse = Parse::Esc;
+                }
+            }
+            Parse::Esc => {
+                self.parse = Parse::Ground;
+                match b {
+                    b'[' => {
+                        self.params.clear();
+                        self.current = None;
+                        self.parse = Parse::Csi {
+                            private: false,
+                            foreign: false,
+                            started: false,
+                            lead: 0,
+                        };
+                    }
+                    b']' | b'P' | b'X' | b'^' | b'_' => self.parse = Parse::Str,
+                    b'=' => self.keypad = true,
+                    b'>' => self.keypad = false,
+                    b'c' => {
+                        self.set.clear();
+                        self.keypad = false;
+                        self.kitty = Default::default();
+                        self.other_keys = 0;
+                    }
+                    0x1b => self.parse = Parse::Esc,
+                    _ => {}
+                }
+            }
+            Parse::Csi {
+                private,
+                foreign,
+                started,
+                lead,
+            } => match b {
+                0x1b => self.parse = Parse::Esc,
+                b'?' if !started => {
+                    self.parse = Parse::Csi {
+                        private: true,
+                        foreign,
+                        started: true,
+                        lead,
+                    }
+                }
+                b'>' | b'<' | b'=' if !started => {
+                    self.parse = Parse::Csi {
+                        private,
+                        foreign,
+                        started: true,
+                        lead: b,
+                    }
+                }
+                b'0'..=b'9' => {
+                    let d = u16::from(b - b'0');
+                    self.current = Some(
+                        self.current
+                            .unwrap_or(0)
+                            .saturating_mul(10)
+                            .saturating_add(d),
+                    );
+                    self.parse = Parse::Csi {
+                        private,
+                        foreign,
+                        started: true,
+                        lead,
+                    };
+                }
+                b';' => {
+                    self.params.push(self.current.take().unwrap_or(0));
+                    self.parse = Parse::Csi {
+                        private,
+                        foreign,
+                        started: true,
+                        lead,
+                    };
+                }
+                0x40..=0x7e => {
+                    self.parse = Parse::Ground;
+                    if let Some(n) = self.current.take() {
+                        self.params.push(n);
+                    }
+                    if private && !foreign && (b == b'h' || b == b'l') {
+                        for &p in &self.params {
+                            if TRACKED.iter().any(|&(m, _)| m == p) {
+                                self.set.insert(p, b == b'h');
+                                // Leaving the alternate screen leaves its
+                                // keyboard flags behind.
+                                if b == b'l' && matches!(p, 47 | 1047 | 1049) {
+                                    self.kitty[1].clear();
+                                }
+                            }
+                        }
+                    }
+                    if b == b'u' && lead != 0 && !foreign {
+                        self.kitty_op(lead);
+                    }
+                    if b == b'm' && lead == b'>' && !foreign && self.params.first() == Some(&4) {
+                        let v = self.params.get(1).copied().unwrap_or(0);
+                        self.other_keys = if v <= 2 { v } else { 0 };
+                    }
+                }
+                // Intermediates, other parameter bytes (`>`, `!`, `:`…):
+                // some other sequence than a DEC mode set.
+                0x20..=0x3f => {
+                    self.parse = Parse::Csi {
+                        private,
+                        foreign: true,
+                        started: true,
+                        lead,
+                    }
+                }
+                // C0 controls execute inside a CSI without ending it.
+                _ => {}
+            },
+            Parse::Str => match b {
+                0x07 => self.parse = Parse::Ground,
+                0x1b => self.parse = Parse::StrEsc,
+                _ => {}
+            },
+            Parse::StrEsc => {
+                self.parse = if b == b'\\' {
+                    Parse::Ground
+                } else {
+                    Parse::Str
+                };
+            }
+        }
+    }
+
+    /// One kitty keyboard protocol request, on the screen in use.
+    fn kitty_op(&mut self, lead: u8) {
+        let alt = [47, 1047, 1049].iter().any(|&m| self.is_set(m));
+        let first = self.params.first().copied();
+        let stack = &mut self.kitty[usize::from(alt)];
+        match lead {
+            b'>' => {
+                if stack.len() >= KITTY_MAX {
+                    stack.remove(0);
+                }
+                stack.push(first.unwrap_or(0));
+            }
+            b'<' => {
+                let n = usize::from(first.filter(|&n| n > 0).unwrap_or(1));
+                stack.truncate(stack.len().saturating_sub(n));
+            }
+            b'=' => {
+                let flags = first.unwrap_or(0);
+                let mode = self.params.get(1).copied().filter(|&m| m > 0).unwrap_or(1);
+                let was = stack.pop().unwrap_or(0);
+                stack.push(match mode {
+                    2 => was | flags,
+                    3 => was & !flags,
+                    _ => flags,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the stream left DEC private mode `mode` set (a mode never
+    /// mentioned reads as its reset value).
+    pub fn is_set(&self, mode: u16) -> bool {
+        self.set
+            .get(&mode)
+            .copied()
+            .unwrap_or_else(|| TRACKED.iter().any(|&(m, on)| m == mode && on))
+    }
+
+    /// Whether the stream stopped part-way through a sequence. A replay
+    /// that started there would print the rest as text — a picture's
+    /// base64, a long clipboard copy — so whoever trims a head keeps
+    /// trimming while this holds (roadmap 3.3).
+    pub fn mid_sequence(&self) -> bool {
+        self.parse != Parse::Ground
+    }
+
+    /// A full-screen program is drawing: the alternate screen, or the
+    /// mouse taken (roadmap 1.2: "a program is running").
+    pub fn program_holds_screen(&self) -> bool {
+        [47, 1047, 1049, 1000, 1002, 1003]
+            .iter()
+            .any(|&m| self.is_set(m))
+    }
+
+    /// The bytes that put a freshly reset terminal into the modes the
+    /// stream had reached — empty when every tracked mode is at its
+    /// default, so an untrimmed replay is unchanged.
+    pub fn preamble(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        // The main screen's keyboard flags first, while the fresh terminal
+        // is on it; the alternate screen's after the switch below.
+        let push = |out: &mut Vec<u8>, stack: &[u16]| {
+            for f in stack {
+                out.extend_from_slice(format!("\x1b[>{f}u").as_bytes());
+            }
+        };
+        push(&mut out, &self.kitty[0]);
+        for &(mode, default) in TRACKED {
+            match self.set.get(&mode) {
+                Some(&on) if on != default => {
+                    out.extend_from_slice(
+                        format!("\x1b[?{mode}{}", if on { 'h' } else { 'l' }).as_bytes(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        push(&mut out, &self.kitty[1]);
+        if self.other_keys > 0 {
+            out.extend_from_slice(format!("\x1b[>4;{}m", self.other_keys).as_bytes());
+        }
+        if self.keypad {
+            out.extend_from_slice(b"\x1b=");
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The kitty keyboard protocol's flags survive a trimmed head**
+    /// (roadmap 5.1): Claude Code pushes them once at its start. Per
+    /// screen, the main screen's before the switch and the alternate's
+    /// after, popped and set as the spec says, and forgotten when the
+    /// program leaves the alternate screen or resets the terminal.
+    /// tmux asks for modifyOtherKeys once, at attach, when the person's
+    /// tmux.conf turns `extended-keys` on (the tmux walk); a replay whose
+    /// head was trimmed past it asks again, and `CSI > 4 m` or RIS end it.
+    #[test]
+    fn modify_other_keys_is_kept() {
+        assert_eq!(after(b"\x1b[?1049h\x1b[>4;2m"), b"\x1b[?1049h\x1b[>4;2m");
+        assert!(after(b"\x1b[>4;2m\x1b[>4m").is_empty());
+        assert!(after(b"\x1b[>4;1m\x1bc").is_empty());
+        // modifyCursorKeys (CSI > 2 ; v m) is not this.
+        assert!(after(b"\x1b[>2;1m").is_empty());
+    }
+
+    #[test]
+    fn kitty_keyboard_flags_are_kept_per_screen() {
+        // Claude Code's shape: one push on the main screen.
+        assert_eq!(after(b"\x1b[>1u"), b"\x1b[>1u");
+        // A pop that empties leaves nothing to restore.
+        assert!(after(b"\x1b[>1u\x1b[<u").is_empty());
+        // Set, then OR and AND-NOT on the top entry.
+        assert_eq!(after(b"\x1b[>1u\x1b[=8;2u"), b"\x1b[>9u");
+        assert_eq!(after(b"\x1b[>9u\x1b[=1;3u"), b"\x1b[>8u");
+        // An editor on the alternate screen above a shell that asked too.
+        assert_eq!(
+            after(b"\x1b[>1u\x1b[?1049h\x1b[>3u"),
+            b"\x1b[>1u\x1b[?1049h\x1b[>3u"
+        );
+        // Leaving the alternate screen drops its stack, not the main one.
+        assert_eq!(
+            after(b"\x1b[>1u\x1b[?1049h\x1b[>3u\x1b[?1049l"),
+            b"\x1b[>1u"
+        );
+        // A full reset forgets both; other sequences with the same leads
+        // (DA2 `CSI > c`, `CSI = c`) change nothing.
+        assert!(after(b"\x1b[>1u\x1bc").is_empty());
+        assert!(after(b"\x1b[>c\x1b[=c\x1b[>0;1m").is_empty());
+        // Pushes past the bound evict the oldest.
+        let many: Vec<u8> = (1..=20)
+            .flat_map(|n| format!("\x1b[>{n}u").into_bytes())
+            .collect();
+        let kept = String::from_utf8(after(&many)).unwrap();
+        assert!(
+            kept.starts_with("\x1b[>5u") && kept.ends_with("\x1b[>20u"),
+            "{kept}"
+        );
+    }
+
+    fn after(bytes: &[u8]) -> Vec<u8> {
+        let mut m = Modes::default();
+        m.feed(bytes);
+        m.preamble()
+    }
+
+    /// What a tmux client sends on attach (captured from tmux 3.7b, the
+    /// head of a fresh viewer's ring) comes back as the modes it set.
+    #[test]
+    fn a_tmux_attach_head_comes_back_as_its_modes() {
+        let head = b"\x1b[?1049h\x1b[?1h\x1b=\x1b[H\x1b[2J\x1b[?12l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1005l\x1b[?2004h\x1b[?2031h\x1b[?996n\x1b[m";
+        assert_eq!(after(head), b"\x1b[?1049h\x1b[?1h\x1b[?2004h\x1b=".to_vec());
+    }
+
+    #[test]
+    fn nothing_set_is_an_empty_preamble() {
+        assert!(after(b"plain text\r\n\x1b[31mred\x1b[m\x1b[2J\x1b[10;1H").is_empty());
+    }
+
+    /// Split anywhere — a read boundary falls where it falls.
+    #[test]
+    fn a_sequence_split_across_reads_still_counts() {
+        let whole = b"\x1b[?1049h\x1b[?1000;1006h";
+        for cut in 0..whole.len() {
+            let mut m = Modes::default();
+            m.feed(&whole[..cut]);
+            m.feed(&whole[cut..]);
+            assert_eq!(
+                m.preamble(),
+                b"\x1b[?1049h\x1b[?1000h\x1b[?1006h".to_vec(),
+                "cut at {cut}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_later_reset_wins_and_a_full_reset_forgets() {
+        assert!(after(b"\x1b[?1049h\x1b[?1049l").is_empty());
+        assert_eq!(after(b"\x1b[?25l"), b"\x1b[?25l".to_vec());
+        assert!(after(b"\x1b[?1049h\x1b=\x1bc").is_empty());
+    }
+
+    /// A string is not a mode, even when it spells one; a non-private
+    /// `h` (SM, ANSI modes) is not a DEC one.
+    #[test]
+    fn strings_and_other_sequences_are_not_modes() {
+        assert!(after(b"\x1b]0;\x1b[?1049h\x07").is_empty());
+        assert!(after(b"\x1bP\x1b[?1049h\x1b\\").is_empty());
+        assert!(after(b"\x1b[4h\x1b[>1h\x1b[?1049$p").is_empty());
+    }
+}
