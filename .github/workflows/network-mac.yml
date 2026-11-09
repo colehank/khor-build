@@ -1,0 +1,82 @@
+name: Mac network development
+run-name: mac net ${{ inputs.task }} ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      snapshot_sha:
+        description: Parentless source snapshot already in this private repository
+        required: true
+        type: string
+      request_id:
+        required: true
+        type: string
+      task:
+        required: true
+        type: choice
+        options: [net-unit, net-node, net-vendor, net-congestion]
+
+# Only ephemeral checkout access to this private control repository. No personal
+# token, signing credential, SSH key or production store is passed to the worker.
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-mini-worker
+  cancel-in-progress: false
+
+jobs:
+  network:
+    runs-on: [khor-mac-mini, khor-dev]
+    timeout-minutes: 90
+    env:
+      REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
+      SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: control
+          persist-credentials: false
+      - name: Validate exact source and task inputs
+        env:
+          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          DEV_TASK: ${{ inputs.task }}
+        run: |
+          set -euo pipefail
+          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
+          case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion) ;; *) exit 2 ;; esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.snapshot_sha }}
+          path: snapshot
+          persist-credentials: false
+      - name: Materialize and validate the parentless source container
+        env:
+          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
+        run: python3 control/scripts/prepare-development.py snapshot "$SOURCE_PACKAGE"
+      - name: Run under the existing shared admission guard
+        env:
+          DEV_TASK: ${{ inputs.task }}
+        run: |
+          set -euo pipefail
+          source /Users/z13/khor-builder/env.sh
+          export GIT_CONFIG_GLOBAL=/dev/null
+          export CARGO_TERM_COLOR=never
+          export CARGO_HTTP_MULTIPLEXING=false
+          export CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
+          export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+          mkdir -p "$REPORT_DIR"
+          /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a /bin/bash "$GITHUB_WORKSPACE/control/scripts/network.sh" 2>&1 | tee "$REPORT_DIR/task.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: dev-evidence
+          path: ${{ runner.temp }}/mac-network-evidence
+          if-no-files-found: warn
+          retention-days: 7

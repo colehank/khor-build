@@ -1,5 +1,5 @@
 #!/bin/bash
-# Trusted control driver: test a materialized source snapshot on disposable Linux.
+# Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
 case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
