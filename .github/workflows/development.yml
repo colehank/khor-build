@@ -252,14 +252,14 @@ jobs:
             [[ "$BUNDLE_BLOB" =~ ^[0-9a-f]{40}$ ]]
             [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           fi
-      - name: Record build host capabilities without starting a VM
+      - name: Record host capabilities and installed admission scripts without starting a VM
         env:
           REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
         run: |
           set -euo pipefail
           source /Users/z13/khor-builder/env.sh
           python3 - <<'PY'
-          import json, os, platform, shutil, subprocess
+          import hashlib, json, os, platform, shutil, stat, subprocess
           from pathlib import Path
           info = {"system": platform.platform(), "tools": {name: shutil.which(name) for name in ["limactl", "qemu-system-aarch64", "docker", "podman", "colima", "brew"]}, "free_bytes": shutil.disk_usage('/').free}
           for name in ["kern.hv_support", "hw.memsize", "hw.ncpu"]:
@@ -269,6 +269,17 @@ jobs:
               except subprocess.TimeoutExpired:
                   info[name] = None
           report = Path(os.environ['REPORT_DIR']); report.mkdir(parents=True, exist_ok=True)
+          info['admission'] = {}
+          for name in ['run-build', 'build_guard.py']:
+              path = Path('/Users/z13/khor-builder/bin') / name
+              if not stat.S_ISREG(path.lstat().st_mode):
+                  raise ValueError('admission script must be a regular file')
+              with path.open('rb') as source:
+                  data = source.read(64 * 1024 + 1)
+              if len(data) > 64 * 1024:
+                  raise ValueError('admission script exceeds inspection limit')
+              (report / ('admission-' + name + '.txt')).write_bytes(data)
+              info['admission'][name] = {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
           (report / 'host-capabilities.json').write_text(json.dumps(info, indent=2) + '\n')
           PY
       - name: Fetch trusted control and exact source through the GitHub API
