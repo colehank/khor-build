@@ -105,9 +105,11 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
         env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1",
                    GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@localhost",
                    GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@localhost")
-        for task, expected_args, repeats, diagnostic, expected_status in [
-            ("netlab-cpu-check", ["paths::cpu::", "--ignored"], 1, None, 0),
-            ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7),
+        for task, expected_args, repeats, diagnostic, expected_status, verify_failure in [
+            ("netlab-cpu-check", ["paths::cpu::", "--ignored"], 1, None, 0, False),
+            ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7, False),
+            ("netlab-measure-check", ["paths::attempts::", "--ignored"], 1, None, 0, False),
+            ("netlab-measure-check", ["paths::attempts::", "--ignored"], 1, None, 6, True),
         ]:
             with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -126,6 +128,12 @@ sys.exit(7 if os.environ.get('MOCK_FAIL_FIRST') and len(rows) == 1 else 0)
 STUB
 """
                 (source / "scripts/netlab.sh").write_text(stub)
+                (source / "scripts/netlab-attempts.py").write_text("""import json, os, sys
+from pathlib import Path
+Path(os.environ['MOCK_VERIFY']).write_text(json.dumps(sys.argv[1:]))
+print(json.dumps({'valid': not bool(os.environ.get('MOCK_VERIFY_FAIL'))}))
+sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
+""")
                 def git(*args):
                     return subprocess.check_output(["git", "-C", str(source), *args], text=True, env=env).strip()
                 git("init", "-q")
@@ -150,9 +158,12 @@ STUB
                 runner.mkdir()
                 run_env = dict(env, PATH=str(binary) + os.pathsep + env['PATH'],
                                DEV_TASK=task, SOURCE_PACKAGE=str(package), RUNNER_TEMP=str(runner), REPORT_DIR=str(report),
-                               GITHUB_RUN_ID="stub", GITHUB_SHA="control-fixture", CARGO_BUILD_JOBS="2", MOCK_TRACE=str(trace))
+                               GITHUB_RUN_ID="stub", GITHUB_SHA="control-fixture", CARGO_BUILD_JOBS="2", MOCK_TRACE=str(trace),
+                               MOCK_VERIFY=str(root / 'verify.json'))
                 run_env.pop("NETLAB_DIAGNOSTICS", None)
-                if expected_status:
+                if verify_failure:
+                    run_env['MOCK_VERIFY_FAIL'] = "1"
+                elif expected_status:
                     run_env['MOCK_FAIL_FIRST'] = "1"
                 outcome = subprocess.run(["bash", str(driver)], text=True, capture_output=True, env=run_env)
                 self.assertEqual(outcome.returncode, expected_status, outcome.stdout + outcome.stderr)
@@ -165,6 +176,11 @@ STUB
                 mode = json.loads((report / 'measurement-mode.json').read_text())
                 self.assertFalse(mode['slo'])
                 self.assertEqual(mode['repeats'], repeats)
+                if task == 'netlab-measure-check':
+                    self.assertEqual(json.loads((root / 'verify.json').read_text()),
+                                     [str(report / 'netlab'), '--calibration'])
+                    self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
+                    self.assertTrue((report / 'attempt-calibration.json').is_file())
 
 
 if __name__ == "__main__":
