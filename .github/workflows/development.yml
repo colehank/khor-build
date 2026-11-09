@@ -254,6 +254,25 @@ jobs:
           SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
           SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
         run: python3 control/scripts/prepare-development.py snapshot "$SOURCE_PACKAGE"
+      - name: Record build host capabilities without starting a VM
+        env:
+          REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
+        run: |
+          set -euo pipefail
+          source /Users/z13/khor-builder/env.sh
+          python3 - <<'PY'
+          import json, os, platform, shutil, subprocess
+          from pathlib import Path
+          info = {"system": platform.platform(), "tools": {name: shutil.which(name) for name in ["limactl", "qemu-system-aarch64", "docker", "podman", "colima", "brew"]}, "free_bytes": shutil.disk_usage('/').free}
+          for name in ["kern.hv_support", "hw.memsize", "hw.ncpu"]:
+              try:
+                  result = subprocess.run(['/usr/sbin/sysctl', '-n', name], capture_output=True, text=True, timeout=5)
+                  info[name] = result.stdout.strip() if result.returncode == 0 else None
+              except subprocess.TimeoutExpired:
+                  info[name] = None
+          report = Path(os.environ['REPORT_DIR']); report.mkdir(parents=True, exist_ok=True)
+          (report / 'host-capabilities.json').write_text(json.dumps(info, indent=2) + '\n')
+          PY
       - name: Run under the existing shared admission guard
         env:
           DEV_TASK: ${{ inputs.task }}

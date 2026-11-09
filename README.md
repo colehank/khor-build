@@ -75,3 +75,17 @@ branch. Source/Lab artifacts expire after 3 days; evidence after 7 days.
 An interrupted dispatch can leave a source branch; compare the local request
 receipt and active runs before retiring it. Public Khor PRs still cannot dispatch
 these jobs, and signed shipping remains on trusted GitHub-hosted machines.
+
+
+Portable network tasks can use `development.yml` with `executor=mac` on the
+feature control ref. This skips hosted preparation/retirement and performs the
+same parentless-source validation on the existing Mac worker before source code
+runs. Checkout uses only an ephemeral repository-read job token with persistence
+disabled; materialized Git contains no remote/auth header. No personal token,
+SSH key, signing credential or production store is forwarded.
+The shared `mac-mini-worker` group and installed `run-build` admission guard are
+unchanged; this path does not run cache pruning or rewrite admission policy.
+Only `net-unit`, `net-node`, `net-vendor` and `net-congestion` are accepted.
+Linux namespace/netlab tests remain on the standard lane, and Mac results are
+recorded separately. Source snapshot branches are retired only by their owner
+after terminal evidence is retained; a reused snapshot is not owned by its new request.
