@@ -99,5 +99,73 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
             self.assertEqual(len(list(failed_report.glob('congestion-*.log'))), 0)
 
 
+    def test_short_cpu_calibration_and_hop_diagnostics_are_separate_from_timed_matrix(self):
+        driver = Path(__file__).resolve().parents[1] / "network.sh"
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1",
+                   GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@localhost",
+                   GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@localhost")
+        for task, expected_args, repeats, diagnostic, expected_status in [
+            ("netlab-cpu-check", ["paths::cpu::", "--ignored"], 1, None, 0),
+            ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7),
+        ]:
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source"
+                (source / "scripts").mkdir(parents=True)
+                stub = """#!/bin/bash
+python3 - "$@" <<'STUB'
+import json, os, sys
+from pathlib import Path
+path = Path(os.environ['MOCK_TRACE'])
+rows = json.loads(path.read_text()) if path.exists() else []
+rows.append(dict(args=sys.argv[1:], threads=os.environ.get('NETLAB_TEST_THREADS'), diagnostic=os.environ.get('NETLAB_DIAGNOSTICS')))
+path.write_text(json.dumps(rows))
+print('[netlab-result] cpu-or-lifecycle-stub | green | no real compiler or network lab')
+sys.exit(7 if os.environ.get('MOCK_FAIL_FIRST') and len(rows) == 1 else 0)
+STUB
+"""
+                (source / "scripts/netlab.sh").write_text(stub)
+                def git(*args):
+                    return subprocess.check_output(["git", "-C", str(source), *args], text=True, env=env).strip()
+                git("init", "-q")
+                git("add", ".")
+                git("-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
+                package = root / "package"
+                package.mkdir()
+                git("clone", "--bare", "--quiet", str(source), str(package / "source.git"))
+                (package / "source.json").write_text(json.dumps(dict(build_commit=git("rev-parse", "HEAD"), tree=git("rev-parse", "HEAD^{tree}"))))
+                binary = root / "bin"
+                binary.mkdir()
+                for name, contents in {
+                    "rustc": "#!/bin/sh\nprintf 'rustc stub; no compiler executed\\n'\n",
+                    "unshare": "#!/bin/sh\nexit 0\n",
+                    "cargo": "#!/bin/sh\nexit 97\n",
+                }.items():
+                    path = binary / name
+                    path.write_text(contents)
+                    path.chmod(0o755)
+                trace, report = root / "calls.json", root / "report"
+                runner = root / "runner"
+                runner.mkdir()
+                run_env = dict(env, PATH=str(binary) + os.pathsep + env['PATH'],
+                               DEV_TASK=task, SOURCE_PACKAGE=str(package), RUNNER_TEMP=str(runner), REPORT_DIR=str(report),
+                               GITHUB_RUN_ID="stub", GITHUB_SHA="control-fixture", CARGO_BUILD_JOBS="2", MOCK_TRACE=str(trace))
+                run_env.pop("NETLAB_DIAGNOSTICS", None)
+                if expected_status:
+                    run_env['MOCK_FAIL_FIRST'] = "1"
+                outcome = subprocess.run(["bash", str(driver)], text=True, capture_output=True, env=run_env)
+                self.assertEqual(outcome.returncode, expected_status, outcome.stdout + outcome.stderr)
+                rows = json.loads(trace.read_text())
+                self.assertEqual(len(rows), repeats)
+                for row in rows:
+                    self.assertEqual(row['args'], expected_args)
+                    self.assertEqual(row['threads'], '1')
+                    self.assertEqual(row['diagnostic'], diagnostic)
+                mode = json.loads((report / 'measurement-mode.json').read_text())
+                self.assertFalse(mode['slo'])
+                self.assertEqual(mode['repeats'], repeats)
+
+
 if __name__ == "__main__":
     unittest.main()

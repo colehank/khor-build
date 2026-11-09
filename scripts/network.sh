@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-cpu-check|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -79,7 +79,13 @@ else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
   unshare -Urn sh -ec 'ip link add probe0 type dummy; ip link set probe0 up; tc qdisc add dev probe0 root netem delay 1ms; nft add table inet probe; nft list ruleset' > "$REPORT_DIR/namespace.log" 2>&1
   export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
-  if [[ "$DEV_TASK" == netlab-smoke ]]; then
+  if [[ "$DEV_TASK" == netlab-cpu-check ]]; then
+    printf '{"layer":"fixture","slo":false,"measurement_revision":"checked_affinity_v3","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::cpu::"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::cpu:: --ignored
+  elif [[ "$DEV_TASK" == netlab-hop-lifecycle ]]; then
+    printf '{"layer":"node","slo":false,"diagnostic":true,"test_threads":1,"repeats":3,"filters":["hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    NETLAB_DIAGNOSTICS=1 repeat_netlab hop::f4i_
+  elif [[ "$DEV_TASK" == netlab-smoke ]]; then
     printf '{"test_threads":2,"repeats":1,"filters":["paths::p2_","paths::p3_","paths::p6_","hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=2 bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_ hop::f4_ hop::f4s_ hop::f4i_
   elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
