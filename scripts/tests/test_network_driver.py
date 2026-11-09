@@ -108,6 +108,8 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
         for task, expected_args, repeats, diagnostic, expected_status, verify_failure in [
             ("netlab-cpu-check", ["paths::cpu::", "--ignored"], 1, None, 0, False),
             ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7, False),
+            ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 7, False),
+            ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 6, True),
             ("netlab-measure-check", ["paths::attempts::", "--ignored"], 1, None, 0, False),
             ("netlab-measure-check", ["paths::attempts::", "--ignored"], 1, None, 6, True),
         ]:
@@ -181,6 +183,12 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                                      [str(report / 'netlab'), '--calibration'])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
                     self.assertTrue((report / 'attempt-calibration.json').is_file())
+                elif task == 'netlab-hop-ownership':
+                    self.assertEqual(json.loads((root / 'verify.json').read_text()),
+                                     [str(report / 'netlab')])
+                    self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
+                    self.assertEqual(mode['diagnostic'], 'lifecycle')
+                    self.assertTrue((report / 'attempts.json').is_file())
 
 
 if __name__ == "__main__":
