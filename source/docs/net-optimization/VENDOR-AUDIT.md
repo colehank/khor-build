@@ -1,0 +1,110 @@
+# Vendor 补丁覆盖与退出审计
+
+2026-11-09，进行中。当前编号为iroh 1–38、Noq 1–12；原48项保留，新增Iroh38被动tuple同步已取得247红→249物理绿/250vendor绿，Noq12 ACK-floor候选单元红后待绿，当前50项。
+覆盖盘点不等于行为验收或上游等价性验证，缺口保持未完成。
+本地行为源截至a087e1c5；最新42543928044已绿（437Noq/35iroh路径/9选家、根格式）。
+可选CLI已实际编译/诊断，但日志模式不作SLO；普通p3与f4s仍有红项，准确源见STATE/RUNS。历史大套件通过只证明该套件，不自动证明每个补丁的专属回归齐全。
+
+上游只读对照为已校验源码包noq-proto1.4.0、commit
+`34f75c49f93de5e2ff943483cabc5b6d0c5df918`；包/校验和/原版本源见[UPSTREAM](UPSTREAM.md)。
+没有执行上游候选，也没有升级或删除补丁。下面“未证明等价”包括尚未完成调查，不能读成上游必然仍有同一缺陷。
+
+## Noq 1–12
+
+Noq4另补真实虚拟连接专项a_backup_probe_is_acked_when_the_responders_data_road_is_blackholed，
+42539256792已SUCCESS 436/33/9；不是只检查计数器方法本身，要求备用路独立回ACK。
+未对旧源取红，单向故障/兜底/成本仍需覆盖，不能提前把下表该项记完整。
+
+| 编号 | 保留目标 | 当前覆盖及缺口 | 上游静态观察与退出条件 |
+| --- | --- | --- | --- |
+| 1 | BBRv3及时知道应用闲置，避免闲后输出慢 | KHOR记录旧congestion对照，但移植时没有带专属测试；435通用绿不能补这项缺口。需闲置→突发、loss/inflight一致性及与Cubic对照 | 1.4完整链已复核：poll_transmit更新path标志，BBR在on_end_acks才接收；下一发送先读自身idle状态。loss路径也未即时扣自身inflight，见UPSTREAM。已证实事件时序差异，最终体验/等价仍须隔离同seed突发与丢包验证 |
+| 2 | OBSERVED_ADDR不能进入0-RTT，且可发送性判断一致 | 原accepted在恢复时禁用客户端reporting，未盖住始终both；新增reporting_waits_for_one_rtt真实握手测试，42555870179 Mac实际438Noq全绿。原帧准入不变，最终源实际早数据仍待 | 1.4缓存角色→pending→可发0-RTT STREAM→populate分支及接收端1-RTT门已逐段确认，见UPSTREAM；缺少本地等价保护，但未执行上游。始终启用reporting的恢复覆盖及两处准入等价后退出 |
+| 3 | 发布不应答所需PTO、最近收到包、最早未确认包及无退避PTO | 黑洞Backup两用例实际读取这些stats，iroh有不应答判据覆盖；max_path_id_reached_lasts_until_a_path_is_abandoned只证明ID释放前提，不是stats专项测试 | 1.4公开PathStats和构造函数已核；4项接口无对应，qlog内部私有metrics不是公共替代。需要等价接口/调用者整体迁移。覆盖闲置、短暂停顿、ACK/PTO重置后退出 |
+| 4 | 可自行发包的多路径ACK沿自己的路返回，避免共享坏回程污染全部路径 | path_acks仅断言出现PATH_ACK，不验证走哪条路；历史p3/p4及现有黑洞场景有集成覆盖。需补非对称单向故障与ACK额外开销专项证据 | 1.4 populate_packet仍在may_send_data路上枚举各包号空间的pending ACK，未具本地按本路/兜底路分发。升级候选须验证备用路可独立收到ACK、未验证/abandoned仍有兜底，兼顾包数预算 |
+| 5 | 最大ACK号不是本次新确认时，不用旧发送时间取RTT | KHOR有7次旧网络异常采样证据；当前没有据此确认一条独立、构造该ACK序列的回归。泛化435绿不够退出 | 1.4完整ACK链已复核：最大号不在记录时仍抬new_largest，较低号新ACK非空可进入旧时间采样表达式。见UPSTREAM/RFC9002；需合法已发但回收记录的ACK序列及正常采样对照，尚未取得行为红绿 |
+| 6 | 路径已有自身保活时，不被连接级保活额外ping | 新增真实虚拟连接保活计时回归42543928044绿：连接5秒不抢路径15秒，路径自身与无路径计时器对照均仍保活；无生产改动/旧源红宣称。当前源空闲包/字节与手机预算仍缺 | 1.4 ConnTimer::KeepAlive调用ping，ping遍历所有包号空间置pending_ping；未见本地跳过规则。等价分层计时且实测成本达标后退出 |
+| 7 | 从显著慢Backup离开时及时重排在飞流字节 | what_is_in_flight_on_a_far_slower_backup_is_resent_on_the_new_path与健康同速不重排对照，435套件绿；实际f4/f4s仍有1.5秒超限，不声称整体验收完成 | 1.4状态改变/原PTO/丢失与discard入口已复核，见UPSTREAM；普通重传存在，但未证明主动重排时机/完整行为等价。须原流完整交付、MTU排除、正常loss/CC记账及晚包去重后退出 |
+| 8 | 选路读最新ACK校正样本及计数，不用慢EWMA或把相同值当旧值 | khor_equal_rtt_samples_are_fresh_and_latest_is_not_the_smoothed_value、khor_selection_samples_do_not_count_peer_ack_delay_as_network_latency均在435绿；CPU调度偏差尚未闭合 | 1.4公开PathStats/构造函数已核，qlog RecoveryMetrics为私有且feature限定，没有公共latest样本/ACK计数替代。等值样本、ACK-delay可扣/不可扣、初始估计不计数及调用者覆盖后退出 |
+| 9 | 历史同速但当前黑洞的Backup也释放在飞字节 | a_blackholed_backup_resends_in_flight_even_if_its_last_rtt_was_fast已432/1红→433绿；真实虚拟PTO与健康同速对照。不是应用请求重试 | 尚未证明1.4有等价策略；在相同两个可用路径/一条黑洞场景，正常CC/去重/短停顿保护和完整流交付均成立后退出 |
+| 10 | 每份样本携带包发送/ACK处理时刻，读取stats不刷新年龄 | khor_sample_times_belong_to_the_ack_not_a_later_stats_read比较原传输数学，435绿；iroh积压旧包/延迟读取/初始估计回归也有红绿记录 | 1.4公开PathStats/构造函数均无对应采样时刻；内部qlog也不能替代，当前driver同样不提供内核收包时刻。等价接口须保持旧包不能确认新路况，不用读stats时刻冒充采样时刻 |
+| 11 | 先移路、后满足不应答时，在既有Backup PTO重新检查 | a_backup_that_fails_after_the_path_move_releases_its_in_flight_data已434/1红→435绿；额外验证<300ms不重排、虚拟<1秒释放及新路收完整流。最新p3三轮<656ms，但不证明旧15秒全部定因 | 1.4恢复入口已静态核对，普通PTO/重传存在但未证明与本地主动重检行为等价；必须同时保留故障前/后移路两时序、健康同速与短停顿对照，不能只证明set_path_status时重排 |
+
+| 12 | 近min RTT的有效ACK-delay不污染独立选路质量，夹至实测floor | 266实际438绿/1红；whole paths tests模块hash冻结。264/265物理准备失败及265八个质量值纳秒关联留证，候选绿/稳定性待核。原过量delay/首次采样语义保留 | 本轮尚未核新的上游等价行为；不动传输RFC数学，以近floor/无样本/过量delay和peer relay/稳定性/黑洞完整合同复验后退出 |
+
+源码入口：[本地补丁账本](../../vendor/noq-proto/KHOR.md)、
+[1.4固定connection/mod.rs](https://github.com/n0-computer/noq/blob/34f75c49f93de5e2ff943483cabc5b6d0c5df918/noq-proto/src/connection/mod.rs)、
+[1.4固定stats.rs](https://github.com/n0-computer/noq/blob/34f75c49f93de5e2ff943483cabc5b6d0c5df918/noq-proto/src/connection/stats.rs)、
+[1.4固定BBR](https://github.com/n0-computer/noq/blob/34f75c49f93de5e2ff943483cabc5b6d0c5df918/noq-proto/src/congestion/bbr3/mod.rs)。
+
+## iroh 1–38：第一轮覆盖盘点与新增修正
+
+目标来自[补丁账本](../../vendor/iroh/KHOR.md)，不把其中“上游没有”“尚待验证”等历史描述当作当前事实。
+42536711138的435/33中的33仅选中remote_state::tests，遗漏net_report/socket的khor_测试。
+随后control322835b补执行，**42537392595已SUCCESS 435/33/9**；9项包含下表23–27的命名测试，
+下面“当前33未执行”是原过滤器边界，现已补齐这9项实际执行，仍不代表对应集成/真机要求完成。
+下表“现有覆盖”是已定位的测试/场景，不自动标记其余新源通过，历史全量单元数不补未跑项目。
+除1号去重外，尚未逐函数完成1.4.1等价实现核查；共同退出规则是隔离候选通过对应行为与调用者验证。
+
+| 编号 | 保留目标 | 现有覆盖、仍需验证及逐项退出要求 |
+| --- | --- | --- |
+| 1 | 开路重试去重、有界；path ID释放后能继续 | path_ids_run_out_until_a_path_is_abandoned与Noq对应前提用例；1.4.1已有contains去重，64上限/释放事件恢复尚未证明等价，不能整块删 |
+| 2 | 探测不自动读系统代理，显式代理仍有效 | 需系统代理/NO_PROXY/显式环境代理对照，原生Mac不能由Linux替代；与真实Relay传输策略一致才退出 |
+| 3 | 尊重用户明确首选家中继 | slow_relay历史集成；需首选HTTPS可达/不可达及全断恢复，不能让低RTT绕过用户配置；等价配置接口后迁移调用者 |
+| 4 | EndpointGone通知应用，及时处理走中继的离线线 | node/tests/departed、CLI diagnose；仍需最终源重启/异常断开/有Direct并行的对照，不能让登记事件误杀健康直连 |
+| 5 | 明文→HTTPS等successor按配置迁移 | relay_https、relay_qad历史集成；需单端只能到旧地址、继任失败/恢复与地址发布。等价受控迁移接口后退出 |
+| 6 | Relay先赢也打开已知Custom路径 | net/tests/carry::the_carried_road_is_opened_when_the_relay_answers_first；开启路径与最终是否胜出分开，按现速度策略复验，不恢复旧类型优先 |
+| 7 | 直接地址watch保留来源，应用区分换网与观察变化 | journal接口变化/稳定化覆盖；需来源变但地址未变不唤醒重拨，真实换网能唤醒；等价公开API后退出 |
+| 8 | 广播每轮打洞及实际候选供现有journal记录 | 端点候选过滤测试与p1/p5打洞计数依赖；需有/无订阅者、不因观察触发打洞，Lagged后事实可恢复 |
+| 9 | 发布过滤与打洞候选过滤一致 | khor-net::a_punching_round_offers_no_unroutable_address；需受限出口/TUN/IPv6及用户过滤，不能只测试192/198网段字面量 |
+| 10 | PeerObserved提供非QAD公网地址，限制来源/数量/有效期 | 需直连才接受、Relay/Custom不接受、回环/未指定地址拒绝、8条/10分钟淘汰及网络变化；当前没有明确专属通过证据 |
+| 11 | 增量报告没量到当前家时不无故换家 | relay_https历史；需增量保留/完整报告失效/全断后重连，避免为防抖长期留死家；和24/25一起核对 |
+| 12 | 活连接收到后来的Custom地址能当场开路 | f4i及hop比较集成；需重复offer不重复开路、actor/路径预算、取消/关闭释放，不能把最终未选Custom等同未开路 |
+| 13 | 承载断开及时关闭对应Custom路径 | node hop9及CLI hop历史；需多个Custom承载并存与重连，不误关其他健康承载；N2/N3覆盖内外层阻塞 |
+| 14 | 完整net report等待HTTP-only中继的必要测量 | relay_https与混合QAD报告；需慢/不答QAD、IPv4/IPv6部分完成及总期限，不能无限等探测 |
+| 15 | 每个Relay actor独立，发送/close不堵全局；慢Pong不误断 | relay_qad/relay_https历史集成；需TCP接通却不转数据、close不返回、一端不通及慢而可用路线；N4仍缺当前源完整故障证据 |
+| 16 | 应用前台恢复可明确触发major network change | N2真实睡眠/回前台场景待齐；需重绑/重探合并、有界并发、不重复应用写；不能只测方法调用 |
+| 17 | 周期测量、可达性、质量、确认与静默恢复 | remote_state 33、p2/p3/p7、f4/f4s覆盖；当前p1s和f4s仍红。250ms tick的设备规模/能耗、type-dependent quick与两层hold仍待诊断 |
+| 18 | 选择器可留一条备用，闲备用保活减慢 | p1/p3/p4集成、Noq保活依赖；需client最多两Direct、不双端竞相关最后路、闲置包数/手机预算，当前源正式成本证据未齐 |
+| 19 | 当前路退化时有界探测/打洞，缩短周期探索盲区 | Watch及p5/p7回归；由29/34统一所有承载和新证据，旧“首慢即打洞”已替代。退化恢复/额度/原故障通道均须覆盖 |
+| 20 | 直接地址身份不随来源变化；相同候选不反复触发 | journal::an_address_that_changes_only_its_source_is_no_change及p4；需QAD↔Local标签切换的真实打洞/同步计数，来源信息仍可观察 |
+| 21 | 路径事件缓冲64、公开单路径ping | 现路径诊断和故障前探测使用；需超过缓冲后的Lagged补记、慢消费者不阻塞网络、ping只触达指定路径的证据 |
+| 22 | IPv6字面中继正确生成QAD服务器名 | p4双栈QAD替身；需实际v6回答而非只看测试ok，并核DNS/IPv4无回归；1.4.1等价性未核完 |
+| 23 | 配置的公共fallback仅在其他中继无HTTPS回答时当家 | khor_the_fallback_tier_is_home_only_when_no_other_relay_answered已定位，未被当前33执行。需用户自定义同URL/首选例外/全断回退集成 |
+| 24 | 家中继两边采用同类历史样本，按配置最短驻留 | khor_the_home_is_weighed_by_its_best_recent_latency_too、khor_a_home_that_answers_is_kept_for_the_dwell、hinton轨迹测试；当前33未执行，仍需故障立即离开而健康不抖动 |
+| 25 | 接班只认HTTPS可达，频繁断开的接班者暂时冷却 | khor_reached_is_an_https_answer、khor_a_successor_that_keeps_dropping_is_left_for_an_hour；当前33未执行。需major change复位、无其他候选兜底、个人配置边界 |
+| 26 | QAD连接观察值初始化正确，失败的单族探测不提前收场 | khor_the_qad_connection_is_reused、khor_a_failed_qad_probe_does_not_end_the_wait_for_an_address；当前33未执行。需部分IPv6失效的最多3秒预算及无反复握手 |
+| 27 | 不发布容器/虚机网桥，但保留真实私网接口 | socket::tests::khor_container_and_vm_bridges_are_not_offered；当前33未执行，需名称反例/真实172网段及可用候选不被误删 |
+| 28 | 所有承载按速度与新鲜证据迁移，不给Direct无条件Go | 首批66单元与p6对照，当前动态27绿；还需恢复与稳定性同时达标，退出必须保留用户速度优先 |
+| 29 | 真实ACK计数、近期中位质量、活跃时有界轮转探测与共享缓存 | equal_rtt_samples…、active_refresh_is_bounded…、shared_quality_and_age…及net cleanup；需冷/活副本偏差、闲置开销与读取无副作用，p1s仍红 |
+| 30 | iroh选路与Noq在飞重排共用不应答事实 | 原unanswered/静默测试与Noq黑洞两时序；需慢备份、同速健康/坏备份、稀疏收包，不能只证明接口能编译 |
+| 31 | 使用采样包发送/ACK处理时刻判断新鲜性 | 初始估计/延迟读stats/旧包ACK已22/3红→26绿；静默旧包额外覆盖。当前不拥有内核收包时刻，CPU污染仍须实测 |
+| 32 | 缩小窗口同步重算质量，空窗不假装新观测 | 26/1红→27绿，过期不改ACK计数/时刻；动态/闲置相位绿不替代最终成本与CPU覆盖 |
+| 33 | 快分支也要求决定后往返，等待时复测当前路 | 27/2红→29绿；p1s仍3/1移动，不能以红绿断言共同调度停顿已消除；按同条件防抖与恢复一起退出 |
+| 34 | 普通慢质量先在原探测预算内验证后打洞 | 29/1红→33绿，Watch版p5原门绿、p1s零打洞但选路仍红；实际故障快速通道/30秒节流及日志关闭的最终源都须复验 |
+| 35 | 首次新往返恢复可用性，质量/类型不再门住；重复故障仍hold | 42539860644已436Noq绿/iroh33pass1fail，候选移除quick回调、不加timer/探测；原旧包/重复故障/闭路覆盖与普通防抖/恢复待新源验证。上游等价性尚未核完 |
+| 36 | 故障离开也需决定后备用包，当前探测选最高PTO副本 | 42541459177已436Noq绿/iroh34pass1fail；候选双向PING、备用用最低PTO副本、4秒兜底不变；p3<1秒/防抖/额外包数及上游等价待验证 |
+
+| 37 | 无当前copy接收提示时可用故障后已有备用应答快速离开 | 42551075037 Mac实际437Noq绿/路径35pass1fail，候选条件分支42555870179 Mac根格式438Noq/36路径/9选家绿；有提示保留36、旧包/4秒/正常确认不变，原p3/CPU/转发未收口 |
+
+1.4.1固定源码与PR证据见UPSTREAM；本轮未把账本中的旧OPEN状态照搬成事实。
+2/3/5/9/23含用户配置/策略，不能仅因上游有不同默认策略便删除；需明确等价配置能力和调用者迁移。
+其余缺少专属覆盖的条目保持缺口，不以45行表格宣告N5达成。
+
+## 审计后的动作顺序
+
+1. N1先取得当前诊断证据并解决实际稳定性/恢复红；本页不自动批准升级。
+2. 补Noq 1/4/5明确缺失的行为覆盖及Noq6实际空闲成本，与现有实际网络成本/恢复对照一起保留；不是为凑测试数重写实现。
+3. 对照iroh 1–36账目补当前源覆盖，继续逐函数核上游，再在隔离升级候选核对公共API、锁文件和行为。满足一条退一条。
+4. 所有补丁和调用者均不依赖本地实现、准确最终源验证齐全后，才可删整个vendor/patch行。当前N5仍部分完成。
+
+诊断日志调用未作为第12/35条生产行为补丁计数；其默认关闭、用途和可删除条件已分别记入两份KHOR.md。
+
+
+## 新增38：被动迁移tuple同步（候选，未闭合）
+
+247真实NAT-only端口重绑、Noq实际tuple与iroh缓存69次不一致，124/124可达但warm remote新路选择0/30；整个fixture与严格数据合同/哈希已冻结在ACCEPTANCE和nat-tuple-red-green.json。候选在既有reselect前按实际路径身份重登记/清变更Reading/重apply，不改其他策略。待同整fixture转绿、vendor/便携与完整移动/转发/成本矩阵；上游等价事件/同步API及调用者行为未验证，不声称上游必然有缺陷，也不自动批准升级。原48项覆盖/退出缺口继续保留。
+
+
+## 新增Noq补丁12候选（2026-11-09）
+
+当前总数50（Iroh38+Noq12），原48仍全部在审计范围内。Noq12是近RTT下界ACK-delay选路偏差的独立修正，不改传输RFC数学/收益门。原42722555246单元438绿1红，264/265实物理准备失败及纳秒数值关联留证；whole paths tests模块hash与后续绿必须相等，真实vendor/peer relay/稳定性证据尚待。准确理由/退出条件见vendor/noq-proto/KHOR.md，不能把候选记作已验收。
