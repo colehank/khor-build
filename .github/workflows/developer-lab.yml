@@ -99,7 +99,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: colehank/khor
-          ref: 5f356c381b4c63eac2a0794a0edf9a6217ec8315
+          ref: 8a3094afe5b26c99abca24e9ad5ea9449fe7d9a3
           path: lab-contract-baseline
           persist-credentials: false
       - name: Reuse matching contracts from a verified Lab frontend
@@ -107,7 +107,7 @@ jobs:
         if: steps.released-contracts.outputs.ready != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CONTRACT_RUN: '42530282294'
+          CONTRACT_RUN: '42536265632'
         run: |
           if ! gh run download "$CONTRACT_RUN" --repo colehank/khor-build --name developer-lab-frontend --dir "$RUNNER_TEMP/contract-source"; then
             echo 'Compatible Lab artifact unavailable; generate contracts normally.'
@@ -126,10 +126,10 @@ jobs:
           jobs = json.loads(subprocess.check_output(['gh', 'api', 'repos/colehank/khor-build/actions/runs/' + os.environ['CONTRACT_RUN'] + '/jobs?per_page=100']))['jobs']
           frontend = [job for job in jobs if job['name'] == 'frontend']
           assert len(frontend) == 1 and frontend[0]['status'] == 'completed' and frontend[0]['conclusion'] == 'success'
-          assert run['head_sha'] == '7ad464d7aee99b702a06e6dd446e165ae7e650af'
+          assert run['head_sha'] == '8346f6889fc52be483d6f297b5e7c750d171f4d1'
           cached = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'contract-source/lab-manifest.json').read_text())
-          assert cached['base_commit'] == '5f356c381b4c63eac2a0794a0edf9a6217ec8315'
-          assert cached['tree'] == '4935c897d8facf1216b81188e3896b67186e293d'
+          assert cached['base_commit'] == '8a3094afe5b26c99abca24e9ad5ea9449fe7d9a3'
+          assert cached['tree'] == 'ac55fc14e081fa65475fd97cd7da6872d6327ca8'
           assert generated_digest(pathlib.Path('snapshot/source')) == generated_digest(pathlib.Path('lab-contract-baseline'))
           PYVERIFY
           then
