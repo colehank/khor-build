@@ -151,7 +151,7 @@ def command(run, *args, timeout=30):
 
 
 def instance(run):
-    return 'khor-netlab-' + run.name
+    return 'v' + hashlib.sha256(run.name.encode()).hexdigest()[:8]
 
 
 def status(run):
@@ -317,6 +317,8 @@ def create_run(base, run_key, source, report):
     if runs.is_symlink():
         raise ValueError('runs root must not be a symlink')
     run = runs / run_key
+    if len(str(run / 'state' / instance(run) / 'ssh.sock.1234567890123456').encode()) >= 104:
+        raise ValueError('owned instance path exceeds the macOS UNIX socket limit')
     run.mkdir(mode=0o700)
     record(run / 'owner.json', dict(OWNER, run_key=run_key, report_dir=str(report), source_tree=source['tree'], root_pid=os.getpid()))
     return run

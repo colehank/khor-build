@@ -52,6 +52,12 @@ class NetlabVZTest(unittest.TestCase):
         self.assertEqual(cfg['images'][0]['digest'], 'sha256:' + vz.IMAGE_SHA)
         self.assertEqual((cfg['cpus'], cfg['memory'], cfg['disk']), (2, '6GiB', '30GiB'))
 
+    def test_runner_instance_path_includes_the_ssh_temporary_suffix_within_104_bytes(self):
+        run = vz.BASE / 'runs' / '42578713267-1'
+        temporary_socket = run / 'state' / vz.instance(run) / 'ssh.sock.1234567890123456'
+        self.assertLess(len(str(temporary_socket).encode()), 104)
+        self.assertNotEqual(vz.instance(run), vz.instance(run.with_name('42578713268-1')))
+
     def test_unverified_cache_is_preserved_and_never_extracted_or_executed(self):
         with tempfile.TemporaryDirectory() as directory:
             cached = Path(directory) / 'wrong.tar.gz'
@@ -113,7 +119,7 @@ class NetlabVZTest(unittest.TestCase):
             state = json.loads((report / 'lifecycle-fixture.json').read_text())
             self.assertFalse(popen.call_args.kwargs.get('start_new_session', False))
             self.assertEqual(popen.call_args.kwargs['pass_fds'], (3,))
-            self.assertEqual(command.call_args.args[1:4], ('stop', '--force', 'khor-netlab-123-1'))
+            self.assertEqual(command.call_args.args[1:4], ('stop', '--force', vz.instance(root / '123-1')))
             return code, state, foreground
 
     def test_parent_lease_eof_stops_and_joins_foreground_in_the_guard_group(self):
