@@ -1,0 +1,3263 @@
+//! Current-version msgpack frames between Khor nodes.
+//!
+//! Structs are positional arrays: keep optional fields present on the wire.
+//! Development builds upgrade together; protocol changes do not carry an old
+//! Khor fallback. Inventory admission failures have a distinct response so
+//! roster repair cannot be triggered by a general operation refusal.
+
+use serde::{Deserialize, Serialize};
+
+/// Maximum encoded frame size, including payload and envelope.
+pub const MAX_FRAME: usize = 6 * 1024 * 1024;
+
+/// One payload slice per request: stays under [`MAX_FRAME`] and makes
+/// resume-by-offset free. Room is left for the msgpack envelope.
+pub const SLICE: u64 = 256 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Request {
+    SessionRecovery {
+        home: khor_core::DeviceId,
+        id: crate::SessionId,
+        observation: Option<khor_core::ObservationRef>,
+    },
+    RecoverSession {
+        home: khor_core::DeviceId,
+        id: crate::SessionId,
+        expected_run: Option<String>,
+        token: khor_core::recovery::RecoveryToken,
+        observation: Option<khor_core::ObservationRef>,
+    },
+    NewShellRun {
+        home: khor_core::DeviceId,
+        id: crate::SessionId,
+        expected_run: Option<String>,
+        token: khor_core::recovery::RecoveryToken,
+        cwd: Option<String>,
+    },
+
+    /// Bounded independent observation reads; never opens an agent host.
+    ContentRead {
+        action: crate::session_content::remote::Action,
+    },
+    /// Recoverable authenticated pairing. Every body is a canonical blob chunk.
+    Pair { action: PairAction },
+    /// The only current document transport. Mutating operations wait for
+    /// authenticated handshake completion and carry exact bounded manifests.
+    DocTransfer { action: DocTransferAction },
+    /// One slice of an offered payload, content-addressed. The offerer
+    /// serves bytes only after the far user approved the pull — the
+    /// approval IS this request arriving (docs/SESSION.md 传输).
+    Fetch { digest: String, offset: u64 },
+    /// The rows only the asked device can derive (its transfer faces;
+    /// live kinds later). Chat rows are excluded — every device derives
+    /// those from the CRDT itself, and duplicates would collide.
+    Sessions,
+    /// Run an action on a session this device executes for. Handlers
+    /// never re-route an incoming Act — what is not theirs to run is
+    /// refused, or two serves could bounce one forever.
+    Act { session: String, action: String },
+    /// What that machine has spent, by day and by vendor
+    /// (`khor_core::Usage`).
+    ///
+    /// An op rather than a replicated document, for a reason the vitals
+    /// op does not share: this is **derived from files khor only reads**,
+    /// so it is re-derivable at any moment on the machine that has them
+    /// and meaningless to copy anywhere else. What the asker keeps is a
+    /// cache with the moment it arrived, so an unreachable machine shows
+    /// its last answer and how old it is rather than a current-looking
+    /// number.
+    ///
+    /// A khor that predates it answers [`Response::Refused`] — the name
+    /// is on the wire, so an unknown op is a refusal and never a misread
+    /// neighbour.
+    Usage,
+    /// What that machine is doing right now (CPU, memory, disk).
+    ///
+    /// An op rather than a field in the device document, because a
+    /// reading is true for seconds — see `khor_core::Vitals`. A khor that
+    /// predates it answers [`Response::Refused`] (the name is on the
+    /// wire, so an unknown op is a refusal and not a misread neighbour),
+    /// which the asking side treats as "no vitals" and nothing else.
+    Vitals,
+    /// One directory of the asked machine, for the files landing.
+    /// `path` must be absolute; empty means that machine's home
+    /// directory. Answered to any paired device without a permission
+    /// step on purpose — this is one person's network, and what 待批
+    /// guards is a payload's bytes, never the looking (docs/NET.md
+    /// 入网即全信). A khor that predates it answers
+    /// [`Response::Refused`], read as "that machine cannot list".
+    Ls { path: String },
+    /// One slice of a file named by absolute path — the browse-then-
+    /// take pull, which has no offer to be content-addressed by
+    /// ([`Request::Fetch`]'s path). No permission step here either,
+    /// and it is not an exception to 待批全量: that gate guards the
+    /// **receiving** side of an offer someone else pushed at it, and
+    /// a pull is the puller spending its own disk on its own ask.
+    FetchPath { path: String, offset: u64 },
+    /// Open a session **on the asked machine** (docs/KHOR.md 发起:
+    /// 在任意设备开 session). The row is that machine's from birth —
+    /// it runs the process, it owns the registry entry, and the asker
+    /// learns the id from the answer and then sees the row arrive the
+    /// ordinary way ([`Request::Sessions`]).
+    ///
+    /// `cwd` empty means that machine's home. `cmd` empty means its
+    /// login shell. Kept a separate op rather than an [`Request::Act`]
+    /// action because Act names a session that already exists, and this
+    /// one is what makes one.
+    ///
+    /// A khor that predates it answers [`Response::Refused`].
+    Open {
+        kind: String,
+        title: String,
+        cwd: String,
+        cmd: Vec<String>,
+        cols: u16,
+        rows: u16,
+    },
+    /// Where a session's terminal host is listening on the asked
+    /// machine, so a tunnel stream can carry the terminal itself
+    /// (docs/NET.md 借网's pipe, pointed at a loopback port instead of
+    /// the wider network).
+    ///
+    /// **Handing the cookie to a paired device is the pairing
+    /// doctrine, not a hole in it**: 入网即全信 — the same rule that
+    /// lets [`Request::Ls`] list a home directory without an approval
+    /// step. The cookie is what keeps *unpaired* processes on that
+    /// machine out of the socket, and it never leaves the pair.
+    Reach { session: String },
+    /// A satellite's last reading, asked of its **sponsor** — the one
+    /// machine that samples it over ssh (附属机器批; docs/NET.md 卫星).
+    /// A cached answer with its age, never a fresh sample: the asker
+    /// must not be able to make the sponsor dial out on demand, and the
+    /// age is what keeps a stale reading honest (离线轴).
+    ///
+    /// A new variant rather than a field on [`Request::Vitals`]: that
+    /// one is a unit variant, and growing it a body would change its
+    /// bytes under every older peer. A khor that predates satellites
+    /// answers [`Response::Refused`], read as "no reading" — the same
+    /// fallback every tail-appended op leans on.
+    SatVitals { sat: String },
+    /// List a satellite directory over SSH through its sponsor.
+    /// Answers with the ordinary directory response.
+    SatLs { sat: String, path: String },
+    /// Read watched directories and their volumes from the machine watching
+    /// them. The watched list itself is replicated on the device document.
+    Watched,
+    /// [`Request::FetchPath`], off a satellite: the sponsor stages the
+    /// file down over scp on the first slice and serves the rest from
+    /// the staging copy — one ssh per pull, not one per slice. Answers
+    /// the ordinary [`Response::PathSlice`], whose change contract
+    /// (total/at_ms moving = start over) rides the staged copy.
+    SatFetchPath {
+        sat: String,
+        path: String,
+        offset: u64,
+    },
+    /// [`Request::Remove`], off a satellite: the sponsor takes the path
+    /// off that machine's disk over ssh (`crate::satellite::remove`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason.
+    SatRemove { sat: String, path: String },
+    /// [`Request::Mkdir`], on a satellite: the sponsor makes the
+    /// directory over ssh (`crate::satellite::mkdir`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason.
+    SatMkdir { sat: String, path: String },
+    /// A new empty file on a satellite (`crate::satellite::touch`).
+    ///
+    /// **Its own variant rather than [`Request::SatWrite`] with no
+    /// bytes**, which is how the plain-peer road spells the same thing.
+    /// `SatWrite` pins the write to a sha256 of what is already there
+    /// and answers 「it moved」 when there is no file at all — right for
+    /// a save and exactly wrong for a new name. It also needs
+    /// `sha256sum` on the far machine, which a new name has nothing to
+    /// feed.
+    SatTouch { sat: String, path: String },
+    /// [`Request::RenamePath`], on a satellite: the sponsor moves the
+    /// name over ssh (`crate::satellite::rename_path`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason.
+    SatRename {
+        sat: String,
+        from: String,
+        to: String,
+    },
+    /// [`Request::Launch`], on a satellite: the sponsor runs that
+    /// machine's opener over ssh (`crate::satellite::launch`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason. **A satellite is
+    /// very often a box nobody is sitting at**, and an opener there
+    /// fails for want of a display — that refusal is the satellite's
+    /// own sentence and travels back as it came, because 「it has no
+    /// screen」 is a fact about that machine and not about khor.
+    SatLaunch { sat: String, target: String },
+    /// [`Request::Touched`], off a satellite: the sponsor walks that
+    /// machine's directory over ssh and answers the ordinary
+    /// [`Response::Touched`] (`crate::satellite::touched`).
+    ///
+    /// **A new variant for [`Request::SatLs`]'s reason**: a `sat` tail
+    /// on `Touched` would lengthen that frame under every older peer
+    /// for the ordinary case too. These words only ever go to a
+    /// sponsor, and a machine that sponsors anything runs code that
+    /// knows them.
+    ///
+    /// **Walked over there.** The mtimes are on the satellite's disk;
+    /// a sponsor that answered from its own would date somebody else's
+    /// files.
+    SatTouched { sat: String, path: String },
+    /// [`Request::GitStatus`], off a satellite: the sponsor runs that
+    /// machine's own `git` over ssh and answers the ordinary
+    /// [`Response::GitStatus`] (`crate::satellite::git_status`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason.
+    SatGitStatus { sat: String, root: String },
+    /// [`Request::GitDiff`], off a satellite (`crate::satellite::
+    /// git_diff`). A new variant for [`Request::SatLs`]'s reason.
+    SatGitDiff { sat: String, path: String },
+    /// [`Request::WritePath`], off a satellite (工作区批7).
+    ///
+    /// `was` is the same blake3 digest every other save is pinned to,
+    /// and it stays blake3 across this wire: the sponsor is the one who
+    /// can turn it into something the far machine can check, because it
+    /// holds the copy those bytes came off
+    /// (`crate::satellite::write_file`). A new variant for
+    /// [`Request::SatLs`]'s reason — the sponsor's answer is the
+    /// ordinary [`Response::Wrote`].
+    SatWrite {
+        sat: String,
+        path: String,
+        was: String,
+        bytes: serde_bytes::ByteBuf,
+    },
+    /// The asked machine's own day record (`khor_node::day`): what
+    /// *its* list said about each of *its* sessions over the last 24
+    /// hours. A reported row used to paint 没在看 for its whole strip
+    /// (远端日条批, 2026-09-01), because a peer's row is one report
+    /// with an age and not a history — the history lives on the home
+    /// machine, and this is the road it travels.
+    ///
+    /// Answered as [`Response::Days`]; a khor that predates it answers
+    /// [`Response::Refused`], which the asker reads as "no record from
+    /// there" and keeps painting 没在看. **Tail-appended**, like every
+    /// op since the first.
+    Days,
+    /// Open an **agent** session on the asked machine — the wizard's four
+    /// answers, resolved over there (docs/KHOR.md 发起: 在任意设备开
+    /// session, now for conversations too). Where [`Request::Open`]
+    /// carries a command and a terminal size and hosts a PTY, this
+    /// carries a *name* and hosts whatever that name means on the
+    /// answering machine: khor's own `claude` / `codex`, or an agent
+    /// registered there — resolved by [`crate::Node::start_session`],
+    /// the same call the wizard makes locally, so both machines refuse
+    /// in one voice. A name resolved on the asking side would carry the
+    /// asker's paths to a machine that has different ones.
+    ///
+    /// `dir` empty (or `~`) means that machine's home. `form` is
+    /// `chat` / `term` / `agent`. Answered as [`Response::Opened`]; a
+    /// khor that predates it answers [`Response::Refused`].
+    OpenAgent {
+        dir: String,
+        title: String,
+        form: String,
+        agent: String,
+    },
+    /// 常去的地方 on the asked machine (`crate::Node::places`): the
+    /// wizard's first question, answered for wherever the session is
+    /// about to be born rather than for the machine the screen is on.
+    /// Answered as [`Response::Places`]; a khor that predates it answers
+    /// [`Response::Refused`], read as "no list" — the box still takes a
+    /// typed path.
+    Places,
+    /// The asked machine's readings of the API accounts **it holds the
+    /// keys for** (`khor_node::accounts`): every other machine reads
+    /// them from here rather than from the provider, so a key stays
+    /// on one disk. Answered as [`Response::Quotas`]; a khor that
+    /// predates it answers [`Response::Refused`], read as "no reading
+    /// from there" and painted as such with the last one's age.
+    Quotas,
+    /// What the asked machine is busy with, now and over the last day
+    /// (`khor_core::Load`): its `top` hungriest processes and the CPU
+    /// day its serve has been recording (机器页批3, 2026-09-03). Asked
+    /// while a person has that machine's card open, never on the beat —
+    /// a process table nobody is looking at is a table nobody is
+    /// paying for. Answered as [`Response::Load`]; a khor that predates
+    /// it answers [`Response::Refused`], which the asker says out loud
+    /// (`msg::load_predates()`) rather than painting an empty table: an
+    /// empty table reads as an idle machine.
+    /// `by`/`desc` rank the table **over there**, before the cut: a
+    /// shared box runs ten thousand processes, and the alternative to
+    /// ranking at the source is either all of them on the wire or a cut
+    /// ordered by the wrong column (`khor_core::TopBy`). Tail-appended
+    /// with defaults, so a khor that predates them answers its own
+    /// busiest-first order — which is exactly what the defaults name.
+    Load {
+        top: u32,
+        #[serde(default)]
+        by: khor_core::TopBy,
+        #[serde(default)]
+        desc: bool,
+    },
+    /// Takes a path off that machine's disk (`crate::files::remove`).
+    /// `path` is absolute over there; a directory goes whole.
+    ///
+    /// **Never to the recycle bin.** A bin is somewhere a person can go
+    /// and look, and the person is not sitting at that machine — a file
+    /// put in another machine's bin is neither gone nor findable. So
+    /// this deletes, and the face says so before anybody presses
+    /// (`khor_catalog::gui::file_remove_far`), which is also why the
+    /// 「不再提醒」 tick cannot silence it.
+    ///
+    /// Answered as [`Response::Removed`]; a khor that predates it
+    /// answers [`Response::Refused`], which the asker shows as it came
+    /// — the same road every refusal on this screen takes.
+    Remove { path: String },
+    /// Makes one directory on that machine (`crate::files::mkdir`).
+    /// `path` is absolute over there.
+    ///
+    /// **One directory, and the name must be free.** Not `mkdir -p`:
+    /// the caller is a person typing a name into a row of a tree they
+    /// are looking at, so every parent already exists, and a spelling
+    /// mistake that silently grows a chain of directories is the thing
+    /// a refusal is for. A name already taken is refused rather than
+    /// accepted quietly — 「it is there either way」 is true and is not
+    /// what somebody pressing 新建目录 asked (`crate::files::remove`'s
+    /// lesson, from the other end).
+    ///
+    /// Answered as [`Response::Made`]; a khor that predates it answers
+    /// [`Response::Refused`], shown as it came.
+    Mkdir { path: String },
+    /// Moves a name on that machine (`crate::files::rename_path`).
+    /// Both paths are absolute over there; crossing directories is the
+    /// same verb, which is why this is spelled `mv` and not `rename`.
+    ///
+    /// **The target is never overwritten.** `std::fs::rename` replaces
+    /// an existing file silently on unix, which would make one
+    /// mistyped name eat another file — so the name being free is
+    /// checked first and a taken one is refused. There is no `-f`:
+    /// the second spelling of a verb is where a refusal goes to die
+    /// (`crate::files::remove`).
+    ///
+    /// Answered as [`Response::Renamed`].
+    RenamePath { from: String, to: String },
+    /// Opens a path or a page **on that machine**, with that machine's
+    /// own opener (`crate::files::launch`).
+    ///
+    /// **The machine running the session is the one that opens it**
+    /// (the user, 2026-09-17: 都在宿主机器上打开). A face can be a
+    /// browser on a phone; the file named in a conversation lives on
+    /// the machine the conversation ran on, and opening it anywhere
+    /// else opens nothing or, worse, something else with the same name.
+    ///
+    /// `target` is an absolute path over there or an `http(s)` address.
+    /// Nothing else: what reaches here came out of a model's own words,
+    /// so the schemes are a whitelist rather than a check for the
+    /// obviously bad (`khor_gui_core::web::open_link`, same judgment).
+    ///
+    /// Answered as [`Response::Launched`]; a machine with no opener
+    /// refuses by name rather than reporting a window nobody saw.
+    Launch { target: String },
+    /// When a directory on that machine was last changed: the newest
+    /// file mtime under `path` (`crate::workspace::touched`). `path` is
+    /// absolute over there.
+    ///
+    /// **Asked per workspace row, and the machine that holds the files
+    /// is the only one that can answer.** A workspace list spans the
+    /// mesh, and every row's date is a walk of somebody else's disk.
+    ///
+    /// Answered as [`Response::Touched`]; a khor that predates it
+    /// answers [`Response::Refused`], and the row simply shows no time.
+    /// **That is the consumer's error branch and it is deliberate**:
+    /// unlike git marks, a missing date paints nothing rather than
+    /// something false, and the row is still there to open.
+    Touched { path: String },
+    /// What differs from HEAD across one checkout (`crate::git::status`)
+    /// — the marks the file tree wears and the branch its head says.
+    /// `root` is the checkout itself, absolute on the answering machine.
+    ///
+    /// **One question per workspace, not per directory.** The tree
+    /// walks and the answer does not change while it does; asking again
+    /// on every step would make a person's own walking look like a
+    /// repository churning. The cost of the whole answer was measured
+    /// on this repo — 54 ms, 35 rows — and a per-step question would
+    /// not have been cheaper, only more often.
+    ///
+    /// Answered as [`Response::GitStatus`]; a khor that predates it
+    /// answers [`Response::Refused`], which the asker says out loud
+    /// (`msg::git_predates()`) in the one place that has room for it —
+    /// where the branch would have been. **Never painted as「clean」**:
+    /// a tree with no marks and a tree khor could not read look the
+    /// same, and only one of them is safe to edit.
+    GitStatus { root: String },
+    /// Where one file differs from HEAD (`crate::git::diff`), in the
+    /// coordinates of the file as it is now. `path` is absolute on the
+    /// answering machine; **which checkout it belongs to is worked out
+    /// over there**, by the same walk that decided it was a workspace,
+    /// rather than sent along and trusted.
+    ///
+    /// Asked when a file is opened, because the gutter is part of
+    /// looking at it (「打开是当前状态,git状态显示在左侧」— the user,
+    /// 2026-09-11). Answered as [`Response::GitDiff`]; refused the same
+    /// way and with the same sentence as [`Request::GitStatus`], which
+    /// is one key rather than two because the two ops shipped together
+    /// and no khor has one without the other.
+    GitDiff { path: String },
+    /// Writes a whole file on the answering machine
+    /// (`crate::files::write_whole`) — what saving an edit is.
+    ///
+    /// **`was` is the digest of what the writer started from, and it is
+    /// the whole of the safety here.** A mismatch refuses and writes
+    /// nothing, so two people editing one file end with one of them
+    /// told rather than one of them silently gone. `""` means the
+    /// writer expects no file at that path at all.
+    ///
+    /// **Whole file, never a range.** A range would need the two ends
+    /// to agree on what the file was between them, which is the thing
+    /// this op refuses to assume; and the file view only offers to save
+    /// what fits in one slice, so the whole of it is already in hand.
+    /// [`SLICE`] is the ceiling, worn at both ends.
+    ///
+    /// Answered as [`Response::Wrote`]; a khor that predates it answers
+    /// [`Response::Refused`], which the asker says out loud
+    /// (`msg::write_predates()`). **Never swallowed**: a save that
+    /// quietly did nothing is the worst answer this file could give.
+    WritePath {
+        path: String,
+        was: String,
+        bytes: serde_bytes::ByteBuf,
+    },
+    /// Whether that machine can run VS Code's web face, and which
+    /// version (`crate::code::version`). **A probe with no side effect**
+    /// — nothing is started, nothing is downloaded — so it is safe to
+    /// ask the moment a workspace opens, which is when the answer
+    /// decides whether a button is drawn at all.
+    ///
+    /// Answered as [`Response::CodeHere`]; a khor that predates it
+    /// answers [`Response::Refused`], which the asker paints as **no
+    /// button**. That is the one place in this file where a refusal may
+    /// be swallowed, and it is because the two readings agree: a
+    /// machine that cannot say and a machine that has no editor are
+    /// both machines khor must not offer to open one on.
+    CodeHere,
+    /// Starts VS Code's web face on `root` over there, or hands back the
+    /// one already running, as `(port, token)`
+    /// (`crate::code::serve`).
+    ///
+    /// **The consent happened before this frame was built.** The first
+    /// run fetches ~640 MB from Microsoft and accepts their server
+    /// licence, which is a thing a person says yes to — this op is what
+    /// carries out the yes, and it has no way to ask.
+    ///
+    /// `port` is a loopback port **on the answering machine**; getting
+    /// bytes to it is [`Request::Reach`]'s job done over again for a
+    /// thing that is not a session, which is why the asker builds its
+    /// own pipe rather than this op returning an address.
+    CodeServe { root: String },
+    /// Stops the web face on `root` over there, if one is running.
+    /// **Answers the same whether there was one or not** — the caller
+    /// wanted it gone, and a refusal would only name a race they cannot
+    /// act on.
+    CodeStop { root: String },
+    /// Everything under `dir` on that machine that holds `query` — in a
+    /// name or in a line (`crate::files::search`, 工作区第六轮 第 47 条).
+    /// `dir` is absolute over there.
+    ///
+    /// **The walk happens where the files are.** The other road is to
+    /// list the tree across the wire and match here, which is every
+    /// byte of somebody's project moving so that one word can be
+    /// looked for — and khor already refuses that shape for git marks
+    /// and for `touched`.
+    ///
+    /// Answered as [`Response::Found`]; a khor that predates it answers
+    /// [`Response::Refused`], which the face shows as it came.
+    Search { dir: String, query: String },
+    /// [`Request::Search`], on a satellite: the sponsor greps over ssh
+    /// (`crate::satellite::search`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason.
+    SatSearch {
+        sat: String,
+        dir: String,
+        query: String,
+    },
+    /// Whether `path` is a checkout (`crate::git::is_checkout`) — one
+    /// `stat`, asked of the machine holding the directory.
+    ///
+    /// **Its own question and not a field on [`Request::GitStatus`]'s
+    /// answer** (docs/SHELL.md 第五轮 第 6 条): a workspace row wears a
+    /// branch or a folder by it, and the status walk is the one that
+    /// can take seconds on a big tree or a network disk, or fail. A
+    /// corner that waited on the walk painted a slow repository as a
+    /// folder.
+    ///
+    /// Answered as [`Response::Checkout`]; a khor that predates it
+    /// answers [`Response::Refused`], and the asker falls back to what
+    /// the status answer says.
+    Checkout { path: String },
+    /// [`Request::Checkout`], on a satellite: the sponsor looks over
+    /// ssh (`crate::satellite::is_checkout`).
+    ///
+    /// A new variant for [`Request::SatLs`]'s reason.
+    SatCheckout { sat: String, path: String },
+    /// Compare document version digests and cached readings.
+    /// The response contains changed document versions and readings.
+    /// An inventory admission failure permits one signed roster repair;
+    /// other failures never fall back to a second sync protocol.
+    Versions {
+        docs: Vec<(String, serde_bytes::ByteBuf)>,
+        readings: Vec<(String, serde_bytes::ByteBuf)>,
+    },
+    /// [`Request::Load`], **with the stamp of the day the asker already
+    /// holds** (round NET-4; 0: none). The table is answered every time
+    /// — it is what moves — and the day only when its stamp differs
+    /// (`history::CpuHistory::stamp`, which changes once a minute at
+    /// most): a machine card open on a far machine asked for the whole
+    /// day, five series of 288 buckets, every five seconds. Answered as
+    /// [`Response::LoadSince`]. A new variant for this file's first rule:
+    /// a khor that predates it refuses the frame, and the asker asks
+    /// [`Request::Load`] instead.
+    LoadSince {
+        top: u32,
+        by: khor_core::TopBy,
+        desc: bool,
+        day: u64,
+    },
+    /// What a file is now, without its bytes (`crate::files::stat`):
+    /// asked by a face coming back to a window with the file open, which
+    /// re-reads it only when the answer differs from what it holds
+    /// (round NET-4). Answered as [`Response::Stat`]; a khor that
+    /// predates it refuses, and the face reads the file as before.
+    Stat { path: String },
+    /// A stream-owned observation (`crate::watch`). The admitted peer holds
+    /// a bounded lease until this stream closes; frames carry coverage
+    /// fences and subsequent invalidations, never file contents.
+    Watch { scope: crate::watch::Scope },
+    /// The commands run on that machine, searched (roadmap 2.6,
+    /// `crate::commands::search_history`). Answered as
+    /// [`Response::History`]. **A new variant, the request changing
+    /// words**: a khor that predates it refuses the frame, which the asker
+    /// reads as "that machine keeps no history".
+    History { ask: crate::commands::HistoryAsk },
+    /// One file's history (round UX-4, the file page's git 历史): its
+    /// log, its blame, or a revision of it (`crate::git::GitAsk`).
+    /// Answered as [`Response::Git`]. **One new word for the three
+    /// questions**, so an older khor refuses it once, which the asker
+    /// says as `msg::git_predates()`.
+    Git { ask: crate::git::GitAsk },
+    /// Open a session at most once per token.
+    /// A retry returns the session created by the first request.
+    OpenOnce {
+        token: String,
+        kind: String,
+        title: String,
+        cwd: String,
+        cmd: Vec<String>,
+        cols: u16,
+        rows: u16,
+    },
+    /// [`Request::OpenAgent`], made at most once per `token`, as
+    /// [`Request::OpenOnce`].
+    OpenAgentOnce {
+        token: String,
+        dir: String,
+        title: String,
+        form: String,
+        agent: String,
+    },
+    /// The history of the pane a tmux row's client has in front, from
+    /// `since` on (item 31, `crate::adaptor::tmux::Tmux::history`): what a
+    /// phone scrolls locally. Answered as [`Response::PaneHistory`]. **A
+    /// new variant**: a khor that predates it refuses the frame, and the
+    /// asker's face keeps tmux's own scrolling.
+    PaneHistory {
+        session: String,
+        since: Option<crate::adaptor::tmux::HistoryAnchor>,
+    },
+    /// **The asked machine's workspace facts** (round NET-8,
+    /// `crate::wsfacts`): each of its workspaces' changed-file count,
+    /// branch and last change, as its resident keeps them. Asked as the
+    /// `workspace_facts` reading of a round, so it crosses only when it
+    /// changed; an older khor has no request for that reading and skips
+    /// it. Answered as [`Response::WorkspaceFacts`].
+    WorkspaceFacts,
+    /// **A machine the roster names, vouching for itself to one whose
+    /// table lost it** (round NET-10). `roster` is the asker's newest
+    /// signed roster; `name` and `addrs` are its row, as `Pair` carries
+    /// them. The root's signature is the admission here, as the token is
+    /// for `Pair`: the answerer takes it only when the roster verifies
+    /// under its own anchor, is fresh, is not older than its own, and
+    /// admits both machines (`Node::take_vouch`). Then the asker's row
+    /// and the roster are written, and the next round carries the rest.
+    ///
+    /// Sent only after the answerer refused a round's opening. **A new
+    /// variant**: a khor that predates it refuses the frame, and the
+    /// asker's round fails as it did before, with the refusal's words.
+    Vouch { action: VouchAction },
+    /// **Pull this file into your drop directory** (item 60,
+    /// `crate::drops`): `from` is the id of the machine that has it,
+    /// `path` absolute there. The answering machine pulls it directly
+    /// (`FetchPath`), as a job named by `token`; asked again with the
+    /// same token it answers how far that job got, so asking twice never
+    /// pulls twice. Answered as [`Response::DropFile`], or refused with
+    /// the job's failure.
+    ///
+    /// **A new variant**: a khor that predates it refuses the frame by
+    /// this name, which the asker says as `msg::drop_predates()` — a
+    /// refusal a person reads, never a path pasted for a file that is
+    /// not there.
+    DropFile {
+        token: String,
+        from: String,
+        path: String,
+    },
+    /// **[`Request::DropFile`] into a directory named by the asker**
+    /// (item 60 part 5, 「放到当前目录」): the shell's current directory
+    /// on the answering machine, absolute there, in place of its drop
+    /// directory. A file already on the answering machine (`from` is its
+    /// own id) is copied there, under the same naming. New words rather
+    /// than a tail field on `DropFile`, which would lengthen every plain
+    /// drop under an older peer; an older khor refuses this one by name,
+    /// which carries `DropFile`, so the asker says `msg::drop_predates()`.
+    DropFileInto {
+        token: String,
+        from: String,
+        path: String,
+        dir: String,
+    },
+    /// **Stop the drop job `token` names** (item 71, the pill's ×): its
+    /// pull ends before the next slice and leaves no part file; a file
+    /// already landed stays. A token with no job is held as one ended
+    /// cancelled, nothing else. Answered [`Response::DropStopped`].
+    ///
+    /// **A new variant**: a khor that predates it refuses the frame by
+    /// this name. The asker has stopped waiting by then and pastes
+    /// nothing; that machine's pull lands quietly in its drop directory.
+    DropStop { token: String },
+    /// **Try `host:port` from your network** (round ROAD-1, `khor
+    /// reach`): resolve the name with your own resolver, connect once
+    /// with a short timeout, read the server's first line, and look the
+    /// name up in your known_hosts (`crate::reach`). Answered
+    /// [`Response::Probed`]. Asked only when a person gives an address.
+    ///
+    /// **A new variant**: a khor that predates it refuses the frame by
+    /// this name, and the asker's row for it reads `predates` — a word
+    /// the screen says, never a machine drawn as unable to reach.
+    Probe { host: String, port: u16 },
+    /// **Add a machine over ssh from here** (添加机器 通过 khor 主机,
+    /// 2026-10-08 owner ruling b): the answering machine runs
+    /// [`crate::join`]'s add as the sponsor, over its own ssh road, and
+    /// the asker watches. Named by `token` like a drop: the first ask
+    /// starts the run, every ask answers its marks so far and, once
+    /// over, how it ended ([`Response::Adding`]). Key login only — a
+    /// password or a passphrase does not cross the wire; `identity` is a
+    /// key file's path on the answering machine.
+    ///
+    /// **A new variant**: a khor that predates it refuses the frame by
+    /// this name, and the asker says `msg::add_on_predates`.
+    AddOverSsh {
+        token: String,
+        host: String,
+        port: Option<u16>,
+        jump: Option<String>,
+        identity: Option<String>,
+        name: Option<String>,
+        satellite_only: bool,
+    },
+    /// **This machine's connection journal** (`crate::journal`, net-r):
+    /// the lines at or after `since` (ms) of `peer`'s file and this
+    /// machine's own, or of every file when `peer` is `None`, so the
+    /// asker can read both ends of a reconnect. Read off disk, nothing
+    /// secret in it (`journal::scrub` ran when each line was written).
+    Journal { peer: Option<String>, since: u64 },
+    /// **Offer a file of yours** (STORE-BRIEF phase 5): a message composed
+    /// on another machine names a file on this one (`hinton:/data/x.bin`);
+    /// this machine digests it and keeps the offer record that serves its
+    /// bytes, answering [`Response::Offered`]. Asked at compose time, so
+    /// a file that is not there refuses the message before it is written.
+    /// Tail-appended: an older khor cannot decode it and refuses the
+    /// frame, which the composer says as that machine refusing.
+    Offer { path: String },
+    /// Per-machine agent configuration; mutations never ride early data.
+    Recognition { action: crate::recognition::Action },
+    /// Bounded directory snapshot; a regular file answers `None`.
+    FetchTree { path: String },
+    /// The same snapshot on an SSH satellite through its sponsor.
+    SatFetchTree { sat: String, path: String },
+    /// Atomic shell creation plus initial input; old peers refuse this word.
+    OpenShellOnce {
+        start: crate::shell_start::ShellStart,
+    },
+    /// Logins on the asked machine, or an explicit import there. No secrets.
+    Subscriptions {
+        action: crate::subscriptions::Action,
+    },
+    /// Authenticated agent control; never executed as replayable early data.
+    KhorAgent { action: crate::khor_agent::Action },
+    /// Canonical A2A data over khor's authenticated binding. Old peers refuse
+    /// this new word; callers display that refusal and do not replay a send.
+    Delegation {
+        #[serde(with = "crate::delegation::wire_json")]
+        action: crate::delegation::Action,
+    },
+}
+
+/// Smaller than the general business frame, including all serde envelopes.
+pub const DOC_TRANSFER_FRAME_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocManifest {
+    pub source: [u8; 32],
+    pub recipient: [u8; 32],
+    pub binding: serde_bytes::ByteBuf,
+    pub total_bytes: u64,
+    pub digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocChunk {
+    pub manifest: DocManifest,
+    pub offset: u64,
+    pub bytes: serde_bytes::ByteBuf,
+}
+
+/// A first header is immutable for a claim, including its fresh devices base.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairHeader {
+    pub name: String,
+    pub addrs: Vec<String>,
+    pub devices_have: serde_bytes::ByteBuf,
+    pub roster: Option<DocManifest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PairPhase {
+    Receiving,
+    AdmissionFlushed,
+    BootstrapComplete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PairAction {
+    Start {
+        token: String,
+        nonce: [u8; 32],
+        header: PairHeader,
+        roster: Option<DocChunk>,
+    },
+    Resume {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+    },
+    WriteRoster {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+        chunk: DocChunk,
+    },
+    ReadRoster {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+        manifest: DocManifest,
+        offset: u64,
+    },
+    Commit {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+    },
+    TrustAccepted {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+        roster: Option<DocManifest>,
+    },
+    Devices {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+        action: DocTransferAction,
+    },
+    Finish {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+        have: serde_bytes::ByteBuf,
+        target: serde_bytes::ByteBuf,
+    },
+    Abort {
+        claim: [u8; 32],
+        nonce: [u8; 32],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PairReply {
+    Progress {
+        claim: [u8; 32],
+        phase: PairPhase,
+        name: String,
+        devices_have: serde_bytes::ByteBuf,
+        roster_manifest: Option<DocManifest>,
+        roster: Option<DocChunk>,
+        roster_received: u64,
+    },
+    Roster {
+        claim: [u8; 32],
+        chunk: DocChunk,
+    },
+    Devices {
+        claim: [u8; 32],
+        reply: DocTransferReply,
+    },
+    Aborted {
+        claim: [u8; 32],
+    },
+    Uncommitted {
+        claim: [u8; 32],
+        why: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum VouchAction {
+    Start {
+        name: String,
+        addrs: Vec<String>,
+        certificate: serde_bytes::ByteBuf,
+        roster: DocChunk,
+    },
+    Write {
+        operation: [u8; 32],
+        chunk: DocChunk,
+    },
+    Status {
+        operation: [u8; 32],
+    },
+    Finish {
+        operation: [u8; 32],
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VouchPhase {
+    Stored { next_offset: u64 },
+    VerifiedBlob,
+    Vouched,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VouchReply {
+    pub operation: [u8; 32],
+    pub phase: VouchPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocProofKind {
+    Applied,
+    AlreadyHaveEquivalent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocProof {
+    pub manifest: DocManifest,
+    pub persisted_version: serde_bytes::ByteBuf,
+    pub kind: DocProofKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocAcknowledgement {
+    pub manifest: DocManifest,
+    pub proof_hash: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocAckResult {
+    Released {
+        acknowledgement: DocAcknowledgement,
+    },
+    Absent {
+        acknowledgement: DocAcknowledgement,
+    },
+    /// A late Exchange recreated an equivalent receipt after old ACK GC.
+    Reconfirm {
+        proof: DocProof,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocTransferFailure {
+    Busy,
+    Invalid,
+    Storage,
+    Apply,
+    ResourceLimit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocTransferState {
+    Missing,
+    Stored {
+        next_offset: u64,
+    },
+    Complete {
+        proof: DocProof,
+    },
+    Apart {
+        expected: u32,
+        actual: u32,
+    },
+    Failed {
+        kind: DocTransferFailure,
+        why: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DocTransferAction {
+    Exchange {
+        document: String,
+        have: serde_bytes::ByteBuf,
+        offer: Option<DocChunk>,
+        proofs: Vec<DocProof>,
+        acknowledgements: Vec<DocAcknowledgement>,
+    },
+    Write {
+        chunk: DocChunk,
+    },
+    Read {
+        manifest: DocManifest,
+        offset: u64,
+    },
+    Status {
+        manifest: DocManifest,
+    },
+    Confirm {
+        proofs: Vec<DocProof>,
+    },
+    Acknowledge {
+        acknowledgements: Vec<DocAcknowledgement>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum DocTransferReply {
+    Exchanged {
+        document: String,
+        have: serde_bytes::ByteBuf,
+        received: Option<DocTransferState>,
+        offer: Option<DocChunk>,
+        proof_acknowledgements: Vec<DocAcknowledgement>,
+        acknowledgement_results: Vec<DocAckResult>,
+    },
+    State {
+        manifest: DocManifest,
+        state: DocTransferState,
+    },
+    Chunk {
+        chunk: DocChunk,
+    },
+    Confirmed {
+        acknowledgements: Vec<DocAcknowledgement>,
+    },
+    Acknowledged {
+        results: Vec<DocAckResult>,
+    },
+    Failed {
+        kind: DocTransferFailure,
+        why: String,
+    },
+}
+
+/// One selected document's inventory result. A failed document remains in the
+/// response so it cannot be mistaken for an unchanged version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocumentInventory {
+    Version {
+        version: serde_bytes::ByteBuf,
+    },
+    /// The requested name is continued in a smaller docs-only page.
+    Deferred,
+    Failed {
+        why: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Response {
+    SessionRecovery {
+        value: khor_core::recovery::SessionRecovery,
+    },
+    RecoverSession {
+        value: khor_core::recovery::RecoveryResult,
+    },
+    NewShellRun {
+        value: khor_core::recovery::ShellRunResult,
+    },
+
+    ContentRead {
+        reply: crate::session_content::remote::Reply,
+    },
+    /// One bounded recoverable pairing step. No full document or roster inline.
+    Paired {
+        reply: PairReply,
+    },
+    DocTransfer {
+        reply: DocTransferReply,
+    },
+    /// A changed reading did not fit beside the document inventory.
+    ReadingDeferred,
+    Refused {
+        why: String,
+    },
+    /// The inventory authentication gate rejected this caller before dispatch.
+    /// Only this result permits a signed roster repair and one inventory retry.
+    InventoryNotAdmitted {
+        why: String,
+    },
+    /// One slice. `total` rides on every slice so the fetcher can show
+    /// progress without a separate stat round; end = offset + len == total.
+    Slice {
+        total: u64,
+        bytes: serde_bytes::ByteBuf,
+    },
+    SessionRows {
+        rows: Vec<khor_core::Session>,
+    },
+    /// An Act ran to completion; for accept, bytes moved and where each
+    /// file landed **on the machine that ran it** — absolute, in the
+    /// offer's order.
+    ///
+    /// `landed` names every file in the offer, including one already
+    /// present that moved no bytes: the asker wants somewhere to point,
+    /// and "already here" is a reason to have a path rather than to
+    /// lack one. It cannot be worked out at the asking end — the name
+    /// on disk carries a digest prefix and the directory is the far
+    /// machine's — so an empty one means *nobody said*, which is what
+    /// an older khor and a close both send, and a caller that needs a
+    /// path must say so out loud instead of guessing one that does not
+    /// exist.
+    Acted {
+        moved: u64,
+        #[serde(default)]
+        landed: Vec<String>,
+    },
+    /// One reading, taken when this frame was built.
+    Vitals {
+        vitals: khor_core::Vitals,
+    },
+    /// What that machine has spent. See [`Request::Usage`].
+    Usage {
+        usage: khor_core::Usage,
+    },
+    /// One directory, already ordered — directories first, each half by
+    /// name — because the screen paints and never re-sorts (docs/UX.md
+    /// 状态呈现). `path` is where the answer is about, absolute: the
+    /// asker may have said `""` (home), and without the expansion it
+    /// cannot spell the way down. `truncated` is the no-silent-caps
+    /// rule on the wire: a directory bigger than the cap says so
+    /// instead of looking whole.
+    Dir {
+        path: String,
+        entries: Vec<DirEntry>,
+        truncated: bool,
+    },
+    /// One slice of a pathed file. **Not [`Response::Slice`]**: that
+    /// shape is what every shipped fetcher already decodes, and a field
+    /// added to it would break them mid-pull — a new variant only ever
+    /// reaches the peer that asked for it. `total` and `at_ms` ride
+    /// every slice as the change contract: a puller that sees either
+    /// move between slices is reading two different files and must
+    /// start over, because no digest guards this path.
+    PathSlice {
+        total: u64,
+        at_ms: u64,
+        bytes: serde_bytes::ByteBuf,
+    },
+    /// A session was opened on the answering machine; `session` is its
+    /// id there. See [`Request::Open`].
+    Opened {
+        session: String,
+    },
+    /// Where that session's host listens on the answering machine, and
+    /// the cookie its handshake wants. See [`Request::Reach`].
+    Reached {
+        port: u16,
+        cookie: String,
+    },
+    /// A satellite's cached reading and how old it is on the sponsor's
+    /// clock. The age travels so the asker can keep the reading's true
+    /// birth rather than dressing it in the arrival's freshness
+    /// ([`Request::SatVitals`]; 离线轴 — a stale number must look
+    /// stale).
+    SatVitals {
+        vitals: khor_core::Vitals,
+        age_ms: u64,
+    },
+    /// Read each directory watched on the asked machine, including its volume.
+    /// The watched list is replicated; this reading is specific to that machine.
+    Watched {
+        rows: Vec<khor_core::WatchedDir>,
+    },
+    /// [`Request::Days`]'s answer: the record exactly as the answering
+    /// machine keeps it on disk (`Day::to_wire`), one encoding for the
+    /// file and the wire. The receiver rolls it to its own now
+    /// (`Day::from_wire`), so every minute since this answer reads as
+    /// nobody's.
+    Days {
+        day: String,
+    },
+    /// [`Request::Places`]'s answer: `(path, shown, sessions, last_ms)`
+    /// per place, newest first — `shown` is the path as that machine's
+    /// own user reads it (`~` for *its* home), because whose home a
+    /// path is under is a fact about the answering machine.
+    Places {
+        places: Vec<(String, String, u32, i64)>,
+    },
+    /// [`Request::Quotas`]'s answer: one reading per account whose key
+    /// the answering machine holds, as it last read them.
+    Quotas {
+        readings: Vec<khor_core::AccountReading>,
+    },
+    /// [`Request::Load`]'s answer, taken when this frame was built.
+    Load {
+        load: khor_core::Load,
+    },
+    /// [`Request::Remove`]'s answer: it is off that disk. Carries
+    /// nothing — 「gone」 has no fields, and a path echoed back would be
+    /// the asker's own argument returning as if it were news.
+    Removed,
+    /// [`Request::Mkdir`]'s and [`Request::SatTouch`]'s answer: the
+    /// name is there now. Carries nothing, for [`Response::Removed`]'s
+    /// reason.
+    ///
+    /// **One answer for both** because both say the same thing and the
+    /// asker's next move is the same: ask the tree again. The plain
+    /// `touch` road has no variant of its own at all — it is a
+    /// [`Request::WritePath`] with no bytes, and answers
+    /// [`Response::Wrote`].
+    Made,
+    /// [`Request::RenamePath`]'s answer: the name moved. Carries
+    /// nothing — both paths were the asker's own arguments.
+    Renamed,
+    /// [`Request::Launch`]'s answer: that machine handed it to its
+    /// opener. **Never a promise that a window appeared** — the opener
+    /// is a separate process and khor does not wait for it — only that
+    /// the machine had one and it started.
+    Launched,
+    /// [`Request::Touched`]'s answer, ms since the epoch. `0` means
+    /// there was nothing under that path to date — an empty directory,
+    /// or one that machine could not read — which the asker paints as
+    /// no time rather than as 1970.
+    Touched {
+        at_ms: i64,
+    },
+    /// [`Request::GitStatus`]'s answer. `branch` is short (`main`) and
+    /// **empty when there is no name to say** — detached, or no commit
+    /// yet — which the asker paints as nothing rather than inventing a
+    /// word for it. `rows` is `(path relative to the root, mark)`,
+    /// sorted by path: the screen paints and never re-sorts (docs/UX.md
+    /// 状态呈现), and the walk that produced them runs three threads
+    /// and is documented to have no order of its own. `more` is the
+    /// no-silent-caps rule [`Response::Dir::truncated`] already carries.
+    GitStatus {
+        branch: String,
+        rows: Vec<(String, String)>,
+        more: bool,
+        /// How far this branch is from its remote-tracking branch, and
+        /// when that was last true (`crate::git::Status`).
+        ///
+        /// **Tail-appended, and the consumer's error branch is the
+        /// reason that is allowed.** A khor old enough to know
+        /// `GitStatus` but not these refuses the whole frame, and
+        /// `WorkspacePane` paints a refusal as its own sentence where
+        /// the marks would be — a different screen from success, not a
+        /// default wearing the clothes of a fact. The defaults
+        /// themselves are unsayable rather than reassuring: `0` ahead
+        /// and `0` behind with `fetched_ms` at 0 is「never fetched」,
+        /// which the face draws as nothing at all.
+        #[serde(default)]
+        ahead: u32,
+        #[serde(default)]
+        behind: u32,
+        #[serde(default)]
+        fetched_ms: i64,
+    },
+    /// [`Request::GitDiff`]'s answer, in file order. `more` means the
+    /// list stopped early — same rule, same reason.
+    GitDiff {
+        hunks: Vec<Hunk>,
+        more: bool,
+    },
+    /// [`Request::WritePath`]'s answer: the file's mtime after the
+    /// rename, and the digest of what is now there — so a writer can go
+    /// on editing without reading the file back, and the next save has
+    /// something true to compare against.
+    Wrote {
+        at_ms: u64,
+        digest: String,
+    },
+    /// [`Request::CodeHere`]'s answer. `version` is `code --version`'s
+    /// first line, and **empty means there is no editor there** — not
+    /// an error, just a machine without one. `ready` says the server
+    /// `serve-web` would fetch is already unpacked over there
+    /// (`crate::code::Editor`).
+    ///
+    /// **`ready` is tail-appended, and the consumer's error branch is
+    /// the reason that is allowed here.** A khor old enough to know
+    /// `CodeHere` but not this field refuses the whole frame, and
+    /// `Node::code_here`'s caller paints a refusal as **no VS Code
+    /// button at all** (`views/WorkspacePane`) — which is a different
+    /// screen from success, not a default wearing the clothes of a
+    /// fact. The default itself errs toward asking: `false` shows the
+    /// consent rather than skipping it.
+    CodeHere {
+        version: String,
+        #[serde(default)]
+        ready: bool,
+    },
+    /// [`Request::CodeServe`]'s answer: a loopback port on the
+    /// answering machine and the connection token every request to it
+    /// must carry.
+    CodeServing {
+        port: u16,
+        token: String,
+    },
+    /// [`Request::Search`]'s and [`Request::SatSearch`]'s answer: the
+    /// names and the lines that hold the words, in the answering
+    /// machine's own spelling (`crate::files::Found`).
+    ///
+    /// **One answer for both roads** — a satellite's grep and khor's
+    /// own walk are two ways of asking one question, and a face that
+    /// had to tell them apart would be a face deciding which machine
+    /// somebody's project is on.
+    Found {
+        found: crate::files::Found,
+    },
+    /// [`Request::Checkout`]'s and [`Request::SatCheckout`]'s answer.
+    Checkout {
+        yes: bool,
+    },
+    /// [`Request::Versions`]'s answer: only what differs.
+    ///
+    /// - `docs`: changed document versions, plus an explicit failure for
+    ///   every document that could not be loaded or whose name is unknown.
+    ///   Only an unchanged, successfully read document is omitted.
+    /// - `readings`: each asked reading whose answer is not the one the
+    ///   asker holds, as that whole answer's frame (`proto::encode` of
+    ///   the [`Response`] the reading's own request gets) — or, for a
+    ///   `days@<minute>` kind, a [`Response::DaySince`] when the minute
+    ///   is inside the record; empty bytes for a reading this machine
+    ///   refused. A reading not named is the one the asker already holds.
+    Versions {
+        docs: Vec<(String, DocumentInventory)>,
+        readings: Vec<(String, serde_bytes::ByteBuf)>,
+    },
+    /// A day reading as the minutes since the asker's copy ended
+    /// (`crate::day::DaySince`), in [`Response::Versions`]'s `readings`
+    /// for a `days@<minute>` kind; `full` is the digest the whole
+    /// [`Response::Days`] frame would have had, which the asker checks
+    /// its rebuilt copy against. Only ever inside a `Versions` answer, so
+    /// no older khor meets it.
+    DaySince {
+        since: crate::day::DaySince,
+        full: serde_bytes::ByteBuf,
+    },
+    /// [`Request::LoadSince`]'s answer: the table, the day's stamp, and
+    /// the day itself only when that stamp is not the one asked with.
+    LoadSince {
+        top: Vec<khor_core::TopRow>,
+        day: u64,
+        cpu_day: Option<khor_core::CpuDay>,
+    },
+    /// [`Request::Stat`]'s answer: size, mtime, and the digest of the
+    /// bytes when the file fits one slice (empty otherwise).
+    Stat {
+        total: u64,
+        at_ms: u64,
+        digest: String,
+    },
+    /// The stream's initial coverage state.
+    Watching {
+        batch: crate::watch::Batch,
+    },
+    /// A coverage fence, invalidation burst, or quiet heartbeat.
+    Changed {
+        batch: crate::watch::Batch,
+    },
+    /// The answer to [`Request::History`], newest first.
+    History {
+        hits: Vec<crate::commands::HistoryHit>,
+    },
+    /// The answer to [`Request::Git`], variant for variant.
+    Git {
+        answer: crate::git::GitAnswer,
+    },
+    /// **The sessions reading as what changed** (round NET-6): the rows'
+    /// ids in order **only when the order changed** (empty: the order the
+    /// asker holds), the rows that differ from what this machine last sent
+    /// the asker, and the digest of the whole [`Response::SessionRows`]
+    /// frame to check the rebuild against. Sent in a [`Request::Versions`]
+    /// answer only to an asker that named the `sessions+` reading, and
+    /// only when the copy it holds is the one last sent it — a busy
+    /// session's `doing` line used to send every row on every round.
+    SessionRowsSince {
+        order: Vec<String>,
+        rows: Vec<khor_core::Session>,
+        full: serde_bytes::ByteBuf,
+    },
+    /// The answer to [`Request::PaneHistory`].
+    PaneHistory {
+        history: crate::adaptor::tmux::PaneHistory,
+    },
+    /// [`Request::WorkspaceFacts`]'s answer, by path.
+    WorkspaceFacts {
+        facts: Vec<khor_core::WorkspaceFact>,
+    },
+    /// [`Request::Vouch`] taken: the asker's row and the roster are in
+    /// the answerer's table.
+    Vouched {
+        reply: VouchReply,
+    },
+    /// [`Request::DropFile`]'s job so far: bytes landed of `total` (0
+    /// until the source has said), and once `done`, the absolute path
+    /// the file landed at on the answering machine.
+    DropFile {
+        moved: u64,
+        total: u64,
+        dest: String,
+        done: bool,
+    },
+    /// [`Request::DropStop`] taken.
+    DropStopped,
+    /// [`Request::Probe`]'s try.
+    Probed {
+        seen: khor_core::ReachSeen,
+    },
+    /// [`Request::AddOverSsh`]'s run as it stands.
+    Adding {
+        run: crate::join::Run,
+    },
+    /// [`Request::Journal`]: each entry as the journal file holds it, one
+    /// JSON line, oldest first.
+    Journal {
+        lines: Vec<String>,
+    },
+    /// [`Request::Offer`]'s answer: the file's name, size and digest; its
+    /// bytes are served by digest (`Request::Fetch`) from now on.
+    Offered {
+        name: String,
+        size: u64,
+        digest: String,
+    },
+    Recognition {
+        report: crate::recognition::Report,
+    },
+    /// Only sent in answer to the new directory reading words.
+    Tree {
+        manifest: Option<crate::tree::Manifest>,
+    },
+    Subscriptions {
+        answer: crate::subscriptions::Answer,
+    },
+    KhorAgent {
+        report: crate::khor_agent::Report,
+    },
+    Delegation {
+        #[serde(with = "crate::delegation::wire_json")]
+        answer: crate::delegation::Answer,
+    },
+}
+
+/// One place a file differs from HEAD, in the coordinates of the file
+/// **as it is now** — because that is the copy on the screen, and a
+/// gutter drawn in the old file's line numbers would point at the
+/// wrong lines of the one a person is reading.
+///
+/// The three kinds a gutter draws are told apart by which half is
+/// empty, with no fourth field able to disagree with them:
+///
+/// | kind | `lines` | `was` |
+/// |---|---|---|
+/// | inserted | > 0 | empty |
+/// | deleted | 0 | non-empty |
+/// | changed | > 0 | non-empty |
+///
+/// Every field required; whatever a later khor wants rides the tail
+/// with a serde default, never the middle (this file's field
+/// discipline).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Hunk {
+    /// First line of the hunk in the current file, 1-based. When
+    /// `lines` is 0 this is the line the deletion sits **after**, so a
+    /// deletion at the very top of a file is 0. Same convention as
+    /// `git diff -U0`'s `+` side, checked against it on 14 hunks of a
+    /// real file rather than reasoned about.
+    pub at: u32,
+    /// How many current lines the hunk covers.
+    pub lines: u32,
+    /// What HEAD had in their place, one string per line, **without
+    /// terminators** — a list already says where each line ends.
+    pub was: Vec<String>,
+}
+
+/// One row of a listed directory. Every field required; whatever a
+/// later khor wants to add rides the tail with a serde default, never
+/// the middle (this file's field discipline).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub dir: bool,
+    /// Bytes; 0 for directories — a directory's byte size answers a
+    /// question nobody browsing is asking.
+    pub size: u64,
+    /// Modified, ms since epoch. 0 when the machine could not say.
+    pub at_ms: u64,
+    /// **A received file's sender** (UX-48, the storage page's row): the device id
+    /// its receipt names (`road::Receipt::from`); `None` for a file with
+    /// no receipt, a receipt that does not know, and from an older khor.
+    /// Tail field.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// When a received file landed, ms since the epoch (its receipt's
+    /// `at_ms`): a copy can keep its source's mtime. `None` without a
+    /// receipt. Tail field.
+    #[serde(default)]
+    pub received_ms: Option<u64>,
+}
+
+impl Request {
+    /// **Whether asking twice is the same as asking once** — what lets a
+    /// request whose wire died under it be asked again on a fresh one
+    /// without the person seeing the death (`link::Node::ask_on`).
+    ///
+    /// A reading changes nothing over there; a sync exchange is a CRDT
+    /// merge, which takes the same bytes twice as once; a reach answers
+    /// the port and cookie of a session that is already there. Anything
+    /// that starts, ends, writes or moves something is not, even when
+    /// the first attempt probably never arrived — "probably" is not
+    /// good enough for a second shell or a second rename.
+    pub fn is_reading(&self) -> bool {
+        matches!(
+            self,
+            Request::ContentRead { action: crate::session_content::remote::Action::Cancel { .. } }
+                | Request::DocTransfer { .. }
+                | Request::Fetch { .. }
+                | Request::Sessions
+                | Request::SessionRecovery { .. }
+                | Request::Usage
+                | Request::Vitals
+                | Request::Ls { .. }
+                | Request::FetchPath { .. }
+                | Request::FetchTree { .. }
+                | Request::SatFetchTree { .. }
+                | Request::Reach { .. }
+                | Request::SatVitals { .. }
+                | Request::SatLs { .. }
+                | Request::Watched
+                | Request::SatFetchPath { .. }
+                | Request::SatTouched { .. }
+                | Request::SatGitStatus { .. }
+                | Request::SatGitDiff { .. }
+                | Request::Days
+                | Request::Places
+                | Request::Subscriptions { action: crate::subscriptions::Action::Discover }
+                | Request::Quotas
+                | Request::Load { .. }
+                | Request::Touched { .. }
+                | Request::GitStatus { .. }
+                | Request::GitDiff { .. }
+                | Request::CodeHere
+                | Request::Search { .. }
+                | Request::SatSearch { .. }
+                | Request::Checkout { .. }
+                | Request::SatCheckout { .. }
+                | Request::Versions { .. }
+                | Request::LoadSince { .. }
+                | Request::Stat { .. }
+                | Request::History { .. }
+                | Request::Git { .. }
+                | Request::PaneHistory { .. }
+                // **A create with a token** (round NET-7, `crate::once`):
+                // asked twice, the far machine answers the second with the
+                // session the first made — the same as asking once.
+                | Request::OpenOnce { .. }
+                | Request::OpenAgentOnce { .. }
+                | Request::OpenShellOnce { .. }
+                | Request::WorkspaceFacts
+                // A drop names its job by token: asked twice, it answers
+                // the one job's progress (`crate::drops`).
+                | Request::DropFile { .. }
+                | Request::DropFileInto { .. }
+                // Cancelled twice is cancelled once.
+                | Request::DropStop { .. }
+                // One more connect to an address a person gave.
+                | Request::Probe { .. }
+                // Asked twice, it answers the one run (by token).
+                | Request::AddOverSsh { .. }
+                | Request::Recognition { action: crate::recognition::Action::Read }
+                | Request::Journal { .. }
+                // The same file offered twice is one record.
+                | Request::Offer { .. }
+        )
+    }
+
+    /// **Whether this may ride 0-RTT** (round NET-3): sent inside the
+    /// handshake of a redial and answered before that handshake is done.
+    /// Early data can be replayed by anyone who captured it (RFC 9001
+    /// §9.2, RFC 8446 §8), so only what changes nothing over there and
+    /// costs little to answer twice: a reading of memory, one directory,
+    /// one file slice, one `git` or `stat`. Not a sync (it merges), not a
+    /// payload slice (it marks the offer started), not a reach (it hands
+    /// out a session's cookie), not a search (a tree walk is a replay
+    /// worth making). Everything else waits for the handshake on both
+    /// ends: the asker sends it after, and an answering machine that sees
+    /// one arrive early holds it until the handshake completes.
+    pub fn rides_early(&self) -> bool {
+        matches!(
+            self,
+            Request::Sessions
+                | Request::WorkspaceFacts
+                | Request::Usage
+                | Request::Vitals
+                | Request::Ls { .. }
+                | Request::FetchPath { .. }
+                | Request::SatVitals { .. }
+                | Request::SatLs { .. }
+                | Request::Watched
+                | Request::SatFetchPath { .. }
+                | Request::SatTouched { .. }
+                | Request::SatGitStatus { .. }
+                | Request::SatGitDiff { .. }
+                | Request::Days
+                | Request::Places
+                | Request::Quotas
+                | Request::Load { .. }
+                | Request::Touched { .. }
+                | Request::GitStatus { .. }
+                | Request::GitDiff { .. }
+                | Request::Checkout { .. }
+                | Request::SatCheckout { .. }
+                | Request::Versions { .. }
+                | Request::LoadSince { .. }
+                | Request::Stat { .. }
+                | Request::Recognition {
+                    action: crate::recognition::Action::Read
+                }
+                | Request::Journal { .. }
+        )
+    }
+
+    /// **How long the answer may take once the far machine has it** —
+    /// a backstop, not the liveness check. A wire that has gone dead is
+    /// caught in seconds whatever this says (`crate::wires::ACK_WITHIN`,
+    /// `SILENT_AFTER`); this bounds a far machine that is alive and
+    /// still working, so the number is the work's, per kind:
+    ///
+    /// - the default fifteen covers every answer read off memory or one
+    ///   directory, with the dial (≤ 10 s) inside the asker's thirty;
+    /// - anything over ssh (a satellite's) waits on a second network;
+    /// - starting a session forks and waits for its host;
+    /// - VS Code's web face may be downloaded on first use (ipc's
+    ///   `DEADLINE_SLOW` has the measurement), and an accepted transfer
+    ///   pulls whole files (`DEADLINE_TRANSFER`).
+    pub fn budget(&self) -> std::time::Duration {
+        use std::time::Duration;
+        match self {
+            Request::Act { action, .. } if action == "take" => Duration::from_secs(3600),
+            Request::FetchTree { .. } | Request::SatFetchTree { .. } => Duration::from_secs(60),
+            Request::CodeServe { .. } => Duration::from_secs(280),
+            // A digest is a read of the whole file.
+            Request::Offer { .. } => Duration::from_secs(280),
+            Request::DocTransfer { .. }
+            | Request::Fetch { .. }
+            | Request::FetchPath { .. }
+            | Request::SatFetchPath { .. }
+            | Request::Pair { .. }
+            | Request::Vouch { .. } => Duration::from_secs(30),
+            Request::SatVitals { .. }
+            | Request::SatLs { .. }
+            | Request::SatRemove { .. }
+            | Request::SatMkdir { .. }
+            | Request::SatTouch { .. }
+            | Request::SatRename { .. }
+            | Request::SatLaunch { .. }
+            | Request::SatTouched { .. }
+            | Request::SatGitStatus { .. }
+            | Request::SatGitDiff { .. }
+            | Request::SatWrite { .. }
+            | Request::SatSearch { .. }
+            | Request::SatCheckout { .. } => Duration::from_secs(30),
+            Request::Delegation {
+                action: crate::delegation::Action::Send { .. },
+            }
+            | Request::Delegation {
+                action:
+                    crate::delegation::Action::Bound {
+                        action: crate::delegation::BoundAction::Send { .. },
+                        ..
+                    },
+            } => Duration::from_secs(40),
+            Request::RecoverSession { .. }
+            | Request::NewShellRun { .. }
+            | Request::Open { .. }
+            | Request::OpenAgent { .. }
+            | Request::OpenOnce { .. }
+            | Request::OpenAgentOnce { .. }
+            | Request::OpenShellOnce { .. } => Duration::from_secs(25),
+            _ => Duration::from_secs(15),
+        }
+    }
+}
+
+pub fn encode<T: Serialize>(t: &T) -> Result<Vec<u8>, String> {
+    rmp_serde::to_vec(t).map_err(khor_catalog::msg::cant_encode_frame)
+}
+
+pub fn encode_request(request: &Request) -> Result<Vec<u8>, String> {
+    match request {
+        Request::ContentRead { action } => action.validate()?,
+        Request::DocTransfer { action } => crate::link::documents::validate_action(action)?,
+        Request::Pair { action } => crate::link::pairing::validate_pair_action(action)?,
+        Request::Vouch { action } => crate::link::pairing::validate_vouch_action(action)?,
+        _ => (),
+    }
+    let bytes = encode(request)?;
+    if matches!(request, Request::ContentRead { .. })
+        && bytes.len() > crate::session_content::remote::METADATA_WIRE_BYTES
+    {
+        return Err("content request envelope exceeds its wire budget".into());
+    }
+    if matches!(
+        request,
+        Request::DocTransfer { .. } | Request::Pair { .. } | Request::Vouch { .. }
+    ) && bytes.len() > DOC_TRANSFER_FRAME_BYTES
+    {
+        return Err("document transfer request exceeds 1 MiB".into());
+    }
+    Ok(bytes)
+}
+pub fn encode_response(response: &Response) -> Result<Vec<u8>, String> {
+    match response {
+        Response::ContentRead { reply } => reply.validate()?,
+        Response::DocTransfer { reply } => crate::link::documents::validate_reply(reply)?,
+        Response::Paired { reply } => crate::link::pairing::validate_pair_reply(reply)?,
+        _ => (),
+    }
+    let bytes = encode(response)?;
+    if let Response::ContentRead { reply } = response {
+        if bytes.len() > reply.wire_limit() {
+            return Err("content response envelope exceeds its wire budget".into());
+        }
+    }
+    if matches!(
+        response,
+        Response::DocTransfer { .. } | Response::Paired { .. } | Response::Vouched { .. }
+    ) && bytes.len() > DOC_TRANSFER_FRAME_BYTES
+    {
+        return Err("document transfer response exceeds 1 MiB".into());
+    }
+    Ok(bytes)
+}
+
+pub fn decode<T: for<'a> Deserialize<'a>>(bytes: &[u8]) -> Result<T, String> {
+    rmp_serde::from_slice(bytes).map_err(khor_catalog::msg::cant_decode_frame)
+}
+
+/// The real inbound request envelope, before dispatch or transfer metadata IO.
+/// The decoder can leave trailing bytes, so re-encoding cannot enforce this cap.
+pub fn question(bytes: &[u8]) -> Result<Request, String> {
+    let request = decode::<Request>(bytes)?;
+    if let Request::ContentRead { action } = &request {
+        if bytes.len() > crate::session_content::remote::METADATA_WIRE_BYTES {
+            return Err("content request envelope exceeds its wire budget".into());
+        }
+        action.validate()?;
+    }
+    if matches!(
+        &request,
+        Request::DocTransfer { .. } | Request::Pair { .. } | Request::Vouch { .. }
+    ) && bytes.len() > DOC_TRANSFER_FRAME_BYTES
+    {
+        return Err("document transfer request exceeds 1 MiB".into());
+    }
+    match &request {
+        Request::Pair { action } => crate::link::pairing::validate_pair_action(action)?,
+        Request::Vouch { action } => crate::link::pairing::validate_vouch_action(action)?,
+        _ => (),
+    }
+    Ok(request)
+}
+
+/// Decode remote errors in this machine's language; preserve unknown OS text.
+pub fn answer(bytes: &[u8]) -> Result<Response, String> {
+    answer_inner(bytes, None)
+}
+
+/// Preserve decoded Doc body usage even when the original reply checks fail.
+/// Only the document pump uses this receipt; ordinary answers stay unchanged.
+pub(crate) fn answer_doc_observed(
+    bytes: &[u8],
+    body_bytes: &mut Option<usize>,
+) -> Result<Response, String> {
+    answer_inner(bytes, Some(body_bytes))
+}
+
+fn answer_inner(bytes: &[u8], body_bytes: Option<&mut Option<usize>>) -> Result<Response, String> {
+    fn reword(why: &mut String) {
+        if let Some(local) = khor_catalog::reword(why) {
+            *why = local;
+        }
+    }
+
+    let mut response = decode::<Response>(bytes)?;
+    if let Response::ContentRead { reply } = &response {
+        if bytes.len() > reply.wire_limit() {
+            return Err("content response envelope exceeds its wire budget".into());
+        }
+        reply.validate()?;
+    }
+    if let Some(body_bytes) = body_bytes {
+        *body_bytes = Some(match &response {
+            Response::DocTransfer {
+                reply:
+                    DocTransferReply::Exchanged {
+                        offer: Some(chunk), ..
+                    }
+                    | DocTransferReply::Chunk { chunk },
+            }
+            | Response::Paired {
+                reply:
+                    PairReply::Devices {
+                        reply:
+                            DocTransferReply::Exchanged {
+                                offer: Some(chunk), ..
+                            }
+                            | DocTransferReply::Chunk { chunk },
+                        ..
+                    },
+            } => chunk.bytes.len(),
+            _ => 0,
+        });
+    }
+    if matches!(
+        &response,
+        Response::DocTransfer { .. } | Response::Paired { .. } | Response::Vouched { .. }
+    ) && bytes.len() > DOC_TRANSFER_FRAME_BYTES
+    {
+        return Err("document transfer response exceeds 1 MiB".into());
+    }
+    match &response {
+        Response::DocTransfer { reply } => crate::link::documents::validate_reply(reply)?,
+        Response::Paired { reply } => crate::link::pairing::validate_pair_reply(reply)?,
+        _ => (),
+    }
+    match &mut response {
+        Response::Refused { why } | Response::InventoryNotAdmitted { why } => reword(why),
+        Response::Paired {
+            reply: PairReply::Uncommitted { why, .. },
+        } => reword(why),
+        Response::Versions { docs, .. } => {
+            for (_, inventory) in docs {
+                if let DocumentInventory::Failed { why } = inventory {
+                    reword(why);
+                }
+            }
+        }
+        Response::DocTransfer { reply }
+        | Response::Paired {
+            reply: PairReply::Devices { reply, .. },
+        } => match reply {
+            DocTransferReply::Failed { why, .. }
+            | DocTransferReply::State {
+                state: DocTransferState::Failed { why, .. },
+                ..
+            } => reword(why),
+            DocTransferReply::Exchanged {
+                received: Some(DocTransferState::Failed { why, .. }),
+                ..
+            } => reword(why),
+            _ => {}
+        },
+        _ => {}
+    }
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_input_cancel_round_trips_both_transports_and_binds_the_reply() {
+        use crate::delegation::{
+            Action, Answer, Binding, BindingProtocol, BoundAction, InputResolution, TaskRef,
+        };
+        let home = khor_core::DeviceId([1; 32]);
+        let caller = khor_core::DeviceId([2; 32]);
+        let binding = Binding {
+            home,
+            caller,
+            agent: "fixture".into(),
+            protocol: BindingProtocol::Native,
+        };
+        let parent = Some(TaskRef {
+            home: caller,
+            id: "original-parent".into(),
+        });
+        let action = Action::Bound {
+            binding: binding.clone(),
+            action: BoundAction::CancelInput {
+                message: "original-message".into(),
+                parent: parent.clone(),
+            },
+        };
+        let request = Request::Delegation {
+            action: action.clone(),
+        };
+        let decoded: Request = decode(&encode(&request).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::to_value(decoded).unwrap()
+        );
+        let ipc = crate::ipc::Op::Delegation {
+            machine: home.hex(),
+            action: action.clone(),
+        };
+        let decoded: crate::ipc::Op = decode(&encode(&ipc).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(ipc).unwrap(),
+            serde_json::to_value(decoded).unwrap()
+        );
+        for resolution in [
+            InputResolution::Fenced,
+            InputResolution::Known {
+                task: TaskRef {
+                    home,
+                    id: "found-task".into(),
+                },
+                state: crate::delegation::protocol::TaskState::Working,
+                revision: 7,
+                cancellation_requested: true,
+            },
+            InputResolution::Superseded {
+                task: TaskRef {
+                    home,
+                    id: "found-task".into(),
+                },
+            },
+        ] {
+            let answer = Answer::Input {
+                binding: binding.clone(),
+                message: "original-message".into(),
+                parent: parent.clone(),
+                resolution,
+            };
+            crate::delegation::validate_answer(&action, home, caller, &answer).unwrap();
+            let response = Response::Delegation {
+                answer: answer.clone(),
+            };
+            let decoded: Response = decode(&encode(&response).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(response).unwrap(),
+                serde_json::to_value(decoded).unwrap()
+            );
+            let ipc = crate::ipc::Reply::Delegation {
+                answer: answer.clone(),
+            };
+            let decoded: crate::ipc::Reply = decode(&encode(&ipc).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(ipc).unwrap(),
+                serde_json::to_value(decoded).unwrap()
+            );
+            for key in ["message", "parent", "binding"] {
+                let mut wrong = serde_json::to_value(&answer).unwrap();
+                match key {
+                    "message" => wrong["Input"][key] = serde_json::json!("other-message"),
+                    "parent" => wrong["Input"][key] = serde_json::json!(null),
+                    _ => wrong["Input"][key]["caller"] = serde_json::to_value(home).unwrap(),
+                }
+                let wrong: Answer = serde_json::from_value(wrong).unwrap();
+                assert!(crate::delegation::validate_answer(&action, home, caller, &wrong).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn inventory_errors_use_local_words_and_keep_unknown_diagnostics() {
+        for remote_reason in [
+            "This machine isn't in the machine table — pair first",
+            "这台机器不在机器列表中，需要先配对",
+        ] {
+            let expected = khor_catalog::msg::not_paired();
+            let admission = Response::InventoryNotAdmitted {
+                why: remote_reason.into(),
+            };
+            let decoded = answer(&encode(&admission).unwrap()).unwrap();
+            assert!(matches!(decoded, Response::InventoryNotAdmitted { why } if why == expected));
+            let inventory = Response::Versions {
+                docs: vec![
+                    (
+                        "accounts".into(),
+                        DocumentInventory::Failed {
+                            why: remote_reason.into(),
+                        },
+                    ),
+                    (
+                        "pins".into(),
+                        DocumentInventory::Version {
+                            version: b"a-version".to_vec().into(),
+                        },
+                    ),
+                    (
+                        "seen".into(),
+                        DocumentInventory::Failed {
+                            why: "unrecognized OS diagnostic".into(),
+                        },
+                    ),
+                ],
+                readings: Vec::new(),
+            };
+            let Response::Versions { docs, .. } = answer(&encode(&inventory).unwrap()).unwrap()
+            else {
+                panic!("wrong response")
+            };
+            assert_eq!(
+                docs[0].1,
+                DocumentInventory::Failed {
+                    why: expected.into()
+                }
+            );
+            assert_eq!(
+                docs[1].1,
+                DocumentInventory::Version {
+                    version: b"a-version".to_vec().into()
+                }
+            );
+            assert_eq!(
+                docs[2].1,
+                DocumentInventory::Failed {
+                    why: "unrecognized OS diagnostic".into()
+                }
+            );
+        }
+    }
+
+    /// **An older khor refuses a word it does not know by its name**
+    /// (round NET-7): the asker of `OpenOnce` falls back to `Open` when
+    /// the refusal names `OpenOnce` (`link::Node::ask_open`). What an
+    /// older khor answers is `Refused { why }` with its decode error; this
+    /// pins that the error names the variant, with a word this khor does
+    /// not know standing in for the one an older khor does not.
+    #[test]
+    fn a_word_this_end_does_not_know_is_refused_by_its_name() {
+        #[derive(serde::Serialize)]
+        enum Newer {
+            OpenTwiceOrMore { token: String },
+        }
+        let frame = encode(&Newer::OpenTwiceOrMore { token: "t".into() }).unwrap();
+        let why = decode::<Request>(&frame).expect_err("an unknown word is refused");
+        assert!(
+            why.contains("OpenTwiceOrMore"),
+            "the refusal names it: {why}"
+        );
+        // And the two new words are not inside each other's names.
+        assert!(!"OpenAgentOnce".contains("OpenOnce"));
+    }
+
+    #[test]
+    fn a_frame_round_trips_and_names_its_op() {
+        let req = Request::DocTransfer {
+            action: DocTransferAction::Confirm { proofs: Vec::new() },
+        };
+        let bytes = encode_request(&req).unwrap();
+        assert!(
+            bytes
+                .windows(b"DocTransfer".len())
+                .any(|w| w == b"DocTransfer")
+        );
+        assert!(
+            matches!(decode::<Request>(&bytes).unwrap(), Request::DocTransfer { action: DocTransferAction::Confirm { proofs } } if proofs.is_empty())
+        );
+    }
+
+    /// **A new op must be unreadable to an older peer, not readable as a
+    /// different one.** That is the whole safety of adding one: the op
+    /// name travels, so a khor that never heard of `Vitals` fails to
+    /// decode and answers `Refused`, which the caller ignores. Were ops
+    /// numbered instead, appending would be safe and inserting would
+    /// silently turn one op into its neighbour — the failure this asserts
+    /// cannot happen.
+    ///
+    /// The older peer is spelled out here as its own enum rather than
+    /// mimicked, because a decoder built from today's type would be
+    /// testing today's type against itself.
+    ///
+    /// **Both ops added since are checked**, not just the newest: the
+    /// enum below is the one khor shipped before either existed, so
+    /// `Vitals` proves the rule held once and `Usage` proves it still
+    /// holds — and an op added without touching this test would be the
+    /// one nobody checked.
+    #[test]
+    fn an_op_an_older_peer_never_heard_of_is_refused_not_mistaken() {
+        // The fields are never read on purpose: this enum stands in for
+        // the shape an older peer knows, and the claim is about what
+        // `Deserialize` accepts, not about the values.
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        enum OlderRequest {
+            Pair {
+                token: String,
+                name: String,
+                addrs: Vec<String>,
+            },
+            Sync {
+                doc: String,
+                have: String,
+                changes: String,
+            },
+            Fetch {
+                digest: String,
+                offset: u64,
+            },
+            Sessions,
+            Act {
+                session: String,
+                action: String,
+            },
+        }
+
+        for (op, name) in [
+            (Request::Vitals, &b"Vitals"[..]),
+            (Request::Usage, &b"Usage"[..]),
+            (
+                Request::Ls {
+                    path: String::new(),
+                },
+                &b"Ls"[..],
+            ),
+            (
+                Request::FetchPath {
+                    path: String::new(),
+                    offset: 0,
+                },
+                &b"FetchPath"[..],
+            ),
+            (Request::Days, &b"Days"[..]),
+            (
+                Request::OpenAgent {
+                    dir: String::new(),
+                    title: String::new(),
+                    form: String::new(),
+                    agent: String::new(),
+                },
+                &b"OpenAgent"[..],
+            ),
+            (Request::Places, &b"Places"[..]),
+            (Request::Quotas, &b"Quotas"[..]),
+            (
+                Request::Load {
+                    top: 8,
+                    by: khor_core::TopBy::Busiest,
+                    desc: false,
+                },
+                &b"Load"[..],
+            ),
+            (Request::Watched, &b"Watched"[..]),
+            (
+                Request::Touched {
+                    path: String::new(),
+                },
+                &b"Touched"[..],
+            ),
+            (
+                Request::Remove {
+                    path: String::new(),
+                },
+                &b"Remove"[..],
+            ),
+            (
+                Request::Mkdir {
+                    path: String::new(),
+                },
+                &b"Mkdir"[..],
+            ),
+            (
+                Request::RenamePath {
+                    from: String::new(),
+                    to: String::new(),
+                },
+                &b"RenamePath"[..],
+            ),
+            (
+                Request::Launch {
+                    target: String::new(),
+                },
+                &b"Launch"[..],
+            ),
+            (
+                Request::GitStatus {
+                    root: String::new(),
+                },
+                &b"GitStatus"[..],
+            ),
+            (
+                Request::GitDiff {
+                    path: String::new(),
+                },
+                &b"GitDiff"[..],
+            ),
+            (
+                Request::WritePath {
+                    path: String::new(),
+                    was: String::new(),
+                    bytes: serde_bytes::ByteBuf::new(),
+                },
+                &b"WritePath"[..],
+            ),
+            (Request::CodeHere, &b"CodeHere"[..]),
+            (
+                Request::CodeServe {
+                    root: String::new(),
+                },
+                &b"CodeServe"[..],
+            ),
+            (
+                Request::CodeStop {
+                    root: String::new(),
+                },
+                &b"CodeStop"[..],
+            ),
+            (
+                Request::SatTouched {
+                    sat: String::new(),
+                    path: String::new(),
+                },
+                &b"SatTouched"[..],
+            ),
+            (
+                Request::SatRemove {
+                    sat: String::new(),
+                    path: String::new(),
+                },
+                &b"SatRemove"[..],
+            ),
+            (
+                Request::SatMkdir {
+                    sat: String::new(),
+                    path: String::new(),
+                },
+                &b"SatMkdir"[..],
+            ),
+            (
+                Request::SatTouch {
+                    sat: String::new(),
+                    path: String::new(),
+                },
+                &b"SatTouch"[..],
+            ),
+            (
+                Request::SatRename {
+                    sat: String::new(),
+                    from: String::new(),
+                    to: String::new(),
+                },
+                &b"SatRename"[..],
+            ),
+            (
+                Request::SatLaunch {
+                    sat: String::new(),
+                    target: String::new(),
+                },
+                &b"SatLaunch"[..],
+            ),
+            (
+                Request::Search {
+                    dir: String::new(),
+                    query: String::new(),
+                },
+                &b"Search"[..],
+            ),
+            (
+                Request::SatSearch {
+                    sat: String::new(),
+                    dir: String::new(),
+                    query: String::new(),
+                },
+                &b"SatSearch"[..],
+            ),
+            (
+                Request::Checkout {
+                    path: String::new(),
+                },
+                &b"Checkout"[..],
+            ),
+            (
+                Request::SatCheckout {
+                    sat: String::new(),
+                    path: String::new(),
+                },
+                &b"SatCheckout"[..],
+            ),
+            (
+                Request::SatGitStatus {
+                    sat: String::new(),
+                    root: String::new(),
+                },
+                &b"SatGitStatus"[..],
+            ),
+            (
+                Request::SatGitDiff {
+                    sat: String::new(),
+                    path: String::new(),
+                },
+                &b"SatGitDiff"[..],
+            ),
+            (
+                Request::SatWrite {
+                    sat: String::new(),
+                    path: String::new(),
+                    was: String::new(),
+                    bytes: serde_bytes::ByteBuf::new(),
+                },
+                &b"SatWrite"[..],
+            ),
+            (
+                Request::Versions {
+                    docs: Vec::new(),
+                    readings: Vec::new(),
+                },
+                &b"Versions"[..],
+            ),
+            (
+                Request::LoadSince {
+                    top: 8,
+                    by: khor_core::TopBy::Busiest,
+                    desc: false,
+                    day: 0,
+                },
+                &b"LoadSince"[..],
+            ),
+            (
+                Request::Stat {
+                    path: String::new(),
+                },
+                &b"Stat"[..],
+            ),
+            (
+                Request::Watch {
+                    scope: crate::watch::Scope::Entries {
+                        path: "/fixture".into(),
+                    },
+                },
+                &b"Watch"[..],
+            ),
+            (
+                Request::DropFile {
+                    token: String::new(),
+                    from: String::new(),
+                    path: String::new(),
+                },
+                &b"DropFile"[..],
+            ),
+            (
+                Request::DropFileInto {
+                    token: String::new(),
+                    from: String::new(),
+                    path: String::new(),
+                    dir: String::new(),
+                },
+                &b"DropFileInto"[..],
+            ),
+            (
+                Request::DropStop {
+                    token: String::new(),
+                },
+                &b"DropStop"[..],
+            ),
+        ] {
+            let bytes = encode(&op).unwrap();
+            assert!(
+                bytes.windows(name.len()).any(|w| w == name),
+                "the op name must be on the wire, or this proves nothing about names"
+            );
+            let refused = decode::<OlderRequest>(&bytes);
+            assert!(refused.is_err(), "an older peer read {op:?} as {refused:?}");
+        }
+
+        // …and the same peer's own ops still decode here, so the
+        // assertion above is about the new name and not about the two
+        // enums having drifted apart in some other way.
+        let theirs = encode(&Request::Sessions).unwrap();
+        assert!(matches!(decode::<Request>(&theirs), Ok(Request::Sessions)));
+        assert!(matches!(
+            decode::<OlderRequest>(&theirs),
+            Ok(OlderRequest::Sessions)
+        ));
+    }
+
+    /// The watched answer crosses the wire in all three of its shapes —
+    /// a directory on a listed volume, a missing one, one on a
+    /// filesystem khor does not list — and comes back the same. The
+    /// third shape is the one that matters: `None` with `missing: false`
+    /// is what stops a path on `/proc` wearing the root's numbers, and a
+    /// decoder that flattened it to either neighbour would pass a test
+    /// that only sent the first two.
+    #[test]
+    fn a_watched_answer_keeps_its_three_shapes_on_the_wire() {
+        let rows = vec![
+            khor_core::WatchedDir {
+                path: "/data/models".into(),
+                missing: false,
+                volume: Some(khor_core::Volume {
+                    mount: "/data".into(),
+                    fill: khor_core::Fill {
+                        used: 40,
+                        total: 100,
+                    },
+                }),
+            },
+            khor_core::WatchedDir {
+                path: "/nope".into(),
+                missing: true,
+                volume: None,
+            },
+            khor_core::WatchedDir {
+                path: "/proc/1".into(),
+                missing: false,
+                volume: None,
+            },
+        ];
+        let bytes = encode(&Response::Watched { rows: rows.clone() }).unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::Watched { rows: back } => assert_eq!(back, rows),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+        let ask = encode(&Request::Watched).unwrap();
+        assert!(matches!(decode::<Request>(&ask), Ok(Request::Watched)));
+    }
+
+    #[test]
+    fn directory_watch_frames_keep_scope_and_coverage_fences() {
+        for scope in [
+            crate::watch::Scope::Entries {
+                path: "/fixture".into(),
+            },
+            crate::watch::Scope::Workspace {
+                root: "/fixture".into(),
+            },
+        ] {
+            let frame = encode(&Request::Watch {
+                scope: scope.clone(),
+            })
+            .unwrap();
+            match decode::<Request>(&frame).unwrap() {
+                Request::Watch { scope: decoded } => assert_eq!(decoded, scope),
+                other => panic!("decoded wrong: {other:?}"),
+            }
+        }
+        let batch = crate::watch::Batch {
+            cursor: "epoch:42".into(),
+            reset: true,
+            dirs: vec!["/srv/a".into()],
+            workspace: true,
+            coverage: vec![crate::watch::Coverage {
+                scope: 0,
+                mode: crate::watch::CoverageMode::Partial,
+                reason: Some("Network filesystem".into()),
+            }],
+            retry_ms: 1000,
+        };
+        for sent in [
+            Response::Watching {
+                batch: batch.clone(),
+            },
+            Response::Changed {
+                batch: batch.clone(),
+            },
+        ] {
+            match decode::<Response>(&encode(&sent).unwrap()).unwrap() {
+                Response::Watching { batch: decoded } | Response::Changed { batch: decoded } => {
+                    assert_eq!(decoded, batch)
+                }
+                other => panic!("decoded wrong: {other:?}"),
+            }
+        }
+    }
+
+    /// The load answer crosses the wire with its gaps intact: a bucket
+    /// nobody measured is `None` at both ends, never a zero — a zero
+    /// would be the one reading the band must not invent
+    /// (`khor_core::CpuDay`). The filled neighbours prove the decoder
+    /// reads what is there before the hole is trusted to be a hole.
+    #[test]
+    fn a_load_frame_keeps_its_holes_as_holes() {
+        let sent = khor_core::Load {
+            top: vec![khor_core::TopRow {
+                pid: 41,
+                name: "khor".into(),
+                user: "zgh".into(),
+                cpu_pct: 250.5,
+                mem: 12_345_678,
+                gpu_pct: Some(37.0),
+                gpu_mem: Some(1_073_741_824),
+                run_secs: Some(86_400),
+                arg: Some("serve".into()),
+                ppid: None,
+                status: Some("run".into()),
+                cpu_ms: Some(1_500),
+                io_bytes: Some(4_096),
+            }],
+            cpu_day: khor_core::CpuDay {
+                bucket_ms: 300_000,
+                now_ms: 1_700_000_000_000,
+                buckets: vec![Some(12.5), None, Some(80.0)],
+                mem: vec![Some(40.0), None, Some(41.5)],
+                gpu: vec![Some(7.0), None, None],
+                disk: vec![Some(96.0), None, Some(96.0)],
+                vram: vec![Some(90.0), None, Some(12.0)],
+            },
+        };
+        let bytes = encode(&Response::Load { load: sent.clone() }).unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::Load { load } => {
+                assert_eq!(load, sent);
+                assert_eq!(
+                    load.cpu_day.buckets[1], None,
+                    "the hole came back as a hole"
+                );
+                assert_eq!(
+                    load.cpu_day.buckets[0],
+                    Some(12.5),
+                    "…between readings that came back whole"
+                );
+            }
+            other => panic!("decoded wrong: {other:?}"),
+        }
+        // The asker's own words decode too, `top` and all — a request
+        // whose count was lost would size the table from nothing.
+        let ask = encode(&Request::Load {
+            top: 8,
+            by: khor_core::TopBy::Mem,
+            desc: true,
+        })
+        .unwrap();
+        assert!(matches!(
+            decode::<Request>(&ask),
+            Ok(Request::Load {
+                top: 8,
+                by: khor_core::TopBy::Mem,
+                desc: true
+            })
+        ));
+    }
+
+    /// The three fields the card's redesign added (2026-09-03: uptime,
+    /// the memory day, a card's temperature) ride the tail of their
+    /// structs with a default, and this is the frame that proves it: an
+    /// older node's shape, encoded without them, decodes on a new node
+    /// with the defaults — and the bytes are first shown to be shorter,
+    /// so the test cannot pass by accident.
+    #[test]
+    fn a_frame_from_before_uptime_memory_day_and_temperature_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct OldCard {
+            name: String,
+            util_pct: f32,
+            mem: Option<khor_core::Fill>,
+        }
+        #[derive(serde::Serialize)]
+        struct OldVitals {
+            cpu_pct: f32,
+            cores: u32,
+            mem: khor_core::Fill,
+            disk: Option<khor_core::Fill>,
+            gpu: Option<khor_core::Gpu>,
+            version: Option<String>,
+            gpus: Vec<OldCard>,
+            volumes: Vec<khor_core::Volume>,
+        }
+        #[derive(serde::Serialize)]
+        struct OldDay {
+            bucket_ms: u64,
+            now_ms: u64,
+            buckets: Vec<Option<f32>>,
+        }
+        // A day from the recorder that knew CPU and memory but not the
+        // other two: its GPU and disk series come back **empty**, which
+        // the chart draws as two rows instead of four flat zeros.
+        #[derive(serde::Serialize)]
+        struct DayBeforeGpu {
+            bucket_ms: u64,
+            now_ms: u64,
+            buckets: Vec<Option<f32>>,
+            mem: Vec<Option<f32>>,
+        }
+        let old = rmp_serde::to_vec(&OldVitals {
+            cpu_pct: 1.0,
+            cores: 2,
+            mem: khor_core::Fill { used: 1, total: 2 },
+            disk: None,
+            gpu: None,
+            version: None,
+            gpus: vec![OldCard {
+                name: "x".into(),
+                util_pct: 3.0,
+                mem: None,
+            }],
+            volumes: vec![],
+        })
+        .unwrap();
+        let fresh = rmp_serde::to_vec(&khor_core::Vitals {
+            cpu_pct: 1.0,
+            cores: 2,
+            mem: khor_core::Fill { used: 1, total: 2 },
+            disk: None,
+            gpu: None,
+            version: None,
+            gpus: vec![khor_core::GpuCard {
+                name: "x".into(),
+                util_pct: 3.0,
+                mem: None,
+                temp_c: None,
+            }],
+            volumes: vec![],
+            uptime_s: 0,
+            model: None,
+            system: None,
+        })
+        .unwrap();
+        assert!(
+            old.len() < fresh.len(),
+            "the old frame really is shorter: it lacks the new fields"
+        );
+        let v: khor_core::Vitals = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(v.uptime_s, 0);
+        assert_eq!(
+            v.model, None,
+            "a peer that predates the model field reads as one that could not say"
+        );
+        assert_eq!(v.gpus[0].temp_c, None);
+        let day = rmp_serde::to_vec(&OldDay {
+            bucket_ms: 1,
+            now_ms: 2,
+            buckets: vec![Some(1.0)],
+        })
+        .unwrap();
+        let d: khor_core::CpuDay = rmp_serde::from_slice(&day).unwrap();
+        assert!(
+            d.mem.is_empty(),
+            "a day from before memory has no memory line"
+        );
+        assert_eq!(d.buckets, vec![Some(1.0)]);
+        let two = rmp_serde::to_vec(&DayBeforeGpu {
+            bucket_ms: 1,
+            now_ms: 2,
+            buckets: vec![Some(1.0)],
+            mem: vec![Some(2.0)],
+        })
+        .unwrap();
+        let d2: khor_core::CpuDay = rmp_serde::from_slice(&two).unwrap();
+        assert_eq!(d2.mem, vec![Some(2.0)], "the series it did record survive");
+        assert!(
+            d2.gpu.is_empty(),
+            "and the ones it never knew are absent, not a day of zeros"
+        );
+        assert!(d2.disk.is_empty());
+        assert!(d2.vram.is_empty());
+    }
+
+    /// A process row from before the GPU columns decodes with them
+    /// absent — **absent, not zero**: a `0%` there would say "this
+    /// process is not on the GPU" about a machine whose khor was never
+    /// able to look, and a zero in a column of numbers reads as a
+    /// reading (`khor_core::TopRow` carries the ruling).
+    ///
+    /// The old bytes are shown to be shorter first, so a decoder that
+    /// silently accepted anything could not pass this by accident.
+    #[test]
+    fn a_process_row_from_before_the_gpu_columns_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct OldRow {
+            pid: u32,
+            name: String,
+            user: String,
+            cpu_pct: f32,
+            mem: u64,
+        }
+        let old = rmp_serde::to_vec(&OldRow {
+            pid: 7,
+            name: "khor".into(),
+            user: "zgh".into(),
+            cpu_pct: 5.0,
+            mem: 9,
+        })
+        .unwrap();
+        let fresh = rmp_serde::to_vec(&khor_core::TopRow {
+            pid: 7,
+            name: "khor".into(),
+            user: "zgh".into(),
+            cpu_pct: 5.0,
+            mem: 9,
+            gpu_pct: None,
+            gpu_mem: None,
+            run_secs: None,
+            arg: None,
+            ppid: None,
+            status: None,
+            cpu_ms: None,
+            io_bytes: None,
+        })
+        .unwrap();
+        assert!(
+            old.len() < fresh.len(),
+            "the old row really is shorter: it lacks the GPU columns"
+        );
+        let r: khor_core::TopRow = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(
+            r.pid, 7,
+            "the fields that were always there survive the tail-append"
+        );
+        assert_eq!(r.mem, 9);
+        assert_eq!(
+            r.gpu_pct, None,
+            "a row from a khor that could not look says nothing, not zero"
+        );
+        assert_eq!(r.gpu_mem, None);
+    }
+
+    /// A day from before the cards' memory was recorded decodes with
+    /// that series **empty**, and the four before it intact.
+    ///
+    /// Empty rather than a day of zeros is what lets the face draw four
+    /// rows on a machine that never recorded a fifth — and it is the
+    /// same shape as the honest answer on an Apple Silicon machine,
+    /// where the cards' bytes are already the memory row
+    /// (`khor_core::CpuDay::vram`).
+    ///
+    /// **The old bytes are shown to lack the field precisely**: this
+    /// encoding writes a struct as an array and msgpack spells a short
+    /// array's element count into its first byte (`0x90 | n`), so six
+    /// fields against today's seven is the closest thing there is to
+    /// 「字节里确实没有那个键」.
+    #[test]
+    fn a_day_from_before_the_cards_memory_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct DayBeforeVram {
+            bucket_ms: u64,
+            now_ms: u64,
+            buckets: Vec<Option<f32>>,
+            mem: Vec<Option<f32>>,
+            gpu: Vec<Option<f32>>,
+            disk: Vec<Option<f32>>,
+        }
+        let old = rmp_serde::to_vec(&DayBeforeVram {
+            bucket_ms: 300_000,
+            now_ms: 7,
+            buckets: vec![Some(1.0)],
+            mem: vec![Some(2.0)],
+            gpu: vec![Some(3.0)],
+            disk: vec![Some(4.0)],
+        })
+        .unwrap();
+        assert_eq!(old[0], 0x96, "the day a node sent yesterday is six fields");
+        let fresh = rmp_serde::to_vec(&khor_core::CpuDay {
+            bucket_ms: 300_000,
+            now_ms: 7,
+            buckets: vec![Some(1.0)],
+            mem: vec![Some(2.0)],
+            gpu: vec![Some(3.0)],
+            disk: vec![Some(4.0)],
+            vram: vec![Some(5.0)],
+        })
+        .unwrap();
+        assert_eq!(
+            fresh[0], 0x97,
+            "and today's is seven — the new one is really on the wire"
+        );
+        let d: khor_core::CpuDay = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(
+            d.disk,
+            vec![Some(4.0)],
+            "the series it did record survive, the last one included"
+        );
+        assert!(
+            d.vram.is_empty(),
+            "and the one it never knew is absent, not a day of zeros"
+        );
+    }
+
+    /// A process row from before **how long it has been up** and **the
+    /// command line** decodes with both absent (2026-09-04:「表格多个
+    /// 时间列」 and the three `python3` rows on turing).
+    ///
+    /// **The old bytes are shown to lack the fields precisely, not by
+    /// being shorter.** This encoding writes a struct as an array, and
+    /// msgpack spells a short array's element count into its first byte
+    /// (`0x90 | n`) — so the count is the closest thing there is to
+    /// "the key is not in the bytes", and asserting it is what stops
+    /// this test from quietly comparing today's row against itself.
+    #[test]
+    fn a_process_row_from_before_run_time_and_the_command_line_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct RowBeforeTime {
+            pid: u32,
+            name: String,
+            user: String,
+            cpu_pct: f32,
+            mem: u64,
+            gpu_pct: Option<f32>,
+            gpu_mem: Option<u64>,
+        }
+        let old = rmp_serde::to_vec(&RowBeforeTime {
+            pid: 7,
+            name: "python3".into(),
+            user: "zzl-zgh".into(),
+            cpu_pct: 5.0,
+            mem: 9,
+            gpu_pct: Some(44.0),
+            gpu_mem: Some(21_700_000_000),
+        })
+        .unwrap();
+        assert_eq!(
+            old[0], 0x97,
+            "the row a node sent yesterday is seven fields"
+        );
+        let fresh = rmp_serde::to_vec(&khor_core::TopRow {
+            pid: 7,
+            name: "python3".into(),
+            user: "zzl-zgh".into(),
+            cpu_pct: 5.0,
+            mem: 9,
+            gpu_pct: Some(44.0),
+            gpu_mem: Some(21_700_000_000),
+            run_secs: Some(3),
+            arg: Some("vllm.entrypoints".into()),
+            ppid: None,
+            status: Some("sleep".into()),
+            cpu_ms: Some(90_000),
+            io_bytes: Some(1_048_576),
+        })
+        .unwrap();
+        assert_eq!(
+            fresh[0], 0x9d,
+            "and today's is thirteen — the new ones are really on the wire"
+        );
+        let r: khor_core::TopRow = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(
+            r.pid, 7,
+            "the fields that were always there survive the tail-append"
+        );
+        assert_eq!(
+            r.gpu_mem,
+            Some(21_700_000_000),
+            "including the last one before the new tail"
+        );
+        assert_eq!(
+            r.run_secs, None,
+            "an age nobody sent is absent — a zero would read as 刚起的"
+        );
+        assert_eq!(
+            r.arg, None,
+            "and an identifying word nobody sent is absent, not an empty name"
+        );
+    }
+
+    /// A process row from before **the parent pid** decodes with it
+    /// absent — and absent has to stay absent, because **pid 0 is a
+    /// real parent** on every platform khor runs on.
+    ///
+    /// The face folds ten `tokio-rt-worker serve` rows into one on the
+    /// strength of them being siblings (2026-09-05); a row from an
+    /// older node has no parent to compare, and the fold must leave
+    /// those rows alone rather than treat them all as children of 0 and
+    /// join a machine's whole process table into one line.
+    ///
+    /// Same shape as the two tests above it: the array's element count
+    /// is asserted on both sides, because that is the closest msgpack
+    /// comes to saying 「this key is not in the bytes」 — without it
+    /// this would be today's row compared against itself.
+    #[test]
+    fn a_process_row_from_before_the_parent_pid_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct RowBeforeParent {
+            pid: u32,
+            name: String,
+            user: String,
+            cpu_pct: f32,
+            mem: u64,
+            gpu_pct: Option<f32>,
+            gpu_mem: Option<u64>,
+            run_secs: Option<u64>,
+            arg: Option<String>,
+        }
+        let old = rmp_serde::to_vec(&RowBeforeParent {
+            pid: 2_661_641,
+            name: "tokio-rt-worker".into(),
+            user: "zgh".into(),
+            cpu_pct: 21.0,
+            mem: 171_100_000,
+            gpu_pct: None,
+            gpu_mem: None,
+            run_secs: Some(79_200),
+            arg: Some("serve".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            old[0], 0x99,
+            "the row a node sent before the parent is nine fields"
+        );
+        let fresh = rmp_serde::to_vec(&khor_core::TopRow {
+            pid: 2_661_641,
+            name: "tokio-rt-worker".into(),
+            user: "zgh".into(),
+            cpu_pct: 21.0,
+            mem: 171_100_000,
+            gpu_pct: None,
+            gpu_mem: None,
+            run_secs: Some(79_200),
+            arg: Some("serve".into()),
+            ppid: Some(2_661_640),
+            status: Some("sleep".into()),
+            cpu_ms: Some(3_600_000),
+            io_bytes: None,
+        })
+        .unwrap();
+        assert_eq!(fresh[0], 0x9d, "and today's is thirteen");
+        let r: khor_core::TopRow = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(
+            r.pid, 2_661_641,
+            "the fields that were always there survive the tail-append"
+        );
+        assert_eq!(
+            r.arg.as_deref(),
+            Some("serve"),
+            "including the last one before the new tail"
+        );
+        assert_eq!(
+            r.ppid, None,
+            "a parent nobody sent is absent — 0 is somebody's real parent"
+        );
+    }
+
+    /// A process row from before **状态 / CPU时间 / 读写** decodes with
+    /// all three absent (2026-09-05:「列太少了,不饱满」).
+    ///
+    /// Three appends in one round because the fleet pays **once** for a
+    /// round of them: a tail-appended field costs an old node nothing,
+    /// but the `TopBy` words that sort these columns are a break, so
+    /// the two remote machines get reinstalled either way — and one
+    /// reinstall for three columns is the whole reason they landed
+    /// together.
+    ///
+    /// Same shape as the tests above: the element count is asserted on
+    /// both sides, because that is the closest msgpack comes to saying
+    /// 「this key is not in the bytes」. Without it this compares
+    /// today's row against itself and passes on a build that appended
+    /// nothing.
+    ///
+    /// **The third assertion is the one with a fact behind it.**
+    /// `io_bytes` absent must not decode to `0`: zero is what the
+    /// *library* hands back for a process khor is not allowed to read
+    /// (`top::io_readable`), so a default of zero here would mean the
+    /// same cell says 「没读到」 and 「一个字节都没动」 with the same
+    /// bytes on the wire.
+    #[test]
+    fn a_process_row_from_before_the_status_and_the_two_totals_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct RowBeforeStatus {
+            pid: u32,
+            name: String,
+            user: String,
+            cpu_pct: f32,
+            mem: u64,
+            gpu_pct: Option<f32>,
+            gpu_mem: Option<u64>,
+            run_secs: Option<u64>,
+            arg: Option<String>,
+            ppid: Option<u32>,
+        }
+        let old = rmp_serde::to_vec(&RowBeforeStatus {
+            pid: 73_443,
+            name: "khor".into(),
+            user: "zgh".into(),
+            cpu_pct: 1.5,
+            mem: 41_000_000,
+            gpu_pct: None,
+            gpu_mem: None,
+            run_secs: Some(3_600),
+            arg: Some("serve".into()),
+            ppid: Some(1),
+        })
+        .unwrap();
+        assert_eq!(
+            old[0], 0x9a,
+            "the row a node sent before these three is ten fields"
+        );
+        let fresh = rmp_serde::to_vec(&khor_core::TopRow {
+            pid: 73_443,
+            name: "khor".into(),
+            user: "zgh".into(),
+            cpu_pct: 1.5,
+            mem: 41_000_000,
+            gpu_pct: None,
+            gpu_mem: None,
+            run_secs: Some(3_600),
+            arg: Some("serve".into()),
+            ppid: Some(1),
+            status: Some("run".into()),
+            cpu_ms: Some(54_000),
+            io_bytes: Some(8_388_608),
+        })
+        .unwrap();
+        assert_eq!(
+            fresh[0], 0x9d,
+            "and today's is thirteen — the three are really on the wire"
+        );
+        let r: khor_core::TopRow = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(
+            r.pid, 73_443,
+            "the fields that were always there survive the tail-append"
+        );
+        assert_eq!(
+            r.ppid,
+            Some(1),
+            "including the last one before the new tail"
+        );
+        assert_eq!(
+            r.status, None,
+            "a status nobody sent is absent — never the word 运行"
+        );
+        assert_eq!(
+            r.cpu_ms, None,
+            "an accumulated time nobody sent is absent, not 「烧了 0 毫秒」"
+        );
+        assert_eq!(
+            r.io_bytes, None,
+            "and an unsent disk total is absent, not 「一个字节都没动」"
+        );
+    }
+
+    /// A spending answer survives the round trip whole, **including the
+    /// count of what could not be read**.
+    ///
+    /// That field is the one most easily lost on the way: an answer whose
+    /// rows all arrive looks complete, and the only thing saying otherwise
+    /// is a number that is usually zero. So the frame carrying a non-zero
+    /// one is sent here on purpose.
+    #[test]
+    fn a_spending_answer_crosses_inside_its_response() {
+        let tokens = khor_core::Tokens {
+            input: 1,
+            cached_input: 2,
+            cache_write: 3,
+            output: 4,
+        };
+        let sent = khor_core::Usage {
+            days: vec![khor_core::UsageDay {
+                day: "2026-08-17".to_owned(),
+                category: "claude".to_owned(),
+                tokens,
+            }],
+            unreadable: 5,
+            // **Both a named model and the unnamed one**, because the
+            // absence is a value here rather than a missing field, and
+            // a codec that dropped `None` on the floor would arrive
+            // looking like a shorter list rather than like an error.
+            models: vec![
+                khor_core::UsageModelDay {
+                    day: "2026-08-17".to_owned(),
+                    category: "claude".to_owned(),
+                    model: Some("a-model".to_owned()),
+                    tokens,
+                },
+                khor_core::UsageModelDay {
+                    day: "2026-08-17".to_owned(),
+                    category: "claude".to_owned(),
+                    model: None,
+                    tokens: khor_core::Tokens::default(),
+                },
+            ],
+            today: Some("2026-08-17".to_owned()),
+        };
+        let bytes = encode(&Response::Usage {
+            usage: sent.clone(),
+        })
+        .unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::Usage { usage } => assert_eq!(usage, sent),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+    }
+
+    /// **A spending answer from before the model breakdown still
+    /// decodes, and says so by being empty rather than by being wrong.**
+    ///
+    /// The tail-default half of this codec's one-way property, on the
+    /// frame that just grew two fields. `models` empty beside a
+    /// non-empty `days` is the sentence `khor_core::UsageModelDay`
+    /// reserves for exactly this peer — 「it cannot tell」 — and `today`
+    /// is `None` rather than a date nobody stated.
+    ///
+    /// **The old shape is spelled out here rather than trusted**: this
+    /// encoding is positional, so "the field is absent" is a frame that
+    /// is *shorter*, and the length is asserted for the same reason the
+    /// vitals version asserts it — a struct that quietly still carried
+    /// the fields would round-trip and prove nothing.
+    #[test]
+    fn a_spending_answer_from_before_the_model_breakdown_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct OldUsage {
+            days: Vec<khor_core::UsageDay>,
+            unreadable: u64,
+        }
+        let day = khor_core::UsageDay {
+            day: "2026-08-17".to_owned(),
+            category: "claude".to_owned(),
+            tokens: khor_core::Tokens {
+                input: 1,
+                cached_input: 2,
+                cache_write: 3,
+                output: 4,
+            },
+        };
+        let old = rmp_serde::to_vec(&OldUsage {
+            days: vec![day.clone()],
+            unreadable: 5,
+        })
+        .unwrap();
+        let fresh = rmp_serde::to_vec(&khor_core::Usage {
+            days: vec![day.clone()],
+            unreadable: 5,
+            models: vec![],
+            today: None,
+        })
+        .unwrap();
+        assert!(
+            old.len() < fresh.len(),
+            "the old frame really is shorter: it lacks the new fields"
+        );
+
+        let u: khor_core::Usage = rmp_serde::from_slice(&old).unwrap();
+        assert_eq!(u.days, vec![day], "what it did record survives whole");
+        assert_eq!(u.unreadable, 5);
+        assert!(
+            u.models.is_empty(),
+            "a peer that cannot cut by model says so by an empty list, not by a wrong one"
+        );
+        assert_eq!(
+            u.today, None,
+            "and it states no day rather than a default one"
+        );
+    }
+
+    /// The satellite pair crosses whole, age included — the age is the
+    /// half a lazier shape would drop, and it is what keeps a relayed
+    /// reading wearing its true birth (附属机器批, 离线轴).
+    #[test]
+    fn a_satellites_reading_crosses_with_its_age() {
+        let ask = Request::SatVitals {
+            sat: "ab".repeat(32),
+        };
+        let bytes = encode(&ask).unwrap();
+        match decode::<Request>(&bytes).unwrap() {
+            Request::SatVitals { sat } => assert_eq!(sat, "ab".repeat(32)),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+        let sent = khor_core::Vitals {
+            cpu_pct: 7.0,
+            cores: 4,
+            mem: khor_core::Fill { used: 1, total: 2 },
+            disk: None,
+            gpu: None,
+            version: None,
+            gpus: vec![],
+            volumes: vec![],
+            uptime_s: 0,
+            model: None,
+            system: None,
+        };
+        let bytes = encode(&Response::SatVitals {
+            vitals: sent.clone(),
+            age_ms: 38_000,
+        })
+        .unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::SatVitals { vitals, age_ms } => {
+                assert_eq!(vitals, sent);
+                assert_eq!(
+                    age_ms, 38_000,
+                    "the age must survive, or staleness dresses as fresh"
+                );
+            }
+            other => panic!("decoded wrong: {other:?}"),
+        }
+    }
+
+    /// A reading survives the round trip whole. The frame is a response,
+    /// so the guard against reordering `Vitals`' own fields lives with
+    /// the struct (`khor_core`); what this covers is the envelope.
+    #[test]
+    fn a_reading_crosses_inside_its_response() {
+        let sent = khor_core::Vitals {
+            cpu_pct: 42.5,
+            cores: 10,
+            mem: khor_core::Fill { used: 3, total: 4 },
+            disk: Some(khor_core::Fill { used: 5, total: 6 }),
+            gpu: Some(khor_core::Gpu {
+                util_pct: 12.0,
+                cards: 1,
+                mem: None,
+            }),
+            version: Some("9.9.9".to_owned()),
+            gpus: vec![khor_core::GpuCard {
+                name: "A".to_owned(),
+                util_pct: 12.0,
+                mem: None,
+                temp_c: None,
+            }],
+            volumes: vec![khor_core::Volume {
+                mount: "/".to_owned(),
+                fill: khor_core::Fill { used: 1, total: 2 },
+            }],
+            uptime_s: 12,
+            model: None,
+            system: None,
+        };
+        let bytes = encode(&Response::Vitals {
+            vitals: sent.clone(),
+        })
+        .unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::Vitals { vitals } => assert_eq!(vitals, sent),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+    }
+    /// Roadmap 2.6's question and answer cross the wire whole, under
+    /// their own name — an older khor sees a word it does not know and
+    /// refuses, never a neighbour's shape.
+    /// Item 31's question and answer, the same way.
+    #[test]
+    fn a_pane_history_question_and_answer_round_trip() {
+        use crate::adaptor::tmux::{HistoryAnchor, PaneHistory};
+        let anchor = HistoryAnchor {
+            pane: "%3".into(),
+            size: 300,
+            tail: vec!["298".into(), "299".into(), "300".into()],
+        };
+        let since = Some(anchor.clone());
+        let bytes = encode(&Request::PaneHistory {
+            session: "shell/1-0".into(),
+            since: since.clone(),
+        })
+        .unwrap();
+        assert!(
+            bytes.windows(11).any(|w| w == b"PaneHistory"),
+            "the name is on the wire"
+        );
+        match decode::<Request>(&bytes).unwrap() {
+            Request::PaneHistory {
+                session,
+                since: got,
+            } => {
+                assert_eq!(session, "shell/1-0");
+                assert_eq!(got, since);
+            }
+            other => panic!("decoded wrong: {other:?}"),
+        }
+        let history = PaneHistory {
+            pane: "%3".into(),
+            alternate: false,
+            refill: false,
+            lead: "\x1b[31m".into(),
+            lines: vec!["301".into()],
+            screen: vec!["$ ".into()],
+            anchor,
+            top: 1,
+            left: 0,
+            mouse: true,
+            window: "132x39".into(),
+        };
+        let bytes = encode(&Response::PaneHistory {
+            history: history.clone(),
+        })
+        .unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::PaneHistory { history: got } => assert_eq!(got, history),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_history_question_and_answer_round_trip() {
+        let ask = crate::commands::HistoryAsk {
+            text: "cargo test".into(),
+            dir: "/w/khor".into(),
+            failed: true,
+        };
+        let bytes = encode(&Request::History { ask: ask.clone() }).unwrap();
+        assert!(
+            bytes.windows(7).any(|w| w == b"History"),
+            "the name is on the wire"
+        );
+        match decode::<Request>(&bytes).unwrap() {
+            Request::History { ask: got } => assert_eq!(got, ask),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+        let hit = crate::commands::HistoryHit {
+            session: "shell/a".into(),
+            text: "cargo test".into(),
+            cwd: Some("/w/khor".into()),
+            started_ms: 1,
+            ended_ms: Some(2),
+            exit: Some(101),
+            runs: 3,
+        };
+        let bytes = encode(&Response::History {
+            hits: vec![hit.clone()],
+        })
+        .unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::History { hits } => assert_eq!(hits, [hit]),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+    }
+
+    /// UX-4's one word for a file's history crosses whole, the question
+    /// and each answer under their own names.
+    #[test]
+    fn a_git_history_question_and_answer_round_trip() {
+        let ask = crate::git::GitAsk::Show {
+            path: "/w/khor/Cargo.toml".into(),
+            rev: "0".repeat(40),
+        };
+        let bytes = encode(&Request::Git { ask: ask.clone() }).unwrap();
+        assert!(
+            bytes.windows(4).any(|w| w == b"Show"),
+            "the question's name is on the wire"
+        );
+        match decode::<Request>(&bytes).unwrap() {
+            Request::Git { ask: got } => assert_eq!(got, ask),
+            other => panic!("decoded wrong: {other:?}"),
+        }
+        let commit = crate::git::Commit {
+            id: "a".repeat(40),
+            author: "colehank".into(),
+            when_ms: 1,
+            subject: "One line".into(),
+            body: "More.\n\nCo-Authored-By: claude <noreply@anthropic.com>".into(),
+        };
+        let answer = crate::git::GitAnswer::Blame {
+            commits: vec![commit.clone()],
+            runs: vec![crate::git::BlameRun {
+                start: 0,
+                len: 3,
+                commit: 0,
+            }],
+        };
+        let bytes = encode(&Response::Git { answer }).unwrap();
+        match decode::<Response>(&bytes).unwrap() {
+            Response::Git {
+                answer: crate::git::GitAnswer::Blame { commits, runs },
+            } => {
+                assert_eq!(commits, [commit]);
+                assert_eq!(runs.len(), 1);
+            }
+            other => panic!("decoded wrong: {other:?}"),
+        }
+    }
+}
