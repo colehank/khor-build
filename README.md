@@ -89,3 +89,14 @@ Only `net-unit`, `net-node`, `net-vendor` and `net-congestion` are accepted.
 Linux namespace/netlab tests remain on the standard lane, and Mac results are
 recorded separately. Source snapshot branches are retired only by their owner
 after terminal evidence is retained; a reused snapshot is not owned by its new request.
+
+The Mac client also uploads a parentless `dev-bundles/<request_id>` containing a
+Git bundle of that exact snapshot. With `bundle_blob_sha` and `bundle_sha256`, the
+worker fetches the bundle and trusted control scripts through the GitHub API at
+the workflow commit, verifies Git blob/SHA-256 and snapshot/tree identities, then
+uses the same preparation and build guard. Git runs only against the local
+bundle. The temporary read token is removed before Git/preparation and is absent
+from the build step. Bundles are capped at 64 MiB; both optional inputs omitted
+retain the old checkout path. Retire a bundle branch only after terminal evidence
+is saved and its commit matches that request's receipt. The API transport does
+not make source branches release inputs or bypass source validation.
