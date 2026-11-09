@@ -4,24 +4,35 @@ set -euo pipefail
 case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
-source_dir="$RUNNER_TEMP/network-source"
-git clone --no-hardlinks "$SOURCE_PACKAGE/source.git" "$source_dir"
+source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
+if [[ -z "${KHOR_NETWORK_SOURCE_DIR:-}" ]]; then
+  git clone --no-hardlinks "$SOURCE_PACKAGE/source.git" "$source_dir"
+fi
 cd "$source_dir"
 python3 - <<'PY'
 import json, os, platform, subprocess
 from pathlib import Path
 report = Path(os.environ['REPORT_DIR'])
 source = json.loads((report / 'source.json').read_text())
+if os.environ.get('KHOR_NETWORK_SOURCE_DIR'):
+    cache = json.loads((report / 'source-cache.json').read_text())
+    assert cache['path'] == os.getcwd() == os.environ['KHOR_NETWORK_SOURCE_DIR']
+    assert cache['tree'] == source['tree'] and cache['tracked_clean'] is True
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == source['build_commit']
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip() == source['tree']
 (report / 'environment.json').write_text(json.dumps(dict(task=os.environ['DEV_TASK'], system=platform.platform(),
     rust=subprocess.check_output(['rustc', '--version'], text=True).strip(), run_id=os.environ['GITHUB_RUN_ID'],
     control_commit=os.environ['GITHUB_SHA'], jobs=os.environ['CARGO_BUILD_JOBS']), indent=2) + '\n')
+# Preserve the mtime of the same isolated web placeholder across cached builds.
+for name, content in {
+    'apps/gui/dist/assets/index-netlab.js': '// network test fixture\n',
+    'apps/gui/dist/index.html': '<!doctype html><script type="module" src="/assets/index-netlab.js"></script>\n',
+}.items():
+    path = Path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text() != content:
+        path.write_text(content)
 PY
-# Netlab does not serve the face; same isolated placeholder as scripts/netlab.sh.
-mkdir -p apps/gui/dist/assets
-printf '// network test fixture\n' > apps/gui/dist/assets/index-netlab.js
-printf '<!doctype html><script type="module" src="/assets/index-netlab.js"></script>\n' > apps/gui/dist/index.html
 repeat_netlab() {
   local status=0 repeat
   for repeat in 1 2 3; do

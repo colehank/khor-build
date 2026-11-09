@@ -16,6 +16,76 @@ spec.loader.exec_module(runner)
 
 
 class NetworkSSHRunnerTest(unittest.TestCase):
+    def test_stable_source_cache_keeps_unchanged_mtimes_and_refuses_tracked_edits(self):
+        # Tiny Git data only: no Cargo, compiler, product or network lab runs.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / 'cache').mkdir()
+            (root / 'owner.json').write_text(json.dumps(dict(runner.OWNER, uid=os.getuid())))
+            fixture = root / 'fixture'
+            fixture.mkdir()
+            env = dict(os.environ, GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',
+                       GIT_AUTHOR_NAME='Test', GIT_AUTHOR_EMAIL='test@localhost',
+                       GIT_COMMITTER_NAME='Test', GIT_COMMITTER_EMAIL='test@localhost')
+            def git(*args):
+                return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(fixture), *args],
+                                               env=env, text=True).strip()
+            git('init', '-q')
+            (fixture / 'lib.rs').write_text('unchanged fixture data\n')
+            (fixture / 'README.md').write_text('first\n')
+            git('add', '.')
+            git('commit', '-qm', 'fixture')
+            def prepare(name):
+                run = root / name
+                (run / 'package').mkdir(parents=True)
+                (run / 'report').mkdir()
+                git('clone', '--bare', '--quiet', str(fixture), str(run / 'package/source.git'))
+                expected = dict(build_commit=git('rev-parse', 'HEAD'), tree=git('rev-parse', 'HEAD^{tree}'))
+                (run / 'package/source.json').write_text(json.dumps(expected))
+                return run
+            first = prepare('one')
+            runner.cached_source(root, first, env)
+            cached = root / 'cache/source'
+            self.assertEqual(env['KHOR_NETWORK_SOURCE_DIR'], str(cached))
+            self.assertFalse(json.loads((first / 'report/source-cache.json').read_text())['reused'])
+            os.utime(cached / 'lib.rs', ns=(1_600_000_000_000_000_000,) * 2)
+            stamp = (cached / 'lib.rs').stat().st_mtime_ns
+            second = prepare('two')
+            runner.cached_source(root, second, env)
+            self.assertEqual((cached / 'lib.rs').stat().st_mtime_ns, stamp)
+            self.assertTrue(json.loads((second / 'report/source-cache.json').read_text())['reused'])
+            (fixture / 'README.md').write_text('second\n')
+            git('add', 'README.md')
+            git('commit', '-qm', 'documentation only')
+            third = prepare('three')
+            runner.cached_source(root, third, env)
+            self.assertEqual((cached / 'lib.rs').stat().st_mtime_ns, stamp)
+            self.assertEqual((cached / 'README.md').read_text(), 'second\n')
+            (cached / 'lib.rs').write_text('preserve this unexpected tracked edit\n')
+            with self.assertRaisesRegex(ValueError, 'modified source cache'):
+                runner.cached_source(root, third, env)
+            self.assertEqual((cached / 'lib.rs').read_text(), 'preserve this unexpected tracked edit\n')
+
+    def test_stable_source_cache_preserves_unowned_directories_and_symlinks(self):
+        for linked in [False, True]:
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / 'cache').mkdir()
+                preserved = root / 'preserved'
+                preserved.mkdir()
+                (preserved / 'keep').write_text('another owner\n')
+                cached = root / 'cache/source'
+                if linked:
+                    cached.symlink_to(preserved, target_is_directory=True)
+                else:
+                    cached.mkdir()
+                    (cached / 'keep').write_text('another checkout\n')
+                with self.assertRaisesRegex(ValueError, 'source cache'):
+                    runner.cached_source(root, root / 'unused-run', {})
+                self.assertEqual((preserved / 'keep').read_text(), 'another owner\n')
+                if not linked:
+                    self.assertEqual((cached / 'keep').read_text(), 'another checkout\n')
+
     def test_build_environment_neither_forwards_auth_nor_writes_cargo_to_home(self):
         with patch.dict(os.environ, {'HOME': '/nfs/user', 'SSH_AUTH_SOCK': '/personal/agent',
                                    'GH_TOKEN': 'private', 'GITHUB_TOKEN': 'private',

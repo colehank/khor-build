@@ -16,7 +16,7 @@ from urllib.request import urlopen
 
 
 OWNER = {'schema': 1, 'owner': 'khor feat/net netlab'}
-TASKS = {'net-node', 'netlab-measure-check', 'netlab-cpu-check', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-hop-ownership', 'netlab-hop-lifecycle', 'netlab-smoke', 'netlab-recovery', 'netlab-dynamic', 'netlab-compare',
+TASKS = {'net-unit', 'net-node', 'netlab-measure-check', 'netlab-cpu-check', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-hop-ownership', 'netlab-hop-lifecycle', 'netlab-smoke', 'netlab-recovery', 'netlab-dynamic', 'netlab-compare',
          'netlab-hop', 'netlab-stability', 'netlab-stalls', 'netlab-diagnostic',
          'netlab-hop-diagnostic', 'netlab'}
 RUST_COMPONENTS = {
@@ -161,6 +161,52 @@ def materialize(run, job, env):
     record(run / 'report/source.json', source)
 
 
+def cached_source(root, run, env):
+    """Keep unchanged source paths/mtimes under the exclusive build slot.
+
+    Never reset, clean, or remove an existing checkout. Unknown ownership,
+    symlinks and tracked edits fail before checkout or product execution.
+    """
+    cache = root / 'cache'
+    source = cache / 'source'
+    marker = cache / 'source-owner.json'
+    owner = dict(OWNER, uid=os.getuid(), purpose='stable source cache v1')
+    if cache.is_symlink() or cache.resolve() != cache or source.is_symlink() or marker.is_symlink():
+        raise ValueError('preserving an unsafe source cache path')
+    reused = source.exists()
+    if reused != marker.exists() or (marker.exists() and json.loads(marker.read_text()) != owner):
+        raise ValueError('preserving an unowned source cache')
+    if json.loads((root / 'owner.json').read_text()) != dict(OWNER, uid=os.getuid()):
+        raise ValueError('unowned executor root')
+    expected = json.loads((run / 'package/source.json').read_text())
+    package = run / 'package/source.git'
+    started = time.monotonic()
+    def git(*args):
+        return subprocess.check_output(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(source), *args],
+                                       env=env, universal_newlines=True).strip()
+    previous = None
+    if reused:
+        if not (source / '.git').is_dir() or (source / '.git').is_symlink():
+            raise ValueError('preserving a non-standalone source cache')
+        if git('rev-parse', '--show-toplevel') != str(source) or git('status', '--porcelain', '--untracked-files=no'):
+            raise ValueError('preserving a modified source cache')
+        previous = git('rev-parse', 'HEAD')
+        git('fetch', '--no-tags', str(package), expected['build_commit'])
+    else:
+        subprocess.run(['git', 'clone', '--no-hardlinks', '--no-checkout', str(package), str(source)],
+                       check=True, env=env)
+        git('remote', 'remove', 'origin')
+    git('checkout', '--detach', expected['build_commit'])
+    if git('rev-parse', 'HEAD^{tree}') != expected['tree'] or git('status', '--porcelain', '--untracked-files=no'):
+        raise ValueError('cached source identity mismatch')
+    if not reused:
+        record(marker, owner)
+    record(run / 'report/source-cache.json', dict(schema=1, path=str(source), reused=reused,
+           previous_commit=previous, build_commit=expected['build_commit'], tree=expected['tree'],
+           tracked_clean=True, elapsed_seconds=time.monotonic() - started))
+    env['KHOR_NETWORK_SOURCE_DIR'] = str(source)
+
+
 def main():
     run = Path(__file__).resolve().parent.parent
     root = run.parent.parent
@@ -198,6 +244,7 @@ def main():
             path.mkdir(parents=True, exist_ok=True)
         result['phase'] = 'materialize'
         materialize(run, job, env)
+        cached_source(root, run, env)
         result['phase'] = 'toolchain'
         record(report / 'execution.json', result)
         toolchain(root, env, report)
