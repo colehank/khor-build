@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: test a materialized source snapshot on disposable Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-vendor|net-congestion|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="$RUNNER_TEMP/network-source"
@@ -30,7 +30,7 @@ repeat_netlab() {
   done
   return "$status"
 }
-if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor ]]; then
+if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion ]]; then
   if ! cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
     cargo fmt --all
     git diff --binary > "$REPORT_DIR/format.patch"
@@ -52,6 +52,18 @@ if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-v
     cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
       --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
       --lib khor_ 2>&1 | tee "$REPORT_DIR/iroh-home-unit.log"
+  elif [[ "$DEV_TASK" == net-congestion ]]; then
+    # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
+    # and repeat sequentially, without another timed case sharing the runtime.
+    printf '{"measurement_version":2,"layer":"noq","slo":false,"test_threads":1,"repeats":3,"rtt_ms":300,"loss_pct_per_direction":2,"mbit_per_direction":20,"queue_ms":200,"bulk_seconds":20,"seeds":["9e3779b97f4a7c15","2545f4914f6cdd1d"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    congestion_status=0
+    for congestion_repeat in 1 2 3; do
+      printf '[congestion-repeat] %s/3\n' "$congestion_repeat"
+      env -u CC_ONLY CC_RTT_MS=300 CC_LOSS_PCT=2 CC_MBIT=20 CC_SECS=20 \
+        cargo test --locked -p khor-net --test congestion -- --ignored --nocapture --test-threads=1 \
+        2>&1 | tee "$REPORT_DIR/congestion-$congestion_repeat.log" || congestion_status=$?
+    done
+    exit "$congestion_status"
   else
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
     cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
