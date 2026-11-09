@@ -225,8 +225,6 @@ jobs:
     runs-on: [khor-mac-mini, khor-dev]
     timeout-minutes: 90
     env:
-      REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
-      SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -254,10 +252,13 @@ jobs:
       - name: Materialize and validate the parentless source container
         env:
           SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
+          SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
         run: python3 control/scripts/prepare-development.py snapshot "$SOURCE_PACKAGE"
       - name: Run under the existing shared admission guard
         env:
           DEV_TASK: ${{ inputs.task }}
+          REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
+          SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
         run: |
           set -euo pipefail
           source /Users/z13/khor-builder/env.sh
