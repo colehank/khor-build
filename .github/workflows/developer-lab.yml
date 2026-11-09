@@ -275,6 +275,13 @@ jobs:
           npm run sticky-fade
           npm run list-scroll-ui
           PLAYWRIGHT_CHROMIUM_CHANNEL='' WORKSPACE_CONTENT_DIR="$LAB_REPORT/workspace-content" npm run workspace-content-ui
+      - name: Check delayed layout and reader scroll ownership
+        working-directory: snapshot/source/apps/gui
+        env:
+          COMPOSE_SCENARIOS: transitions
+          COMPOSE_OUT: ${{ runner.temp }}/checks/scroll-compose
+          PLAYWRIGHT_CHROMIUM_CHANNEL: ''
+        run: npm run scroll-compose
       - name: Check semantic history and message rendering
         working-directory: snapshot/source/apps/gui
         env:
