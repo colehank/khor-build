@@ -107,6 +107,7 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
                    GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@localhost")
         for task, expected_args, repeats, diagnostic, expected_status, verify_failure in [
             ("netlab-cpu-check", ["paths::cpu::", "--ignored"], 1, None, 0, False),
+            ("netlab-mobility-calibrate", ["paths::mobility::", "--ignored"], 1, None, 0, False),
             ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 6, True),
