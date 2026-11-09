@@ -189,6 +189,7 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
             ("netlab-nat-rebind-lifecycle", [], 1, "lifecycle", 7, False),
             ("netlab-nat-rebind-lifecycle", [], 2, "lifecycle", 6, True),
             ("netlab-nat-rebind-lifecycle", [], 2, "lifecycle", 0, False),
+            ("netlab-nat-rebind-lifecycle", [], 2, "lifecycle", 8, "selection"),
             ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 6, True),
@@ -226,6 +227,12 @@ Path(os.environ['MOCK_VERIFY']).write_text(json.dumps(sys.argv[1:]))
 print(json.dumps({'valid': not bool(os.environ.get('MOCK_VERIFY_FAIL'))}))
 sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
 """)
+                (source / "scripts/netlab-nat-selection.py").write_text("""import json, os, sys
+from pathlib import Path
+Path(os.environ['MOCK_SELECTION_VERIFY']).write_text(json.dumps(sys.argv[1:]))
+print(json.dumps({'passed': not bool(os.environ.get('MOCK_SELECTION_FAIL'))}))
+sys.exit(8 if os.environ.get('MOCK_SELECTION_FAIL') else 0)
+""")
                 def git(*args):
                     return subprocess.check_output(["git", "-C", str(source), *args], text=True, env=env).strip()
                 git("init", "-q")
@@ -251,9 +258,11 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                 run_env = dict(env, PATH=str(binary) + os.pathsep + env['PATH'],
                                DEV_TASK=task, SOURCE_PACKAGE=str(package), RUNNER_TEMP=str(runner), REPORT_DIR=str(report),
                                GITHUB_RUN_ID="stub", GITHUB_SHA="control-fixture", CARGO_BUILD_JOBS="2", MOCK_TRACE=str(trace),
-                               MOCK_VERIFY=str(root / 'verify.json'))
+                               MOCK_VERIFY=str(root / 'verify.json'), MOCK_SELECTION_VERIFY=str(root/'selection.json'))
                 run_env.pop("NETLAB_DIAGNOSTICS", None)
-                if verify_failure:
+                if verify_failure == 'selection':
+                    run_env['MOCK_SELECTION_FAIL'] = '1'
+                elif verify_failure:
                     run_env['MOCK_VERIFY_FAIL'] = "1"
                 elif expected_status:
                     run_env['MOCK_FAIL_FIRST'] = "1"
@@ -301,6 +310,10 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                         self.assertEqual(mode['diagnostic'], diagnostic)
                         self.assertTrue(mode['ignored'])
                     elif task.startswith('netlab-nat-rebind'):
+                        selection = root/'selection.json'
+                        self.assertEqual(selection.exists(), task=='netlab-nat-rebind-lifecycle' and expected_status in [0,8])
+                        if selection.exists():
+                            self.assertEqual(json.loads(selection.read_text()), [str(report)])
                         self.assertEqual(mode['scenario_revision'], 'node_nat_port_rebind_v1')
                         self.assertTrue(mode['ignored'])
                     elif task == 'netlab-hop-ownership':

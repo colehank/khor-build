@@ -150,6 +150,9 @@ else
     mobility_status=0
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::rebind::r1_ --ignored || mobility_status=$?
     python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
+    if [[ "$diagnostic" == lifecycle && "$mobility_status" == 0 ]]; then
+      python3 scripts/netlab-nat-selection.py "$REPORT_DIR" > "$REPORT_DIR/nat-selection-contract.json" || mobility_status=$?
+    fi
     exit "$mobility_status"
   elif [[ "$DEV_TASK" == netlab-peer-mobility || "$DEV_TASK" == netlab-peer-mobility-samples ]]; then
     check_format || exit 1
