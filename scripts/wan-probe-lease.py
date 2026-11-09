@@ -227,7 +227,8 @@ def run(configuration):
     with admission(role) as (fd, base, target):
         owned_base(base)
         source = Path(binary['path'])
-        assert source.is_absolute() and source.resolve().is_relative_to(target.resolve())
+        assert source.is_absolute()
+        source.resolve().relative_to(target.resolve())
         assert source.is_file() and not source.is_symlink() and source.stat().st_uid == os.getuid()
         assert digest(source) == binary['sha256'] and source.stat().st_size == binary['bytes']
         assert binary['source']['tree'] == config['source_tree']
