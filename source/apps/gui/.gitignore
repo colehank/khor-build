@@ -1,0 +1,14 @@
+node_modules/
+node_modules
+dist/
+src/gen/
+# tauri-build writes `schemas` on every build; `apple` is the Xcode
+# project `tauri ios init` made, checked in (docs/IOS.md) with its own
+# `.gitignore` for what a build leaves in it.
+src-tauri/gen/*
+!src-tauri/gen/apple/
+core/bindings/
+
+# Private component-test servers; removed when their process exits.
+.workspace-content-check-*/
+.terminal-links-check-*/
