@@ -112,6 +112,8 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
             ("netlab-mobility-node", ["paths::mobile::mv6_overlap_", "--ignored"], 1, None, 6, True),
             ("netlab-mobility-roam", ["paths::roam::roam_", "--ignored"], 1, None, 7, False),
             ("netlab-mobility-roam", ["paths::roam::roam_", "--ignored"], 1, None, 6, True),
+            ("netlab-peer-mobility", ["hop::mobility::pm_", "--ignored"], 1, "lifecycle", 7, False),
+            ("netlab-peer-mobility", ["hop::mobility::pm_", "--ignored"], 1, "lifecycle", 6, True),
             ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 6, True),
@@ -195,7 +197,7 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                                      [str(report / 'netlab'), '--calibration'])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
                     self.assertTrue((report / 'attempt-calibration.json').is_file())
-                elif task in {'netlab-hop-ownership', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-mobility-node', 'netlab-mobility-roam'}:
+                elif task in {'netlab-hop-ownership', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-mobility-node', 'netlab-mobility-roam', 'netlab-peer-mobility'}:
                     self.assertEqual(json.loads((root / 'verify.json').read_text()),
                                      [str(report / 'netlab')])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
@@ -206,6 +208,10 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                     elif task == 'netlab-mobility-roam':
                         self.assertEqual(mode['scenario_revision'], 'node_replug_triad_v1')
                         self.assertEqual(mode['scenario_revisions'], ['node_v4_nat_replug_v1', 'node_dual_stack_replug_v1', 'node_v4_to_v6_replug_v1'])
+                        self.assertTrue(mode['ignored'])
+                    elif task == 'netlab-peer-mobility':
+                        self.assertEqual(mode['scenario_revision'], 'peer_relay_replug_v1')
+                        self.assertEqual(mode['diagnostic'], 'lifecycle')
                         self.assertTrue(mode['ignored'])
                     elif task == 'netlab-hop-ownership':
                         self.assertEqual(mode['diagnostic'], 'lifecycle')
