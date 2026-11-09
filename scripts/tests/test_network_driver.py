@@ -198,7 +198,8 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                                      [str(report / 'netlab')])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
                     if task == 'netlab-mobility-node':
-                        self.assertEqual(mode['scenario_revision'], 'ipv6_node_overlap_v1')
+                        self.assertEqual(mode['scenario_revision'], 'ipv6_node_overlap_pair_v1')
+                        self.assertEqual(mode['scenario_revisions'], ['ipv6_node_overlap_v1', 'ipv6_node_overlap_remote_first_v1'])
                         self.assertTrue(mode['ignored'])
                     elif task == 'netlab-hop-ownership':
                         self.assertEqual(mode['diagnostic'], 'lifecycle')
