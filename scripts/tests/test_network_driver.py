@@ -114,6 +114,9 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
             ("netlab-mobility-roam", ["paths::roam::roam_", "--ignored"], 1, None, 6, True),
             ("netlab-peer-mobility", ["hop::mobility::pm_", "--ignored"], 1, "lifecycle", 7, False),
             ("netlab-peer-mobility", ["hop::mobility::pm_", "--ignored"], 1, "lifecycle", 6, True),
+            ("netlab-nat-rebind", [], 1, None, 7, False),
+            ("netlab-nat-rebind", [], 2, None, 6, True),
+            ("netlab-nat-rebind", [], 2, None, 0, False),
             ("netlab-hop-lifecycle", ["hop::f4i_"], 3, "1", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 7, False),
             ("netlab-hop-ownership", ["hop::f4_"], 3, "lifecycle", 6, True),
@@ -128,7 +131,7 @@ sys.exit(8 if '--ignored' in sys.argv and round_index == 0 else 0)
                 root = Path(directory)
                 source = root / "source"
                 (source / "scripts").mkdir(parents=True)
-                stub = """#!/bin/bash
+                stub = r"""#!/bin/bash
 python3 - "$@" <<'STUB'
 import json, os, sys
 from pathlib import Path
@@ -136,6 +139,10 @@ path = Path(os.environ['MOCK_TRACE'])
 rows = json.loads(path.read_text()) if path.exists() else []
 rows.append(dict(args=sys.argv[1:], threads=os.environ.get('NETLAB_TEST_THREADS'), diagnostic=os.environ.get('NETLAB_DIAGNOSTICS')))
 path.write_text(json.dumps(rows))
+if sys.argv[1:]==['paths::rebind::r0_', '--ignored']:
+    calibration=Path(os.environ['NETLAB_RUN_DIR'])/'calibration'
+    calibration.mkdir(parents=True)
+    (calibration/'scenarios.log').write_text('[netlab-rebind-calibration] stub only\n'+'test result: ok. 1 passed; 0 failed;\n')
 print('[netlab-result] cpu-or-lifecycle-stub | green | no real compiler or network lab')
 sys.exit(7 if os.environ.get('MOCK_FAIL_FIRST') and len(rows) == 1 else 0)
 STUB
@@ -182,13 +189,20 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                 self.assertEqual(outcome.returncode, expected_status, outcome.stdout + outcome.stderr)
                 rows = json.loads(trace.read_text())
                 self.assertEqual(len(rows), repeats)
-                for row in rows:
-                    self.assertEqual(row['args'], expected_args)
+                for index, row in enumerate(rows):
+                    wanted = ['paths::rebind::r0_' if index == 0 else 'paths::rebind::r1_', '--ignored'] if task == 'netlab-nat-rebind' else expected_args
+                    self.assertEqual(row['args'], wanted)
                     self.assertEqual(row['threads'], '1')
                     self.assertEqual(row['diagnostic'], diagnostic)
                 mode = json.loads((report / 'measurement-mode.json').read_text())
                 self.assertFalse(mode['slo'])
-                self.assertEqual(mode['repeats'], repeats)
+                self.assertEqual(mode['repeats'], 1 if task == 'netlab-nat-rebind' else repeats)
+                if task == 'netlab-nat-rebind':
+                    self.assertTrue(mode['calibration_required'])
+                    self.assertEqual(mode['calibration_revision'], 'nat_port_rebind_calibration_v1')
+                    if expected_status == 7 and not verify_failure:
+                        self.assertFalse((root / 'verify.json').exists())
+                        continue
                 if task == 'netlab-mobility-calibrate':
                     self.assertTrue((report / 'format.log').is_file())
                     self.assertEqual(mode['measurement_revision'], 'ipv6_renumber_v1')
@@ -197,7 +211,7 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                                      [str(report / 'netlab'), '--calibration'])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
                     self.assertTrue((report / 'attempt-calibration.json').is_file())
-                elif task in {'netlab-hop-ownership', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-mobility-node', 'netlab-mobility-roam', 'netlab-peer-mobility'}:
+                elif task in {'netlab-hop-ownership', 'netlab-hop-reference', 'netlab-hop-reference-lifecycle', 'netlab-mobility-node', 'netlab-mobility-roam', 'netlab-peer-mobility', 'netlab-nat-rebind'}:
                     self.assertEqual(json.loads((root / 'verify.json').read_text()),
                                      [str(report / 'netlab')])
                     self.assertEqual(mode['measurement_revision'], 'attempt_outcomes_v4')
@@ -212,6 +226,9 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                     elif task == 'netlab-peer-mobility':
                         self.assertEqual(mode['scenario_revision'], 'peer_relay_replug_v1')
                         self.assertEqual(mode['diagnostic'], 'lifecycle')
+                        self.assertTrue(mode['ignored'])
+                    elif task == 'netlab-nat-rebind':
+                        self.assertEqual(mode['scenario_revision'], 'node_nat_port_rebind_v1')
                         self.assertTrue(mode['ignored'])
                     elif task == 'netlab-hop-ownership':
                         self.assertEqual(mode['diagnostic'], 'lifecycle')
