@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -61,6 +62,37 @@ class NetworkSSHRunnerTest(unittest.TestCase):
             runner.cached_source(root, third, env)
             self.assertEqual((cached / 'lib.rs').stat().st_mtime_ns, stamp)
             self.assertEqual((cached / 'README.md').read_text(), 'second\n')
+            # A format failure must export a patch without modifying the cache.
+            # Both executables below are stubs; no Rust or product runs locally.
+            binary = root / 'bin'
+            binary.mkdir()
+            rustc = binary / 'rustc'
+            rustc.write_text("#!/bin/sh\nprintf 'rustc stub; no compiler executed\\n'\n")
+            rustc.chmod(0o755)
+            cargo = binary / 'cargo'
+            cargo.write_text('#!' + sys.executable + '\n' + '''
+from pathlib import Path
+import sys
+if sys.argv[1:] == ['fmt', '--all', '--', '--check']:
+    sys.exit(1)
+if sys.argv[1:] == ['fmt', '--all']:
+    Path('lib.rs').write_text('formatted fixture data\\n')
+    sys.exit(0)
+sys.exit(97)
+''')
+            cargo.chmod(0o755)
+            work = third / 'work'
+            work.mkdir()
+            outcome = subprocess.run(['bash', str(Path(__file__).resolve().parents[1] / 'network.sh')],
+                                     env=dict(env, PATH=str(binary) + os.pathsep + env['PATH'],
+                                              DEV_TASK='net-unit', SOURCE_PACKAGE=str(third / 'package'),
+                                              REPORT_DIR=str(third / 'report'), RUNNER_TEMP=str(work),
+                                              GITHUB_RUN_ID='stub', GITHUB_SHA='control-fixture', CARGO_BUILD_JOBS='2'),
+                                     text=True, capture_output=True)
+            self.assertEqual(outcome.returncode, 1, outcome.stdout + outcome.stderr)
+            self.assertIn('+formatted fixture data', (third / 'report/format.patch').read_text())
+            self.assertEqual((cached / 'lib.rs').read_text(), 'unchanged fixture data\n')
+            self.assertEqual((cached / 'lib.rs').stat().st_mtime_ns, stamp)
             (cached / 'lib.rs').write_text('preserve this unexpected tracked edit\n')
             with self.assertRaisesRegex(ValueError, 'modified source cache'):
                 runner.cached_source(root, third, env)

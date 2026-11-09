@@ -41,12 +41,25 @@ repeat_netlab() {
   done
   return "$status"
 }
-if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion ]]; then
-  if ! cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
-    cargo fmt --all
-    git diff --binary > "$REPORT_DIR/format.patch"
-    exit 1
+check_format() {
+  if cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
+    return 0
   fi
+  local formatting_source="$source_dir"
+  if [[ -n "${KHOR_NETWORK_SOURCE_DIR:-}" ]]; then
+    formatting_source="$RUNNER_TEMP/network-format"
+    git clone --no-hardlinks "$SOURCE_PACKAGE/source.git" "$formatting_source" || return 1
+  fi
+  # Export a formatter patch from a disposable copy, preserving cached inputs.
+  (
+    cd "$formatting_source" || exit 1
+    cargo fmt --all >&2 || exit 1
+    git diff --binary
+  ) > "$REPORT_DIR/format.patch" || return 1
+  return 1
+}
+if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion ]]; then
+  check_format || exit 1
   if [[ "$DEV_TASK" == net-unit ]]; then
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
   elif [[ "$DEV_TASK" == net-vendor ]]; then
@@ -98,6 +111,7 @@ else
     printf '{"layer":"fixture","slo":false,"measurement_revision":"checked_affinity_v3","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::cpu::"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::cpu:: --ignored
   elif [[ "$DEV_TASK" == netlab-mobility-calibrate ]]; then
+    check_format || exit 1
     printf '{"layer":"fixture","slo":false,"measurement_revision":"ipv6_renumber_v1","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::mobility::"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::mobility:: --ignored
   elif [[ "$DEV_TASK" == netlab-hop-reference ]]; then

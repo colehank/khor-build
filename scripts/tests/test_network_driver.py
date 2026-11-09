@@ -155,7 +155,7 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                 for name, contents in {
                     "rustc": "#!/bin/sh\nprintf 'rustc stub; no compiler executed\\n'\n",
                     "unshare": "#!/bin/sh\nexit 0\n",
-                    "cargo": "#!/bin/sh\nexit 97\n",
+                    "cargo": "#!/bin/sh\nif [ \"$1\" = fmt ]; then exit 0; fi\nexit 97\n",
                 }.items():
                     path = binary / name
                     path.write_text(contents)
@@ -183,6 +183,9 @@ sys.exit(6 if os.environ.get('MOCK_VERIFY_FAIL') else 0)
                 mode = json.loads((report / 'measurement-mode.json').read_text())
                 self.assertFalse(mode['slo'])
                 self.assertEqual(mode['repeats'], repeats)
+                if task == 'netlab-mobility-calibrate':
+                    self.assertTrue((report / 'format.log').is_file())
+                    self.assertEqual(mode['measurement_revision'], 'ipv6_renumber_v1')
                 if task == 'netlab-measure-check':
                     self.assertEqual(json.loads((root / 'verify.json').read_text()),
                                      [str(report / 'netlab'), '--calibration'])
