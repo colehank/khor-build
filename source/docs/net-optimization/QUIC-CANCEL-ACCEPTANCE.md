@@ -1,0 +1,9 @@
+# 真实QUIC内容读取取消验收
+
+2026-11-10，实施前合同，尚未执行或通过。独立process IPC42753148983已绿不代表远端停止。
+
+两个fresh私有Node真实pair，A的resident经QUIC读取B的500行fixture，B已有Response barrier扣住32份已编码回复。先核A/B实际permit均0、barrier进入32。保留ClientRead所有者，abort并join全部调用任务后，5秒内两端必须均回32，B barrier不得人工release；避免把逻辑ContentCancel或释放fixture当网络取消。随后在barrier仍关闭时真实远端Begin/Cancel须答复，释放barrier后正常读128项，保留原始失败与完整同fixture红绿。
+
+实现边界：只有可放弃的内容查询Resolve/Window/Record的执行与回复准备监测QUIC SendStream::stopped；请求正常FIN只代表输入完成，不当取消。已接受的Begin/Cancel、写请求、持续job和Watch不扩大取消语义；blocking IO不能提前释放其owner。发送最终write本身已有STOP/connection error通知，owner仍随frame/真实worker生存。新合同不改已有cancel_held_responses：显式ContentCancel而调用者仍在读时，旧32回复仍应持有到完成或读侧放弃。
+
+此层两Node为真实QUIC、同一test process，不声明跨主机网络/手机或远端磁盘已被中断。若后续需要更强的same-wire/STOP证据，独立新增，不用资源回收代替其证明。
