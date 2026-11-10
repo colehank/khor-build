@@ -120,6 +120,7 @@ PYTHON
     cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
     cargo test --locked -p khor-node --lib journal::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/journal-unit.log"
     cargo test --locked -p khor-node --lib link::dial_budget -- --test-threads=1 2>&1 | tee "$REPORT_DIR/dial-budget-unit.log"
+    cargo test --locked -p khor-node --lib ipc::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-unit.log"
   fi
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
