@@ -46,3 +46,31 @@ class WanPeerTest(unittest.TestCase):
         self.assertEqual(outcomes[0]['outcome'], 'error')
         self.assertTrue(all(row['outcome']=='cancelled' for row in outcomes[1:]))
         self.assertNotIn('private bytes', str(outcomes))
+
+    def test_content_is_validated_and_all_operations_survive_transport_loss(self):
+        class Client:
+            process = type('Running', (), dict(poll=lambda self: None))()
+            calls = 0
+            def call(self, operation, **fields):
+                self.calls += 1
+                if operation=='read':
+                    return dict(peer=fields['expected_id'], marker_verified=True, elapsed_us=1)
+                if self.calls==3:
+                    return dict(peer=fields['expected_id'], marker_content_verified=True,
+                                bytes=28, elapsed_us=1)
+                raise BrokenPipeError('private content')
+        client = Client()
+        outcomes = peer.measure(client, 'a'*64, '/fixture', 2, 'wan-mac', ('read', 'read_content'))
+        self.assertEqual(len(outcomes), 4)
+        self.assertEqual([row['outcome'] for row in outcomes], ['ok', 'ok', 'error', 'error'])
+        self.assertEqual([row['operation'] for row in outcomes], ['read', 'read', 'read_content', 'read_content'])
+        self.assertNotIn('private content', str(outcomes))
+
+        class Lost(Client):
+            def call(self, operation, **fields):
+                raise BrokenPipeError('private content')
+        outcomes = peer.measure(Lost(), 'a'*64, '/fixture', 30, operations=('read', 'read_content'))
+        self.assertEqual(len(outcomes), 60)
+        self.assertEqual(outcomes[0]['outcome'], 'error')
+        self.assertTrue(all(row['outcome']=='cancelled' for row in outcomes[1:]))
+        self.assertEqual(sum(row['operation']=='read_content' for row in outcomes), 30)

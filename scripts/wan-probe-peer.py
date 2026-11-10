@@ -43,24 +43,33 @@ class ProbeClient:
         command = dict(fields, seq=self.sequence, op=operation)
         self.process.stdin.write((json.dumps(command)+'\n').encode())
         self.process.stdin.flush()
-        return self.response(self.sequence, 40 if operation=='read' else 100)
+        return self.response(self.sequence, 40 if operation in ('read', 'read_content') else 100)
 
 
-def measure(client, peer, fixture, count=30):
+def measure(client, peer, fixture, count=30, machine='wan-linux', operations=('read',)):
+    assert operations and all(op in ('read', 'read_content') for op in operations)
+    plan = [(op, index) for op in operations for index in range(count)]
     outcomes = []
-    for index in range(count):
+    for position, (operation, index) in enumerate(plan):
         began = time.monotonic_ns()
         try:
-            value = client.call('read', expected_id=peer, machine='wan-linux', fixture=fixture)
-            assert value['peer']==peer and value['marker_verified'] is True
-            outcomes.append(dict(index=index, outcome='ok', elapsed_us=value['elapsed_us'],
-                                 controller_elapsed_us=(time.monotonic_ns()-began)//1000))
+            value = client.call(operation, expected_id=peer, machine=machine, fixture=fixture)
+            assert value['peer']==peer
+            if operation=='read_content':
+                assert value['marker_content_verified'] is True and value['bytes']==29
+            else:
+                assert value['marker_verified'] is True
+            row = dict(operation=operation, index=index, outcome='ok', elapsed_us=value['elapsed_us'],
+                       controller_elapsed_us=(time.monotonic_ns()-began)//1000)
+            if operation=='read_content':
+                row.update(bytes=29, marker_content_verified=True)
+            outcomes.append(row)
         except Exception as error:
-            outcomes.append(dict(index=index, outcome='error', error_type=type(error).__name__,
+            outcomes.append(dict(operation=operation, index=index, outcome='error', error_type=type(error).__name__,
                                  controller_elapsed_us=(time.monotonic_ns()-began)//1000))
             if client.process.poll() is not None or isinstance(error, (TimeoutError, BrokenPipeError)):
-                outcomes.extend(dict(index=n, outcome='cancelled', reason='control transport unavailable')
-                                for n in range(index+1, count))
+                outcomes.extend(dict(operation=op, index=n, outcome='cancelled', reason='control transport unavailable')
+                                for op, n in plan[position+1:])
                 break
     return outcomes
 
@@ -103,9 +112,10 @@ def main():
         api('statuses/'+commit, dict(state=state, context='khor-wan/'+run_id+'/'+phase,
                                     description=description, target_url=target))
 
-    result = dict(schema=1, run_id=run_id, role='mac', source=manifest['source'],
+    result = dict(schema=2, measurement_revision='wan_paired_directory_and_content_v2',
+                  run_id=run_id, role='mac', source=manifest['source'],
                   binary_sha256=manifest['sha256'], guardian_sha256=guardian.digest(guardian_path),
-                  outcomes=[], passed=False, limits=['Paired warm directory requests; not cold connection, content transfer, mobility, phone or energy proof'])
+                  outcomes=[], passed=False, limits=['Paired warm directory and fixed 29-byte content requests; not cold connection, throughput, mobility, phone or energy proof'])
     process = None
     with guardian.admission('mac') as (fd, base, _target):
         guardian.owned_base(base)
@@ -138,10 +148,11 @@ def main():
                 result['devices'] = client.call('devices')
                 result['links_before'] = client.call('links')
                 status('ready', ready['id'])
-                result['outcomes'] = measure(client, capability['expected_id'], capability['fixture'])
+                result['outcomes'] = measure(client, capability['expected_id'], capability['fixture'],
+                                             operations=('read', 'read_content'))
                 result['links_after'] = client.call('links')
-                reads_ok = len(result['outcomes'])==30 and all(x['outcome']=='ok' for x in result['outcomes'])
-                status('reads', 'directory requests '+str(sum(x['outcome']=='ok' for x in result['outcomes']))+'/30',
+                reads_ok = len(result['outcomes'])==60 and all(x['outcome']=='ok' for x in result['outcomes'])
+                status('reads', 'directory/content '+str(sum(x['outcome']=='ok' for x in result['outcomes']))+'/60',
                        'success' if reads_ok else 'failure')
                 until = time.monotonic()+180
                 result['controller_done'] = False
@@ -186,7 +197,7 @@ def main():
                         shutil.rmtree(root/name)
                     (root/'probe').unlink()
                     (root/'worker.log').unlink()
-                manifest.update(executed=process is not None, execution_scope='isolated paired WAN directory requests')
+                manifest.update(executed=process is not None, execution_scope='isolated paired WAN directory and fixed content requests')
                 guardian.record(report/'wan-binary.json', manifest)
     print(json.dumps(dict(run_id=run_id, passed=result['passed'], outcomes=len(result['outcomes']),
                           resident_joined=result['lifecycle'].get('resident_joined'))), flush=True)
