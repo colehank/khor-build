@@ -1,0 +1,37 @@
+[package]
+name = "khor-gui-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+khor-core.workspace = true
+khor-node.workspace = true
+khor-runtime.workspace = true
+khor-commands = { path = "../../../crates/commands" }
+khor-catalog.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+base64.workspace = true
+# The terminal engine, shared with the detector (crates/detect) so one
+# emulator paints and reads the same screen (docs/handoff 终端画屏).
+vt100.workspace = true
+# TS types are generated from these structs (gen_bindings) — hand-copied
+# frontend types are the mock-drift bug at the type layer.
+ts-rs = "10"
+# Loopback HTTP skin for the dev bridge only; the app itself talks tauri.
+tiny_http = "0.12"
+# The invite's QR code (`qr`), drawn by the face as one SVG path. The
+# encoder, version and features the CLI's `khor web` block already uses:
+# no second QR crate in the tree and none on the npm side (MIT/Apache).
+qrcode = { version = "0.14.1", default-features = false }
+# Incremental digest for large-file reads (CM-C, 2026-10-11): the face
+# hashes slices as they arrive rather than after, so a binary refused
+# in slice 3 never waits for slice 4. Already in the workspace tree
+# (crates/node uses it for write_whole), so this costs no new package.
+blake3.workspace = true
+
+# The integration fixture re-executes itself through the real native MCP entry.
+[[test]]
+name = "khor_agent"
+harness = false
