@@ -264,7 +264,7 @@ PYTHON
     exit "$observer_status"
   elif [[ "$DEV_TASK" == netlab-workload-high-policy ]]; then
     check_format || exit 1
-    printf '{"layer":"node_high_policy_comparison","slo":false,"calibrated":false,"diagnostic":"off","measurement_revision":"resident_mixed_workload_high_v2","comparison_revision":"workload_high_response_priority_v1","test_threads":1,"repeats":3,"ignored":true,"guard_filter":"workload::observer::w3_","filters":["workload::wh2_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"layer":"node_high_policy_comparison","slo":false,"calibrated":false,"diagnostic":"off","measurement_revision":"resident_mixed_workload_high_v3","comparison_revision":"workload_high_response_priority_v1","test_threads":1,"repeats":3,"ignored":true,"guard_filter":"workload::observer::w3_","filters":["workload::wh2_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     export NETLAB_DIAGNOSTICS=0
     unset KHOR_NET_DIAGNOSTICS
     policy_status=0
@@ -283,7 +283,7 @@ PYTHON
     exit "$policy_status"
   elif [[ "$DEV_TASK" == netlab-workload-high ]]; then
     check_format || exit 1
-    printf '{"layer":"node_high_preflight","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_high_v2","test_threads":1,"guard_filter":"workload::observer::w3_","low_repeats":3,"high_repeats":3,"ignored":true}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"layer":"node_high_preflight","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_high_v3","test_threads":1,"guard_filter":"workload::observer::w3_","low_repeats":3,"high_repeats":3,"ignored":true}\n' > "$REPORT_DIR/measurement-mode.json"
     export NETLAB_DIAGNOSTICS=0
     unset KHOR_NET_DIAGNOSTICS
     high_status=0
