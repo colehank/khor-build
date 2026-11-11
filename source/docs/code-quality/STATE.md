@@ -1,0 +1,62 @@
+# 当前状态与历史发布记录
+
+2026-11-01最新：**第三轮已合并main并完成ship**。产品构建源 `ee7151381412e523c0018db791b1a400afee14aa`；Mac GUI95781／CLI与hinton、turing、lecun均实际更新，TestFlight **0.1.14（62）**单次上传成功。发布文档随后合入main；实际最终HEAD读发布目录release-final.json。Mac原8个列表ID及全部宿主保留，无新增失败；原生TUI点击／iPhone手势键盘与安装体验仍待真人验收。详见 [ROUND-3-RELEASE.md](ROUND-3-RELEASE.md)；机器检查点 [ROUND-3-CHECKPOINT.json](ROUND-3-CHECKPOINT.json)。临时Lab和全部本轮构建／上传槽已结束，不把正式GUI95781当临时进程清理。
+
+2026-11-01。用户已明确授权“先直接commit到main并ship”。**main已合并推送，Mac与三节点已更新；TestFlight 0.1.14（61）已实际上传成功，本次SHIP完成。** Apple处理可用性、手机安装与真人交互尚未查询／验收，不宣布34项整轮完成。原真人Mac IME、iPhone交互均转为发布后未验。
+
+## 立即恢复
+
+- 产品源 `integrate/round2@a228baef4540ac4fe03c40879d4cb50f89da69c4`，正式构建源 `main@eca881f2b30c2893b7e73f81ae1e0f5cefbe8c6c`。本次尾部仅补发布文档，不改产品。主树 `/Users/zgh/Desktop/working/khor`；协调树 `/Volumes/disk0/Khor/worktrees/current/khor-code-quality-plan`。
+- 入口证据 `/Volumes/disk0/Khor/evidence/releases/20261101-round2`，最终非作者审查 `final-release-review.json` SHA `4a4f8a0705f319192e255cbf5dad6be86b06559f7c9413f7f243086f270f7aa5`。详细交付见[ROUND-2-RELEASE](ROUND-2-RELEASE.md)、[SHIP](../SHIP.md)。
+- **所有编译、上传和远端安装执行槽均FREE。** 正式Mac GUI PID91072／出生2026-11-01 15:19:04仍是用户程序；不当作临时Lab清理。Root唯一实际集成发布者，input/reviewer已完成只读交接，无待集成产品提交。
+- Mac实际72765已结束：Cargo0，原验证脚本成员搜索错误导致wrapper1，原false保留。22765补验0；78140切换0。iOS67257归档0；54810原upload-1 wrapper2／xcodebuild70保；31607新upload-2 wrapper0／xcodebuild0、真实build61。Linux driver126041／cargo126055已结束：Cargo0，原wrapper记录Assertion false；89593补验与stage0。70279安装driver0／原onset1，49028三节点采用探测0。**不要重启这些旧handle或重复安装。**
+- 所有旧CUA/Lab绑定不可观察以免拉起App；本次正式bare executable不在CUA应用目录中，精确路径getApp返回Invalid app。正式切换沿SHIP只向fresh PID/birth/exe/5467复核的旧main79598发送SIGTERM，未向host/provider发信号。
+- 当前真实状态与后续接续以内盘 `current-runtime.json`、`current-delivery.json`、`release-checkpoint.json` 和本目录结果文件为准。旧“未授权main／先真人／正在编译／等待可用性”均是历史时点。
+
+## 已实际交付
+
+完整共同UI指纹：`khor-ui-assets:/assets/index-B55HQiJV.js`。
+
+- **Mac**：release Cargo0／1394.158s；CLI SHA `6e162eaae715c9b468a9c2479eac934963998a07aefb3743a7fa1fc181cc29a3`，GUI SHA `7af048369a2fbe2833d870e835550168735b26274e52e4c83665be3cbc3884e6`。两个实际程序均含完整76143842B MacPi（SHA `7672a1c1f29dc59b7a70d160452d9121ebe837ac0321d67e9a0bd7a34de066ef`），strict签名／源码gen/assets首尾冻结通过。新GUI91072持5467，HTTP403＋完整新UI；8个原_host/_ghost/_cagent的PID/birth/role全保，前后8会话ID与原列表全文相同。CLI已原子替换。见 `mac-qualified.json`、`mac-cutover-result.json`、`mac-release-review.json`。
+- **三节点**：hinton单jobs1／nice19／offline复用原target，Cargo0／2064.288s。Linux CLI SHA `9117de4af9fc07b0bff2c660c12fe42c27bc6085da67f9cbee3640cea68a6c7a`，完整LinuxPi SHA `89b53264b099746af37cd05feb31fcec0de36ce13034888d998904a6b74eeac4`、ELF x86_64／GLIBC最高2.30、全source/gen/dist manifest通过。一次共享NFS安装后，hinton159488、turing989677、lecun860893实际5467 listener的exe SHA均同，HTTP403＋完整UI一致。hinton/turing各2会话ID不变；lecun前后均`document transfer state busy`，保留未知会话读结果，不冒通过。见 `cluster/adoption-summary.json`、`session-comparison.json`。
+- 原Mac/Linux多字节mmap成员检查false均保留，补验改用明确 `.find(bytes,0)>=0`，没有重编或回填旧false。原onset1保留：serve已up，但serve.sh末尾空日志AND-list返回1；实际三节点采用由独立探测证明，不重启掩盖退出码。新独立缺口记[NEXT](NEXT-ROUND.md)。
+
+## TestFlight接续已完成：0.1.14（61）
+
+- 用户回复“通过了”后，按Apple协议已处理继续；同归档新upload-2实际exec31607／Xcode10898，exit0／119.853s，Upload succeeded＋EXPORT SUCCEEDED均存在；本次原位ContentDelivery提取真实build **61**。result SHA `3083addf77e2a6f26678325dfff6a6a86c76d46e48da6e398e97ae5754e4bf91`；version收据SHA `92bf22f9aa1612385cccdb42d0600d4cfd5b14d78ba2481fb3f25b1b44c648e8`。server已接受，不推断TestFlight处理完成或安装通过。
+- upload-2当前文档HEAD2a041ddd与built eca仅精确4份发布文档不同，其它实际源码全等；App完整树／.a／gen／dist／导出选项首尾不变、原进程组空、无force。复用原归档，**没有重新编译、重装Mac／集群或手工修改账号／私钥**。所有执行槽再次FREE。
+- 下列upload-1的70／协议／签名缺失是已解除的原失败，仍原样保留；旧“唯一外部阻挡／等待处理／执行upload-2”是接续前历史，不再触发重传。现无需任何发布重试。
+
+- iOS正式归档build0／681.998s，后续架构、deep strict签名、team／正式ID和profile各phase0，真实arm64 **IOS**／SDK26.5／min15.0；App与`.a`均含完整新UI。source两签名叶恢复原bytes，gen/assets不变；旧60archive/lib同FS可逆保留。见 `ios/result.json`、`product-verification.json`、`platform-verification.json`。原工具TMP非空诊断保留，不称TMP absent。
+- 正式export/upload仅尝试一次，xcodebuild70／12.359s：`PLA Update available` 与 `No signing certificate "iOS Distribution" found`。本地只读有效签名身份development1／distribution0。没有Upload succeeded／EXPORT SUCCEEDED，**该次未交付TestFlight、当时无新上传构建号**。现archive/App/lib与上传前逐SHA不变。
+- 由Apple团队Account Holder登录开发者后台，审阅并处理更新协议。Root未接受法律协议、改账号／keychain／私钥或自动重传。Apple角色要求见 https://developer.apple.com/help/account/access/roles 。协议处理后再复查自动发行签名条件，不预判缺证书一定只是协议的副作用。
+- 接续时沿现归档单次上传，另建`upload-2`结果；保留原70和原upload-1，不重建Rust来追绿。先读 `ios-upload-handoff.md`：若main只是本次发布文档后继，核Git差异仅`docs/SHIP.md`／`docs/code-quality/**`且其它源码、gen、dist、archive/App/lib完整等原输入；不要机械要求新HEAD==eca，也不能随意放宽产品源码。实际上传成功后才记录Apple分配的新build。
+
+## 原34项与真人验收
+
+功能与Clean Code具体交付见[34项总账](ROUND-2-ACCEPTANCE.md)、[结案审查](ROUND-2-CLOSEOUT-REVIEW.md)、[工程约定](ENGINEERING.md)及原任务卡。产品合并与正式构建不覆盖此前逐项实际证据，也不冒平台真人操作通过。
+
+仍未验：Mac系统中文IME的逐字组词／候选／删除／中英切换／迟到更新／Shift选区／撤销保存；真实iPhone的WK视口与底栏、加载终态与主题、列表左滑、窄工作区、固定区、三入口连续候选、自定义组合键行与软键盘。路线见[HUMAN-ACCEPTANCE](ROUND-2-HUMAN-ACCEPTANCE.md)。此次用户决定移到发布后；不重复已绿矩阵、不预开限时实例。
+
+## 存储与恢复
+
+- 本次正式SHIP复用既有 `/Volumes/disk0/Khor/caches/rust/khor-target`，jobs1／incr0／external TMP；未新增Rust target或清全局Cargo。quality target原样保护；正式缓存约117GiB的既有基线不是这轮新建。当前内盘约13.33GiB、外盘约98.74GiB可用，继续按[STORAGE](STORAGE.md)保留量＋峰值准入；5GiB仅紧急线。
+- 仅526个与外盘canonical逐字节相同的旧一轮恢复镜像改可逆symlink，内盘回收约0.45017GiB；唯一WIP、当前a228／恢复源码和用户session未动。索引 `recovery/old-mirror-offload-20261101.json`；原件均保留外盘。第一次0.55GiB选取触1500上限、preflight1且零修改，后缩0.45GiB实际0，原结果不掩。
+- Mac旧GUI／CLI回退在本次 `rollback-mac`；相同旧installed CLI只保一份canonical＋symlink引用。旧60在 `ios/previous-60.xcarchive` 与 `previous-60-libapp.a`，更早59仍原处。不复制新大payload到内盘，不为归档TMP诊断新开治理。
+- 内盘恢复入口 `/Users/zgh/Library/Caches/khor-code-quality/recovery/{STATE.md,RESUME.md,current-runtime.json,current-delivery.json,release-checkpoint.json,latest-source-bundle.json}`。disk0缺失先读RESUME，不建假挂载目录、不按摘要覆盖源。a228小bundle与原链继续保留；本次main/plan最终ref另存小bundle／Git ref收据。
+- 改写前完整STATE保留于本次 `STATE-before-release-closeout.md`（SHA见`state-closeout-lineage.json`），更早详细测试／源／私有Lab位置仍见Git历史及旧checkpoint。本页以当前事实为准，不用历史live状态重新move、stage、kill或发布。
+
+- 2026-11-01 R3-02已提交 d6114c10cd47af5890f437321f8147bf9512ba8d；最终Shell/ownership Rust、相关5组Chrome和types均实际通过。R3-03进入定向结构核查，R3-04未开始；所有本轮编译与测试槽均空闲。WebKit及Mac/iPhone仍未验，main与运行实例不变。下一动作：共享原workspace导航行并接入既有session内容标签。
+
+- 2026-11-01 最新权威检查点：R3-03已提交722120b2（原session甲板共享Git导航、bounded history、真实commit内容标签、单一preview owner及草稿保留）。Rust --lib tabs30/30、types-final、model-final、unit、history、Chrome ui-extended3四组均实际0；source hashes前后不变。原生Mac/iPhone待验，Chrome触摸模拟不等同真机。首轮Rust命令漏--lib导致额外集成测试目标构建，已停止自己的Cargo(exit130)；之后只库内定向，内盘16GiB/外盘91GiB。所有R3-03槽结束。
+- R3-04正在做：最新提交722120b2，当前只有scripts/check-workspace-content-ui.mjs的斜体/无空心圆回归断言未提交；红测exec1107。下一动作核红后修改共用TabStrip/TabSheetRows和移动甲板title样式。无其它实现并行、无agent、main/运行实例不变，无merge/ship授权。
+
+- 用户首轮验收修正已完成并提交4fede178：首次打开内容原位转换、编辑器首行避开甲板、浏览器移除工作区返回、Lab补齐正式app滚动监听。review-fixes布局5项与完整交互5组均通过，model/types/unit实际0。原95583 Lab已按PID/出生/cwd核实后关闭，新的唯一Lab为PID8946（Sun Nov  1 21:02:48 2026），exec88030，http://127.0.0.1:23836/.workspace-content-check-zlzg3G/index.html。main/用户GUI未动，无原生构建；最新资源内盘13GiB/外盘91GiB。原Lab链接和上方旧PID仅是旧时点，以JSON为准。
+
+- 用户已允许并完成单击保留与返回位置修正，代码HEAD d7e2445074a5914a25fdcc729e1b815eb0b962e3。Session预览Map及替换分支已移除，文件/提交单击保留、同目标去重，独立工作区单击预览/双击保留不变；返回位于选择器之后、内容药丸之前。session-single-click:model先红后绿，types/unit0，UI5/5、layout5/5，源hash不变。原Lab PID8946/exec88030/port23836仍在，刷新原URL即可。main未动，无merge/ship授权，无新增构建。
+
+- Session提交页返回已提交 47407b3bef5958e90c96f8deece9f4e468822630：桌面复用原导航甲板，选择器→返回→内容药丸；回到该提交的工作区且保留提交实体/阅读与收起状态，手机返回同目标。session-commit-back的red复现无按钮，geometry五组Chrome及types/unit均0。只有原Lab8946/exec88030在运行，刷新原URL，main/ship未授权。
+
+- 最终用户确认已实现并提交 1450609dc8bc36d5d080e859c92e986227781fcd：Session标签承载浏览过程，所有文件/提交/网页/地址栏/popup在原标签跳转；只有显式New增加另一枚标签，首次无标签初始化一枚。统一navigate，废止按目标新增/跨标签去重的旧选择；关闭回调不补新标签，文件行提示/草稿及提交阅读按目的地隔离。session-in-tab/model-final、unit、types-verified0，verified/report.json真实组件六组通过，源hash前后一致。原Lab8946/exec88030不变，刷新原地址；main/运行app未动，无merge/ship授权。此规则覆盖上方历史单击保留实体方案。
+
+- 返回导航的标签身份已提交 ae398aa788096c32ce28507562b7e16547995826：每个标签按自己保存的scene显示名称／图标，picker显示“新会话标签页”，打开内容后显示对应文件／提交／网页身份。顶部条、手机药丸和总览共用身份计算；不重置保留的目的地、不清草稿或阅读状态。picker-identity/pass-3/report.json六组真实Chrome组件通过，types/unit均0；原red与两次测试文案／定位器错误保留。原Lab8946/exec88030不变，main及用户App未动，无merge/ship授权。
