@@ -12,7 +12,7 @@ class KernelCalibration(unittest.TestCase):
         driver = (Path(__file__).resolve().parents[1] / 'network.sh').read_text()
         script = driver.split('# kernel TCP calibration raw validator\n', 1)[1].split('\nPYTHON', 1)[0]
         script = 'import hashlib,json,pathlib,re,sys\n' + script
-        for mode in ['success', 'missing_echo', 'duplicate_echo', 'wrong_warmup', 'wrong_bytes',
+        for mode in ['success', 'harness_prefix', 'missing_echo', 'duplicate_echo', 'wrong_warmup', 'wrong_bytes',
                      'forged_rtt', 'forged_rate', 'missing_capture', 'missing_round', 'two_summaries', 'premature_acceptance']:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -51,13 +51,15 @@ class KernelCalibration(unittest.TestCase):
                     for row in rows:
                         row.update(schema=1, revision='workload_kernel_tcp_calibration_v1')
                     text = ''.join('[netlab-workload-calibration] ' + json.dumps(row) + '\n' for row in rows)
+                    if mode == 'harness_prefix':
+                        text = 'test workload::calibration::w0_kernel_tcp_confirms ... ' + text
                     summary = 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 30 filtered out; finished in 20s\n'
                     p = root / 'netlab' / str(round_id)
                     p.mkdir(parents=True)
                     (p / 'scenarios.log').write_text(text + summary * (2 if mode == 'two_summaries' else 1))
                 result = subprocess.run([sys.executable, '-B', '-c', script, str(root)], capture_output=True, text=True)
                 evidence = json.loads((root / 'workload-calibration-contracts.json').read_text())
-                self.assertEqual(evidence['passed'], mode == 'success', result.stderr)
-                self.assertEqual(result.returncode == 0, mode == 'success', result.stderr)
+                self.assertEqual(evidence['passed'], mode in ['success', 'harness_prefix'], result.stderr)
+                self.assertEqual(result.returncode == 0, mode in ['success', 'harness_prefix'], result.stderr)
                 self.assertFalse(evidence['calibrated'])
                 self.assertTrue(evidence['qdisc_units_review_required'])

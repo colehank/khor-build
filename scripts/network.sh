@@ -222,7 +222,9 @@ report=pathlib.Path(sys.argv[1]);results=[]
 for path in sorted((report/'netlab').glob('*/scenarios.log')):
     item={'log':str(path.relative_to(report)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'valid':False,'functional_and_bounds_ok':False}
     try:
-        text=path.read_text();rows=[json.loads(line.split('] ',1)[1]) for line in text.splitlines() if line.startswith('[netlab-workload-calibration] ')]
+        text=path.read_text();marker='[netlab-workload-calibration] '
+        records=[line for line in text.splitlines() if marker in line];assert all(line.count(marker)==1 for line in records)
+        rows=[json.loads(line.split(marker,1)[1]) for line in records]
         assert rows and all(r['schema']==1 and r['revision']=='workload_kernel_tcp_calibration_v1' for r in rows)
         def one(kind):
             found=[r for r in rows if r['event']==kind];assert len(found)==1;return found[0]
