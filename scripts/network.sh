@@ -85,19 +85,45 @@ PYTHON
       exit "$wan_status"
     fi
   elif [[ "$DEV_TASK" == net-vendor ]]; then
-    # Excluded dependencies cannot run their dev-dependencies from the root
-    # workspace. Use each committed package lock, and make iroh test our noq
-    # patch rather than the registry copy. Keep the exact resolution as evidence.
+    # Each package's frozen lock and our local noq patch remain authoritative.
     cp vendor/noq-proto/Cargo.lock "$REPORT_DIR/noq-proto-Cargo.lock"
     cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log"
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
+    printf '{"suite":"vendor_full_unit_v1","include_ignored":false,"iroh_full_test_threads":1,"focused_suites_retained":true}\n' > "$REPORT_DIR/vendor-mode.json"
+    vendor_status=0
+    vendor_suite() {
+      local log="$1" status=0
+      shift
+      "$@" 2>&1 | tee "$REPORT_DIR/$log" || status=$?
+      if [[ "$vendor_status" == 0 && "$status" != 0 ]]; then vendor_status=$status; fi
+      return 0
+    }
+    vendor_suite noq-proto-unit.log cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib
+    vendor_suite iroh-path-unit.log cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
       --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
-    # The path filter omits our relay-home, QAD and interface regressions.
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
+      --lib socket::remote_map::remote_state::tests
+    vendor_suite iroh-home-unit.log cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
       --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib khor_ 2>&1 | tee "$REPORT_DIR/iroh-home-unit.log"
+      --lib khor_
+    vendor_suite iroh-full-unit.log cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
+      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
+      --lib -- --test-threads=1
+    vendor_validation=0
+    python3 - "$REPORT_DIR" <<'PYTHON' || vendor_validation=$?
+import hashlib,json,pathlib,re,sys
+report=pathlib.Path(sys.argv[1]);suites={}
+for name in ['noq-proto-unit.log','iroh-path-unit.log','iroh-home-unit.log','iroh-full-unit.log']:
+ path=report/name;raw=path.read_bytes();summaries=re.findall(r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out;',raw.decode(errors='replace'),re.M)
+ row=dict(sha256=hashlib.sha256(raw).hexdigest(),valid=False,passed=False,summaries=summaries)
+ if len(summaries)==1:
+  status,good,bad,ignored,measured,filtered=summaries[0];row.update(passed_count=int(good),failed_count=int(bad),ignored_count=int(ignored),filtered_count=int(filtered))
+  row['valid']=int(good)+int(bad)>0 and (name!='iroh-full-unit.log' or int(filtered)==0)
+  row['passed']=row['valid'] and status=='ok' and int(bad)==0
+ suites[name]=row
+result=dict(schema=1,suite='vendor_full_unit_v1',source=json.loads((report/'source.json').read_text()),suites=suites,passed=all(x['passed'] for x in suites.values()),full_N5_accepted=False,limits=['Default-feature library unit suites only; ignored, other features, integration and physical tests remain separate','Full iroh supplements both preserved focused suites; not all vendor acceptance'])
+(report/'vendor-full-contracts.json').write_text(json.dumps(result,indent=2)+'\n');sys.exit(0 if result['passed'] else 1)
+PYTHON
+    if [[ "$vendor_status" == 0 ]]; then vendor_status=$vendor_validation; fi
+    exit "$vendor_status"
   elif [[ "$DEV_TASK" == net-congestion ]]; then
     # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
     # and repeat sequentially, without another timed case sharing the runtime.
