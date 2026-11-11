@@ -264,7 +264,7 @@ PYTHON
     exit "$observer_status"
   elif [[ "$DEV_TASK" == netlab-workload-high-capacity ]]; then
     check_format || exit 1
-    printf '{"layer":"kernel_UDP","slo":false,"calibrated":false,"diagnostic":"paced_datagrams","measurement_revision":"workload_kernel_udp_capacity_v1","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::calibration::uq0_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"layer":"kernel_UDP","slo":false,"calibrated":false,"diagnostic":"paced_datagrams","measurement_revision":"workload_kernel_udp_capacity_v2","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::calibration::uq0_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     export NETLAB_DIAGNOSTICS=0
     unset KHOR_NET_DIAGNOSTICS
     high_status=0
