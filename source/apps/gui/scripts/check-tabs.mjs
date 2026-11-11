@@ -1,0 +1,1486 @@
+// The file landing's tabs, against a real mesh. No mocks: two isolated
+// homes on real UDP, the dev bridge is the real backend behind an HTTP
+// skin, the browser is the system Chrome.
+//
+// What it asserts, in the order a person would do it:
+//   1. two tabs on two machines at two paths do not cross: switching
+//      shows the other one's listing and neither has the other's rows;
+//      closing one leaves the survivor open; a reload brings them all
+//      back (localStorage), pointed where they were;
+//   2. the address bar's two segments — a machine completed and
+//      committed to a chip, then a path completed a layer at a time,
+//      and Enter really opening what was typed. A whole path pasted in
+//      goes straight there. A path that does not exist comes back as a
+//      sentence, **not as a blank pane**;
+//   3. the fresh tab offers the places this person keeps: pins on top,
+//      and pressing one points the tab at it;
+//   4. narrow (390): one screen, the switcher opens, switches and
+//      closes for real, and the body does not scroll sideways;
+//   5. the machine column is gone, and the width it spent went to the
+//      content — measured against the landing that still has one;
+//   6. zero pageerror throughout, and a 600-tall window does not
+//      overflow.
+//
+// **No Chinese literal appears below.** Words are read off the running
+// app and compared with each other; the catalog owns the text, this
+// owns the comparison.
+//
+// Run: `node scripts/check-tabs.mjs` (needs `cargo build -p khor-cli
+// -p khor-gui-core --bins` first, and system Chrome).
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { chromium } from "playwright-core";
+
+import { codexUrlOf, fakeHome, fakeUsage } from "./fake-home.mjs";
+
+const gui = fileURLToPath(new URL("..", import.meta.url));
+const repo = join(gui, "../..");
+// One fixed directory, wiped on the way in rather than minted per run.
+// It holds a copy of two ~115MB binaries, so a name carrying the pid
+// left 223MB behind every trip — nine runs of writing this file came to
+// 1.8GB on a disk other people are working on, and nothing announced
+// it. A fixed name cannot accumulate; two runs at once were never
+// possible anyway (they would fight over the ports).
+const SCRATCH = process.env.TABS_DIR ?? join(tmpdir(), "khor-tabs");
+/**
+ * When this run started, printed beside every file it writes.
+ *
+ * **The fixed directory above fixed one thing and left another.** Every
+ * run overwrites the same names, so a screenshot path quoted in a report
+ * still goes stale the moment somebody re-runs — it just points at the
+ * right *kind* of picture now instead of the wrong one. A stamp on the
+ * same line means the quote carries which run it came from, and a reader
+ * can tell at a glance whether the file in front of them is that one.
+ * (tabs-node's catch, after a path in a report of mine went stale
+ * exactly this way.)
+ */
+const STAMP = new Date().toTimeString().slice(0, 8);
+const shot = (name) => `${join(SCRATCH, name)} (run ${STAMP})`;
+const RUN = join(SCRATCH, "run");
+const KHOR = join(RUN, "khor");
+const BRIDGE = join(RUN, "bridge");
+// Away from 1430/1431 (the developer's own pair) and 1442/1443 (the
+// smoke run's), so all three can be up at once without any of them
+// measuring somebody else's node.
+const BRIDGE_PORT = Number(process.env.BRIDGE_PORT ?? 1447);
+const VITE_PORT = Number(process.env.VITE_PORT ?? 1446);
+const A = join(SCRATCH, "alpha");
+const B = join(SCRATCH, "beta");
+
+// **Not the operator's `HOME`** (`fake-home.mjs`, 测试绝不碰真身份): every
+// process here gets a scratch home with a fake Claude login, and a fake
+// usage endpoint that counts any request carrying anything else.
+const usage = await fakeUsage();
+const FAKE_HOME = join(SCRATCH, "home");
+const homeEnv = (dir, name) => {
+  const e = { ...process.env, HOME: FAKE_HOME, KHOR_CLAUDE_USAGE_URL: usage.url, KHOR_CODEX_USAGE_URL: codexUrlOf(usage.url), KHOR_NO_MDNS: "1", KHOR_HOME: dir, KHOR_NAME: name };
+  delete e.KHOR_SESSION;
+  return e;
+};
+const envA = homeEnv(A, "alpha");
+const envB = homeEnv(B, "beta");
+
+const children = [];
+function run(cmd, args, env, name, cwd) {
+  // Own process group, so cleanup kills the whole tree — killing an npx
+  // wrapper alone orphans the server underneath it.
+  const c = spawn(cmd, args, { env, cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  c.stderr.on("data", (d) => process.stderr.write(`[${name}] ${d}`));
+  children.push(c);
+  return c;
+}
+function cli(env, ...args) {
+  let last;
+  for (let i = 0; i < 5; i++) {
+    try {
+      return execFileSync(KHOR, args, { env, encoding: "utf8", timeout: 30_000 });
+    } catch (e) {
+      last = e;
+      execFileSync("/bin/sleep", ["0.4"]);
+    }
+  }
+  throw new Error(`khor ${args.join(" ")} failed 5x: ${last?.stderr || last}`);
+}
+async function until(what, ms, f, step = 300) {
+  const deadline = Date.now() + ms;
+  let last;
+  for (;;) {
+    try {
+      last = await f();
+      if (last) return last;
+    } catch (e) {
+      last = e;
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, step));
+  }
+  throw new Error(`timed out waiting for: ${what} (last: ${last})`);
+}
+const fails = [];
+const fail = (m) => {
+  fails.push(m);
+  console.error(`  FAIL ${m}`);
+};
+const ok = (m) => console.log(`  ok   ${m}`);
+
+async function cleanup() {
+  for (const c of children) {
+    try {
+      process.kill(-c.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+}
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => void cleanup().finally(() => process.exit(130)));
+}
+
+// ── 0) the shell does not know what a disk is ──────────────────────
+//
+// Static, and first, because it needs nothing standing up — and because
+// it is the one claim the rest of this file cannot make. Every assertion
+// below would pass just as well on a shell with `fetchLs` wired straight
+// into it; what would be gone is the reason the browser landing can be a
+// descriptor instead of a second copy (docs/design-system/guidelines/60-browse-shell.md).
+//
+// **The probe is proved alive first**: the same finder is pointed at the
+// instance, which must name those very things. Without that, "the shell
+// mentions no disk" and "this grep is looking in the wrong place" read
+// exactly the same (the `.nav-badge` lesson).
+{
+  const SHELL = join(gui, "src/browse");
+  // What only a disk has. Not a vocabulary list — these are the four
+  // calls and types that would mean the shell had learned about one.
+  const DISK = /\b(fetchLs|fetchDirPins|DirListing|DirRow)\b/;
+  const INSTANCE = /from "@\/views\//;
+  const shellFiles = readdirSync(SHELL).filter((f) => /\.tsx?$/.test(f));
+  if (shellFiles.length < 5) fail(`probe dead: only ${shellFiles.length} files in src/browse`);
+  // **Counted, not just reported.** The first spelling printed its "ok"
+  // line whenever the probe was alive, so a run that had just failed on
+  // a real violation printed the failure and then a sentence saying the
+  // shell was clean — a reassurance standing right beside the thing it
+  // contradicts, which is worse than saying nothing. Caught by running
+  // the gate against an injected `fetchLs`, which is also how it was
+  // proved to go red at all.
+  const before = fails.length;
+  for (const f of shellFiles) {
+    const text = readFileSync(join(SHELL, f), "utf8");
+    if (DISK.test(text)) fail(`the shell knows about a disk: src/browse/${f}`);
+    if (INSTANCE.test(text)) fail(`the shell imports an instance: src/browse/${f}`);
+  }
+  // **The positive control moved on 2026-09-11** (工作区替代文件). It
+  // used to be `FilesKind.tsx`, the shell's disk instance, which is
+  // gone with the landing it served. `FilesPane.tsx` is the same code
+  // under a different owner — a workspace's file tree rather than a
+  // browsing tab's body — and it names the same four symbols, so it
+  // proves the finder is alive for exactly the reason the old one did.
+  const kindFile = readFileSync(join(gui, "src/views/FilesPane.tsx"), "utf8");
+  if (!DISK.test(kindFile)) fail("probe dead: the finder does not even match the files pane");
+  else if (fails.length === before) {
+    ok(`the shell (${shellFiles.length} files) names no disk; the pane does`);
+  }
+}
+
+// ── 0b) 加载中的那一圈什么时候熄 (docs/SHELL.md 第十二轮) ───────────
+//
+// **The half of the rule no gate can reach through the product.** A row
+// breathes while its page loads and stops after half a minute of hearing
+// nothing more (第十二轮 第 2 条:「超过 30 秒没等到 finished 也要灭」) —
+// and the events that start it come from the app's own child webview,
+// which no gate here has: every one of them drives the face in Chrome.
+// The Khor-errand rule has no runtime imports and takes its clock as input
+// (`src/browse/loading-rule.ts`), and this drives it with a clock of its
+// own. The live section further down measures what the running face does
+// with it.
+//
+// This section checks Khor errands only. Native page:navigation snapshots
+// and true WK progress are covered separately, not by this Chrome mesh.
+{
+  const rule = await import(new URL("../src/browse/loading-rule.ts", import.meta.url));
+  const T = 1_000_000;
+  const one = rule.started(rule.NONE, "tab-a", T);
+  const said = {
+    ceiling: rule.CEILING_MS,
+    atOnce: rule.loading(one, "tab-a", T),
+    justInside: rule.loading(one, "tab-a", T + rule.CEILING_MS - 1),
+    atTheCeiling: rule.loading(one, "tab-a", T + rule.CEILING_MS),
+    somebodyElse: rule.loading(one, "tab-b", T),
+    finished: rule.loading(rule.ended(one, "tab-a"), "tab-a", T + 1),
+    // A page that navigates again is a new load: the ceiling counts from
+    // the last thing heard, not from the first.
+    restarted: rule.loading(rule.started(one, "tab-a", T + 20_000), "tab-a", T + 45_000),
+    sweptOut: rule.alive(one, T + rule.CEILING_MS).size,
+    sweptKept: rule.alive(one, T + 1).size,
+    // Nothing expired must hand back the very same map, or a sweep on a
+    // beat would re-render the list forever.
+    sameWhenNothingExpired: rule.alive(one, T + 1) === one,
+  };
+  console.log(`  rule ${JSON.stringify(said)}`);
+  const want = {
+    ceiling: 30_000,
+    atOnce: true,
+    justInside: true,
+    atTheCeiling: false,
+    somebodyElse: false,
+    finished: false,
+    restarted: true,
+    sweptOut: 0,
+    sweptKept: 1,
+    sameWhenNothingExpired: true,
+  };
+  const wrong = Object.keys(want).filter((k) => said[k] !== want[k]);
+  if (wrong.length) {
+    fail(
+      `the loading rule answers ${JSON.stringify(Object.fromEntries(wrong.map((k) => [k, said[k]])))} ` +
+        `where it should answer ${JSON.stringify(Object.fromEntries(wrong.map((k) => [k, want[k]])))} — ` +
+        "「超过 30 秒没等到 finished 也要灭」 (src/browse/loading-rule.ts)",
+    );
+  } else ok("a row breathes from the start, stops on finished, and stops by itself after 30s");
+}
+
+let browser;
+try {
+  rmSync(SCRATCH, { recursive: true, force: true });
+  mkdirSync(RUN, { recursive: true });
+  fakeHome(FAKE_HOME, usage.url);
+  for (const [built, here] of [
+    [join(repo, "target/debug/khor"), KHOR],
+    [join(repo, "target/debug/bridge"), BRIDGE],
+  ]) {
+    if (!existsSync(built)) {
+      throw new Error(`${built} is not built — cargo build -p khor-cli -p khor-gui-core --bins`);
+    }
+    copyFileSync(built, here);
+    chmodSync(here, 0o755);
+  }
+  for (const d of [A, B]) mkdirSync(d, { recursive: true });
+
+  // Two trees to browse, one on each machine, each with a directory
+  // whose name exists nowhere else — so "this listing is that machine's"
+  // is provable from what is on screen rather than from a count.
+  const treeA = join(A, "tree-alpha");
+  const treeB = join(B, "tree-beta");
+  mkdirSync(join(treeA, "inner-alpha"), { recursive: true });
+  mkdirSync(join(treeB, "inner-beta"), { recursive: true });
+  writeFileSync(join(treeA, "inner-alpha", "only-on-alpha.txt"), "a");
+  writeFileSync(join(treeB, "inner-beta", "only-on-beta.txt"), "b");
+
+  console.log("standing up two homes…");
+  run(KHOR, ["serve"], envA, "serve-a");
+  await until("alpha endpoint", 20_000, () => existsSync(join(A, ".khor/endpoint.json")));
+  const ticket = cli(envA, "invite").trim().split("\n").pop().trim();
+
+  const bridge = run(BRIDGE, [], { ...envB, BRIDGE_PORT: String(BRIDGE_PORT) }, "bridge");
+  let bridgeGone = null;
+  bridge.on("exit", (code) => (bridgeGone = `bridge exited with ${code}`));
+  let bridgeReady = false;
+  bridge.stdout.on("data", (d) => (bridgeReady ||= String(d).includes(`:${BRIDGE_PORT}`)));
+  await until(`our own bridge on ${BRIDGE_PORT}`, 20_000, () => {
+    if (bridgeGone) throw new Error(`${bridgeGone} — is the port already taken?`);
+    return bridgeReady;
+  });
+  await until("beta endpoint", 20_000, () => existsSync(join(B, ".khor/endpoint.json")));
+  cli(envB, "pair", ticket);
+  await until("alpha in beta's table", 30_000, () => cli(envB, "devices").includes("alpha"));
+
+  const vite = run(
+    "npx",
+    ["vite", "--port", String(VITE_PORT), "--strictPort"],
+    process.env,
+    "vite",
+    gui,
+  );
+  vite.stdout.on("data", () => {});
+  await until("vite up", 60_000, async () => {
+    const r = await fetch(`http://localhost:${VITE_PORT}/`).catch(() => null);
+    return r?.ok;
+  });
+
+  browser = await chromium.launch({
+    channel: "chrome",
+    headless: true,
+    args: ["--no-proxy-server"],
+  });
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const thrown = [];
+  page.on("pageerror", (e) => thrown.push(String(e)));
+  const url = `http://localhost:${VITE_PORT}/?bridge=${BRIDGE_PORT}`;
+  await page.goto(url);
+
+  const rail = (tab) => page.locator(`[data-rail-item][data-landing="${tab}"]`);
+  // Reach a landing as a *switch*, never a re-click: pressing the open
+  // sessions/devices glyph now collapses its list (App.tsx 再点收起,
+  // 2026-09-02), and this gate re-opens the same landing across
+  // sections. Hop through the sibling when already there so the return
+  // leaves the list expanded (the width reads below depend on it).
+  // Browsing landings do not toggle and pass through unchanged.
+  const go = async (tab) => {
+    if (
+      (tab === "sessions" || tab === "devices") &&
+      (await rail(tab).getAttribute("data-on").catch(() => null)) === "true"
+    ) {
+      await rail(tab === "sessions" ? "devices" : "sessions").click();
+      await page.waitForTimeout(200);
+    }
+    await rail(tab).click();
+  };
+  // ── 1–7) ⚠️ **Tombstone: the disk kind's half of this gate,
+  //        2026-09-12** (工作区批6).
+  //
+  // Seven sections and about four hundred lines browsed a directory
+  // through tabs, a strip, a switcher and an address bar. **Their
+  // subject left on 2026-09-11** (工作区替代文件) and they were kept
+  // red on purpose for a day, throwing rather than skipping, because
+  // deleting a real-wire gate is a decision to take deliberately.
+  //
+  // **What they were waiting for did not happen, and that is the
+  // decision being recorded here.** The note said they wait for the
+  // code kind — VS Code as the browsing shell's second customer. Batch
+  // 5 built VS Code and did not make it a kind: every tab in that
+  // shell names an exit machine and an editor has none, so it lives in
+  // the workspace's middle column instead (docs/handoff/001.md 批5).
+  // The shell now has exactly one customer, and a gate proving that
+  // one shape serves two has nothing to prove.
+  //
+  // **What is lost, named rather than quietly dropped:**
+  //
+  //   - two tabs on two machines with two paths, and no crossing;
+  //   - closing one and finding the other, across a reload;
+  //   - the address bar's two segments, a paste, and its refusal;
+  //   - narrow: one screen and a switcher that really switches;
+  //   - a short window, the page's own errors, and not flashing a lie
+  //     on the way back.
+  //
+  // The tab machinery underneath is still exercised by section 8,
+  // which drives the same shell with pages in it — so what went is the
+  // second *instance*, not the shell. If a second kind ever arrives,
+  // this is the file it comes back to.
+
+
+  console.log("\n7) the other landings are where they were");
+  for (const tab of ["sessions", "devices"]) {
+    await go(tab);
+    await until(`the ${tab} pane`, 10_000, async () =>
+      (await page.locator("[data-list]").getAttribute("aria-label")) ===
+      (await rail(tab).getAttribute("aria-label")),
+    );
+    const bar = await page.locator("[data-pane-bar]").count();
+    if (bar !== 1) fail(`the ${tab} landing lost its pane bar`);
+    else ok(`${tab}: list pane + pane bar, unchanged`);
+    await page.screenshot({ path: join(SCRATCH, `${tab}.png`) });
+  }
+  //   …and a machine row still opens that machine's card. **Not
+  //   belt-and-braces**: the files landing used to be a third consumer
+  //   of `DevicesList.onOpen`, and taking it away rewrote that prop's
+  //   branch — so "the card still opens" is exactly the thing that edit
+  //   could have broken, and a pane bar being present says nothing
+  //   about it. (`smoke.mjs` §23 asserts the same; this is the cheap
+  //   copy that can be run on its own.)
+  await go("devices");
+  await until("machines on the devices pane", 10_000, async () =>
+    (await page.locator('[data-device="alpha"] [data-row-open]').count()) === 1,
+  );
+  await page.locator('[data-device="alpha"] [data-row-open]').click();
+  //   `[data-machine-card]`, not `[data-machine-id]`: the id stepped
+  //   behind a copy button in 2ef4750 and the attribute went with it.
+  //   Written down because this probe was first spelled the old way and
+  //   went red — reading, for a few minutes, exactly like "the tabs work
+  //   broke the machine card". An empty match says "I did not find it",
+  //   never "it is not there".
+  try {
+    await until("alpha's card", 10_000, async () =>
+      (await page.locator("[data-machine-card]").count()) === 1,
+    );
+    ok("a machine row still opens that machine's card");
+  } catch {
+    fail("a machine row no longer opens its card");
+  }
+  console.log(`     screenshots in ${SCRATCH} (run ${STAMP}): ${["sessions", "devices"].join(".png, ")}.png`);
+
+  // ── 8) the same shell, a second time, with pages in it ────────────
+  //
+  // **What is worth asserting here is only what differs.** Tabs, the
+  // strip, the switcher, the store and the widths are the shell's, and
+  // the sections above proved them once; running the identical checks a
+  // second time would measure the same code and call it two results.
+  // What is new is the three places the two kinds genuinely part
+  // company — the words, what completes the second segment, and who
+  // spends the borrow — plus the one structural fact that the second
+  // landing exists at all.
+  console.log("\n8) the browser landing, through the same shell");
+  await page.setViewportSize({ width: 1200, height: 800 });
+  const openBrowser = async () => {
+    // Browser is past the fourth landing, so on the narrow bar it lives
+    // behind「…」(App.tsx `NARROW_SHOWN`, 2026-09-02) — two presses
+    // there, one on the wide column where every landing has a glyph.
+    // Wait for the rail to settle before deciding which: `.count()`
+    // does not auto-wait, and reading it a tick before the wide rail
+    // re-rendered once sent a wide open down the narrow (fold) path.
+    await until("the rail to settle", 10_000, async () =>
+      (await rail("browser").count()) + (await page.locator("[data-rail-more]").count()) > 0,
+    );
+    //   ⚠️ **Decide and press in one attempt, and retry the whole
+    //   attempt.** The wait above is satisfied by *either* shape, so on
+    //   a viewport change it can pass while the wide rail is still on
+    //   screen — and then the branch presses a button the narrow
+    //   re-render is about to remove. Measured 2026-09-06 at the
+    //   390-wide stop: `element was detached from the DOM` on a rail
+    //   button playwright had just resolved, and on later runs the
+    //   locator never resolving at all. **It reproduces at
+    //   `853447b` too**, so it is this walk's race and not the card's.
+    // **Already there is already there.** Pressing the open landing's
+    // own glyph is 「put its column away」 since docs/SHELL.md 第 4 条,
+    // and 浏览 joined that rule in 批二 when its tabs became the column
+    // — so a call site that means 「be on the browser landing」 must not
+    // spell it as a press. This is the same correction `check-face`'s
+    // `open()` helper carries, and it is the second place a hand-written
+    // 「which landings toggle」 turned out to be living.
+    if ((await rail("browser").getAttribute("data-on").catch(() => null)) === "true") {
+      return;
+    }
+    for (let i = 0; ; i += 1) {
+      try {
+        if ((await rail("browser").count()) === 0) {
+          await page.locator("[data-rail-more]").click({ timeout: 4_000 });
+          await page.locator('[data-more-landing="browser"]').click({ timeout: 4_000 });
+        } else {
+          await rail("browser").click({ timeout: 4_000 });
+        }
+        break;
+      } catch (e) {
+        if (i >= 4) throw e;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    await until("the browser landing", 10_000, async () =>
+      (await page.locator('[data-browse-landing="page"]').count()) === 1,
+    );
+  };
+  //    **The other half of this comparison moved on 2026-09-12.** It
+  //    used to be the files landing measured before and after its
+  //    machine column; that landing is gone, so the width a list pane
+  //    costs is read off one that still has one. Same claim, live
+  //    subject: a landing that browses spends none of its width on a
+  //    column, and the content is wider for it.
+  await go("devices");
+  // Waited for by the list pane, which section 7 just proved appears,
+  // rather than by the detail: `[data-screen]` is re-keyed on every
+  // screen change, so a count read mid-swap is a count of nothing.
+  await until("the devices landing", 10_000, async () =>
+    (await page.locator("[data-list]").count()) === 1,
+  );
+  // **What a list pane costs, computed rather than looked up.** The
+  // detail area is what the window has left after the rail and the
+  // list, and those two are the elements this app actually draws —
+  // `[data-screen]` is re-keyed on every screen change and is not
+  // reliably in the document to measure.
+  const detailWide = await page.evaluate(() => {
+    const w = (sel) => {
+      const el = document.querySelector(sel);
+      return el ? el.getBoundingClientRect().width : 0;
+    };
+    // The rail is the nav holding the landing glyphs — found through
+    // one of its own items rather than by the tag, because `nav` is not
+    // a promise this app makes and `[data-rail-item]` is.
+    const rail = document.querySelector("[data-rail-item]")?.closest("nav");
+    const railW = rail ? rail.getBoundingClientRect().width : 0;
+    return Math.round(window.innerWidth - railW - w("[data-list]"));
+  });
+  await openBrowser();
+  // ⚠️ **Tombstone: this asked for the opposite until 2026-09-20.** It
+  // read 「the browser landing still paints a list pane」 and 「content
+  // gained N」 — the claim being that a 浏览型 landing spends none of
+  // its width on a column. The user overturned it (docs/SHELL.md 第 2
+  // 条:「浏览器改版为侧边栏. 标签页移动到侧边栏, 参考chrome的最新模式」),
+  // and the column it has now is not the one that claim was about: what
+  // was refused was a permanent column of **machines**, answering a
+  // question the tab settles the moment it opens. A column of **tabs**
+  // is the thing a person watches here.
+  //
+  // So the measurement is kept and its sign is flipped: the landing
+  // draws the shell's pane under its own name, and its content is what
+  // is left beside it. **The section is not deleted**, because「the
+  // browser has a column now」is exactly the kind of change that should
+  // have to walk past a gate that used to say otherwise.
+  if ((await page.locator("[data-list]").count()) !== 0) {
+    fail("the browser landing paints the sessions pane's marker — its column answers to [data-browse-tabs]");
+  } else ok("the browser landing draws no [data-list]");
+  const column = await page.locator("[data-browse-tabs]").count();
+  if (column !== 1) {
+    fail(`the browser landing drew ${column} tab column(s) — 「标签页移动到侧边栏」 (src/browse/BrowseLanding.tsx)`);
+  } else ok("the browser landing's tabs are a column");
+  const pageWide = await page.evaluate(() => {
+    const w = (sel) => {
+      const el = document.querySelector(sel);
+      return el ? el.getBoundingClientRect().width : 0;
+    };
+    // The column stands in the left block since 第十三轮 (docs/SHELL.md),
+    // outside the landing's own box — what the landing spans is the page.
+    return Math.round(w('[data-browse-landing="page"]'));
+  });
+  // The two landings spend the same room on a column, because it is the
+  // same component at the same seam (`components/ListPane`, 第 6 条).
+  // Measured rather than assumed: a column that drifted a few pixels
+  // from the other would be two widths wearing one name.
+  if (Math.abs(pageWide - detailWide) > 2) {
+    fail(
+      `the browser's page has ${pageWide} beside its column while a list pane leaves ${detailWide} — ` +
+        "one shell, one seam, one width (src/components/ListPane.tsx)",
+    );
+  } else {
+    ok(`the column leaves ${pageWide}, the same room a list pane leaves (${detailWide})`);
+  }
+
+  //    **The words are this landing's own.** Read off the two landings
+  //    and required to differ — never spelled here, the catalog owns
+  //    them. This is the assertion the first cut of the browser kind
+  //    would have failed: it mounted correctly and said 「目录」.
+  //    **Read from whichever state the bar is in.** The name rides the
+  //    box when a tab is fresh and the resting face when it is pointed
+  //    somewhere, and by this point in the run the files landing is
+  //    pointed somewhere — the first spelling looked only for the box,
+  //    found nothing, and reported "an address bar with no name" about a
+  //    bar that was sitting right there wearing it.
+  const wordsOn = async (open) => {
+    await open();
+    await page.waitForTimeout(400);
+    return page.evaluate(() => ({
+      empty: document.querySelector("[data-no-places]")?.textContent ?? null,
+      address:
+        document.querySelector("[data-omni-input]")?.getAttribute("aria-label") ??
+        document.querySelector("[data-address-rest]")?.getAttribute("aria-label") ??
+        null,
+    }));
+  };
+  //    ⚠️ **This compared two landings until 2026-09-12** and now reads
+  //    one. The claim was that each kind names its address bar its own
+  //    way — which needed two kinds, and there is one. What survives is
+  //    the half that can still be checked: the bar has a name at all.
+  //    **Weaker, and named as weaker**: a second kind arriving is what
+  //    makes the comparison possible again.
+  const pageWords = await wordsOn(openBrowser);
+  console.log(`     pages ${JSON.stringify(pageWords)}`);
+  if (!pageWords.address) fail("probe dead: an address bar with no name");
+  else ok("the browsing landing names its address bar");
+
+  //    A page gone to, recorded through the real backend rather than by
+  //    reaching into a file: the bridge is the node behind an HTTP skin,
+  //    so this is `Node::recent_visit` and nothing else.
+  //    ⚠️ It was a *pinned* page (`pin_web`) until 2026-09-22; that column
+  //    is retired (docs/SHELL.md 第六轮) and what the fresh tab and the
+  //    address bar remember now is where this person has been.
+  const KEPT = "https://khor.example/kept";
+  const ask = (cmd, args) =>
+    fetch(`http://127.0.0.1:${BRIDGE_PORT}/${cmd}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(args),
+    }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${cmd}: ${r.status}`))));
+  await ask("recent_visit", { kind: "page", machine: "alpha", place: KEPT });
+  // **Left and come back, because the fresh tab reads its pins once on
+  // mount** (`use-places`). This used to happen by accident: the
+  // section before it ended on the files landing, which unmounted this
+  // one. That section went on 2026-09-12 with the disk kind, and the
+  // assertion below then waited twenty seconds for a list fetched
+  // before the pin existed — a real dependency that had been met by a
+  // side effect.
+  await go("devices");
+  await until("away from the browser landing", 10_000, async () =>
+    (await page.locator('[data-browse-landing="page"]').count()) === 0,
+  );
+  await openBrowser();
+  await until("the kept page on the fresh tab", 20_000, async () =>
+    (await page.locator(`[data-place="${KEPT}"]`).count()) === 1,
+  );
+  ok("a page gone to reaches the browser landing's fresh tab");
+
+  //    **The second segment completes from memory, not from a machine.**
+  //    Nobody can enumerate the web, so what the box offers is what this
+  //    person keeps — and it has to be offered on the machine it was
+  //    kept against.
+  const pageBox = page.locator("[data-omni-input]");
+  await pageBox.click();
+  await pageBox.fill("alpha");
+  await until("alpha offered as an exit", 10_000, async () =>
+    (await page.locator('[data-omni-item="dev:alpha"]').count()) === 1,
+  );
+  await pageBox.press("Enter");
+  //    ⚠️ **Tombstone: 「alpha as the exit chip」, 2026-09-12.** It
+  //    waited for `[data-chip="dev:alpha"]`, and the machine's chip was
+  //    taken out of this box on 2026-09-09 — one exit per landing means
+  //    the machine is not a property of what is being typed, and drawn
+  //    as a chip the box read as two fields when it is one
+  //    (`AddressBar`'s `chosen={[]}`). The same assertion rotted in
+  //    `smoke.mjs` and was found there first; here it went unnoticed
+  //    for three days because this gate had been dying at section 5.
+  //
+  //    **What proves the commit landed is the line below.** Kept pages
+  //    are per machine, so a completion that offers alpha's pin is a
+  //    box that really is pointed at alpha — weaker than a chip anybody
+  //    could see, and it is the observable this face still has.
+  await pageBox.fill("https://khor.exa");
+  await until("the kept page completed from what is remembered", 15_000, async () =>
+    (await page.locator(`[data-omni-item="${KEPT}"]`).count()) === 1,
+  );
+  ok("the address bar completes a kept page");
+  //    **Tab completes, Enter goes** (`Omnibox`), and pressing the wrong
+  //    one of those is not a product failure. The first spelling here
+  //    pressed Enter on the half-typed address, went to it — correctly —
+  //    and then complained that the tab was titled after where it had
+  //    actually gone. Tab first, and the box must really hold the whole
+  //    address before Enter means anything.
+  await pageBox.press("Tab");
+  await until("the completion written into the box", 10_000, async () =>
+    (await pageBox.inputValue()) === KEPT,
+  );
+  ok("Tab writes the completion into the box");
+
+  //    Enter spends a real borrow. **Whether it succeeds is not the
+  //    assertion** — that depends on a network this test does not own —
+  //    what is asserted is that the pane *says* which happened. A blank
+  //    pane after pressing Enter is the one outcome forbidden, and it is
+  //    the one a borrow that quietly did nothing would produce.
+  await pageBox.press("Enter");
+  //    Waited to *settle*, not merely to appear: 「正在借…」 is a real
+  //    thing to say but it is not the answer, and a probe that stops at
+  //    it would pass on a borrow that never comes back.
+  //    ⚠️ **This waited for the element to say 「opened」 and it can
+  //    never say that.** `BrowserPane` draws the status only while the
+  //    state is *not* opened — a page that came up needs no sentence,
+  //    the page is the sentence — so success is the element leaving.
+  //    The old wait could therefore only ever be satisfied by a
+  //    failure, and it was: this run borrows alpha's network, which
+  //    used not to come up and now does. Three days of the gate dying
+  //    at section 5 is why nobody saw it.
+  //
+  //    So what is waited for is the state **leaving 「opening」**, by
+  //    either road, and each road is then judged on its own terms.
+  const settled = await until("the borrow settling", 30_000, async () => {
+    const how = await page
+      .locator("[data-web-status]")
+      .getAttribute("data-web-status")
+      .catch(() => null);
+    if (how === null) return "opened";
+    return how === "failed" ? "failed" : false;
+  });
+  if (settled === "failed") {
+    const spoke = await page.locator("[data-web-status]").innerText();
+    if (!spoke.trim()) fail("the borrow failed and said so with an empty element");
+    else ok(`the borrow failed and said why: ${JSON.stringify(spoke.trim().slice(0, 48))}`);
+  } else {
+    ok("the borrow came up, and the pane stopped talking about it");
+  }
+
+  //    …and what the tab wears.
+  const pageTitles = await page
+    .locator("[data-tab-label]")
+    .evaluateAll((els) => els.map((e) => e.textContent));
+  console.log(`     browser tab titles: ${JSON.stringify(pageTitles)}`);
+  //  **Until the page names itself, its address without the scheme**
+  //  (docs/SHELL.md 第四轮:「副标题是现在的网址, 但不用显示http(s)://」,
+  //  Chrome's own fallback). It said the host alone until then; a page
+  //  on the web face never loads, so its title never arrives here, and
+  //  what is measured is the fallback.
+  if (!pageTitles.some((t) => t?.startsWith("khor.example")) || pageTitles.some((t) => /^https?:\/\//.test(t ?? ""))) {
+    fail(`no tab is titled by its address without the scheme — ${JSON.stringify(pageTitles)}`);
+  } else ok("a browser tab is titled by its address, without http(s)://");
+
+  //    ── the terminal and the window are two processes over one file ──
+  //
+  //    「CLI 开的标签, 正在跑的窗口里看不见」 — the验收方, 2026-09-21, on
+  //    a real install: four `khor tabs open` on the machine, `khor tabs
+  //    ls` listing five, and the window's column still showing one.
+  //
+  //    **This is the assertion that had to exist the moment the list
+  //    left `localStorage`** (docs/SHELL.md 第 2 条 CLI 等价). The window
+  //    read `tabs_list` once, on mount, which is exactly right for a
+  //    store only it could write and exactly wrong for `.khor/tabs.json`.
+  //
+  //    **It is checked here and cannot be checked in `check-face`**: the
+  //    face gate answers `tabs_list` from a fixture inside the page, so
+  //    「another process wrote the file」 is not a thing that can happen
+  //    there. This gate has a real home, a real node and a real `khor`
+  //    on the path — the two processes are actually two.
+  {
+    const before = await page.evaluate(
+      () => document.querySelectorAll("[data-browse-tabs] [data-switch-tab]").length,
+    );
+    const said = cli(envB, "tabs", "open", "https://from-the-terminal.example/");
+    const minted = said.trim().split("\n").pop().trim();
+    if (!minted.startsWith("t")) {
+      fail(`probe dead: \`khor tabs open\` answered ${JSON.stringify(said)} rather than an id`);
+    } else {
+      const grew = await until(
+        "the window sees the tab the terminal opened",
+        15_000,
+        async () =>
+          (await page.evaluate(
+            () => document.querySelectorAll("[data-browse-tabs] [data-switch-tab]").length,
+          )) > before,
+      ).then(
+        () => true,
+        () => false,
+      );
+      if (!grew) {
+        fail(
+          `the terminal opened a tab (${minted}) and the window's column still shows ${before} — ` +
+            "one file, two writers, and the window reads it once (src/browse/use-browse-tabs.ts)",
+        );
+      } else {
+        //  …and the **front** follows too: `tabs open` puts the new one
+        //  in front, so a column that grew but kept its old selection
+        //  would be showing a list it is not standing in.
+        const front = await page.evaluate(
+          () =>
+            document.querySelector('[data-browse-tabs] [data-switch-tab][data-on="true"]')
+              ?.getAttribute("data-switch-tab") ?? null,
+        );
+        if (front !== minted) {
+          fail(
+            `the window's front tab is ${front}, the terminal's new one is ${minted} — ` +
+              "「open」 puts it in front, on both faces",
+          );
+        } else ok("a tab opened in the terminal shows up in the window, in front");
+      }
+    }
+
+    //  ── 重启之后也还在 (第 2 条) ──
+    //
+    //  **A reload is this face's restart.** The claim is that the list
+    //  is on the disk and not in the window, so what has to survive is
+    //  the window going away and coming back — and for a page that is
+    //  `reload()`. The store outliving the *process* is proved one
+    //  layer down, by `khor_node::tabs`'s own test; what could still be
+    //  wrong up here is the face reading it only from somewhere it kept
+    //  itself, which is exactly what `localStorage` was.
+    {
+      const was = cli(envB, "tabs", "ls")
+        .split("\n")
+        .map((l) => l.split("\t")[2])
+        .filter(Boolean);
+      await page.reload({ waitUntil: "load" });
+      await openBrowser();
+      const drawn = await until(
+        "the tabs are still there after a reload",
+        15_000,
+        async () => {
+          const ids = await page.evaluate(() =>
+            [...document.querySelectorAll("[data-browse-tabs] [data-switch-tab]")].map((e) =>
+              e.getAttribute("data-switch-tab"),
+            ),
+          );
+          return ids.length === was.length ? ids : false;
+        },
+      ).then(
+        (ids) => ids,
+        () => null,
+      );
+      if (drawn === null) {
+        fail(
+          `the terminal lists ${was.length} tab(s) and a reloaded window does not — ` +
+            "「重启之后也还在」 (src/browse/use-browse-tabs.ts)",
+        );
+      } else if (was.some((id) => !drawn.includes(id))) {
+        fail(`after a reload the window shows ${JSON.stringify(drawn)}, the file says ${JSON.stringify(was)}`);
+      } else ok(`${was.length} tab(s) survived a reload, by id`);
+    }
+
+    //  …and the other direction: the window closes one, the terminal
+    //  sees it gone. **Both ways or neither** — a face that only reads
+    //  is a face that can still be lying to `khor tabs ls`.
+    const shut = await page.evaluate(
+      () =>
+        document.querySelector('[data-browse-tabs] [data-switch-tab][data-on="true"]')
+          ?.getAttribute("data-switch-tab") ?? null,
+    );
+    if (shut) {
+      await page.locator(`[data-switch-close="${shut}"]`).click();
+      const gone = await until(
+        "the terminal stops listing the tab the window closed",
+        15_000,
+        () => !cli(envB, "tabs", "ls").includes(shut),
+      ).then(
+        () => true,
+        () => false,
+      );
+      if (!gone) {
+        fail(`the window closed ${shut} and \`khor tabs ls\` still lists it — the write did not land`);
+      } else ok("a tab closed in the window is gone from `khor tabs ls`");
+    }
+
+    //  ── and a restart that is one, not a fresh page ──
+    //
+    //  **The reload above is only half the claim.** It proves the face
+    //  keeps nothing of its own; it does not prove the list outlives
+    //  the thing that holds it, because the node kept running the
+    //  whole time. So the node dies here. The bridge *is* beta's node
+    //  (it embeds the serve), so killing it is the app quitting —
+    //  webview, resident and all — and starting it again is the
+    //  person opening khor tomorrow.
+    //
+    //  ⚠️ **The CLI is what says what should be there, and it is read
+    //  while the backend is down** — `khor tabs ls` opens the file
+    //  itself rather than asking a resident, which is the only reason
+    //  this can be a before/after at all.
+    {
+      const was = cli(envB, "tabs", "ls")
+        .split("\n")
+        .map((l) => l.split("\t")[2])
+        .filter(Boolean);
+      try {
+        process.kill(-bridge.pid, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      // Waited on the process, not on the port: a bridge that answers
+      // nothing on `/` would make a port probe say 「gone」 the instant
+      // it was asked, and the next `run` would race the dying one for
+      // the address.
+      //
+      // ⚠️ **`exitCode` alone is never set here.** A child that was
+      // *signalled* reports `signalCode` and leaves `exitCode` null, so
+      // the first spelling of this waited twenty seconds for a process
+      // that had been dead since the first tick.
+      await until(
+        "the old bridge is gone",
+        20_000,
+        () => bridge.exitCode !== null || bridge.signalCode !== null,
+      );
+      const again = run(BRIDGE, [], { ...envB, BRIDGE_PORT: String(BRIDGE_PORT) }, "bridge");
+      let back = false;
+      again.stdout.on("data", (d) => (back ||= String(d).includes(`:${BRIDGE_PORT}`)));
+      await until(`the bridge back on ${BRIDGE_PORT}`, 40_000, () => back);
+      await page.reload({ waitUntil: "load" });
+      await openBrowser();
+      const drawn = await until("the tabs are still there after a restart", 20_000, async () => {
+        const ids = await page.evaluate(() =>
+          [...document.querySelectorAll("[data-browse-tabs] [data-switch-tab]")].map((e) =>
+            e.getAttribute("data-switch-tab"),
+          ),
+        );
+        return ids.length === was.length ? ids : false;
+      }).then(
+        (ids) => ids,
+        () => null,
+      );
+      if (drawn === null || was.some((id) => !drawn.includes(id))) {
+        fail(
+          `the backend went away and came back, the file says ${JSON.stringify(was)} and the ` +
+            `window draws ${JSON.stringify(drawn)} — 「重启之后也还在」 (crates/node/src/tabs.rs)`,
+        );
+      } else ok(`${was.length} tab(s) survived the backend restarting, by id`);
+    }
+
+    //  ── 置顶 (docs/SHELL.md 第二轮) ──
+    //
+    //  「浏览标签的『置顶』是新行为:置顶的标签排在最上、关不掉之前要先
+    //  取消置顶,存进 .khor/tabs.json,khor tabs 也要能置顶」. Four
+    //  readings, all against the real node over the real file:
+    //    1. pinned from the window's own row menu, the tab is the column's
+    //       first row;
+    //    2. `khor tabs ls` marks it — read as 「its first column changed
+    //       and nothing else did」, so no word is copied in here;
+    //    3. it survives a reload, still first and still pinned;
+    //    4. the terminal pins another and the window follows (two
+    //       writers, the 单元三 lesson).
+    {
+      const ids = () =>
+        page.evaluate(() =>
+          [...document.querySelectorAll("[data-browse-tabs] [data-switch-tab]")].map((e) => ({
+            id: e.getAttribute("data-switch-tab"),
+            pinned: e.getAttribute("data-pinned") === "true",
+          })),
+        );
+      const markOf = (id) =>
+        cli(envB, "tabs", "ls")
+          .split("\n")
+          .map((l) => l.split("\t"))
+          .find((c) => c[2] === id)?.[0];
+      // At least two rows, so 「it moved to the top」 can be false.
+      if ((await ids()).length < 2) cli(envB, "tabs", "open", "https://second-for-the-pin.example/");
+      const rows = await until("two tabs in the column", 15_000, async () => {
+        const r = await ids();
+        return r.length >= 2 ? r : false;
+      }).catch(() => []);
+      const last = rows.at(-1)?.id;
+      if (!last) {
+        fail("probe dead: the column never held two tabs, so 「置顶排到最上」 measured nothing");
+      } else {
+        const before = markOf(last);
+        await page.locator(`[data-switch-open="${last}"]`).click({ button: "right" });
+        const item = page.locator('[data-row-menu] [data-menu-item="pin"]');
+        const offered = await until("the tab's menu offers the pin item", 5_000, async () => (await item.count()) === 1).catch(
+          () => false,
+        );
+        if (!offered) {
+          fail(
+            `right-clicking a tab drew no 置顶 item — 「所有侧边栏内都要支持右键去置顶、删除」 ` +
+              "(src/browse/BrowseLanding.tsx)",
+          );
+        } else {
+          await item.click();
+          const first = await until("the pinned tab leads the column", 10_000, async () => {
+            const r = await ids();
+            return r[0]?.id === last && r[0].pinned ? r : false;
+          }).catch(() => null);
+          if (!first) {
+            fail(
+              `pinned ${last} from its menu and the column reads ${JSON.stringify(await ids())} — ` +
+                "「置顶的标签排在最上」 (crates/node/src/tabs.rs)",
+            );
+          } else ok("a tab pinned from its menu leads the column");
+          const after = markOf(last);
+          if (after === undefined || after === before || !after.startsWith(before ?? "")) {
+            fail(
+              `\`khor tabs ls\` marks the pinned tab ${JSON.stringify(after)} where it read ${JSON.stringify(before)} — ` +
+                "the terminal has to see the pin (crates/cli/src/main.rs)",
+            );
+          } else ok("`khor tabs ls` marks the pinned tab");
+          await page.reload({ waitUntil: "load" });
+          await openBrowser();
+          const kept = await until("the pin survives a reload", 15_000, async () => {
+            const r = await ids();
+            return r[0]?.id === last && r[0].pinned ? r : false;
+          }).catch(() => null);
+          if (!kept) {
+            fail(`after a reload the column reads ${JSON.stringify(await ids())} — the pin did not stay`);
+          } else ok("the pin survives a reload");
+          const other = (await ids()).find((r) => !r.pinned)?.id;
+          if (other) {
+            cli(envB, "tabs", "pin", other);
+            const follows = await until("the window sees the terminal's pin", 15_000, async () => {
+              const r = await ids();
+              return r.find((x) => x.id === other)?.pinned ? r : false;
+            }).catch(() => null);
+            if (!follows) {
+              fail(`\`khor tabs pin ${other}\` and the window still draws it unpinned — one file, two writers`);
+            } else ok("a pin made in the terminal shows in the window");
+            cli(envB, "tabs", "unpin", other);
+          }
+          cli(envB, "tabs", "unpin", last);
+        }
+      }
+    }
+
+    //  ── 网页图标存盘 (docs/SHELL.md 第五轮 第 8 条) ──
+    //
+    //  「重开 app 就有」, and 「不从本机偷发请求的规矩照旧」. A loopback site
+    //  that answers `/favicon.ico` and counts every ask; a tab on it; the
+    //  icon asked once the way the app asks when the page loads
+    //  (`page_icon`, the real node). Then the window is reloaded — a
+    //  fresh page with nothing in memory — and the row has to wear the
+    //  site's icon **without the site being asked again**.
+    {
+      const { createServer } = await import("node:http");
+      let icoAsked = 0;
+      const site = createServer((req, res) => {
+        if (req.url === "/favicon.ico") {
+          icoAsked += 1;
+          res.writeHead(200, { "content-type": "image/png" });
+          res.end(Buffer.from("89504e470d0a1a0a", "hex"));
+        } else {
+          res.writeHead(200, { "content-type": "text/html" });
+          res.end("<title>icon site</title>");
+        }
+      });
+      await new Promise((r) => site.listen(0, "127.0.0.1", r));
+      const origin = `http://127.0.0.1:${site.address().port}`;
+      try {
+        cli(envB, "tabs", "open", `${origin}/page`);
+        const got = await ask("page_icon", { url: `${origin}/page`, proxy: "" }).catch((e) => String(e));
+        const before = icoAsked;
+        await page.reload({ waitUntil: "load" });
+        await openBrowser();
+        const row = page
+          .locator("[data-browse-tabs] [data-side-row]")
+          .filter({ hasText: `127.0.0.1:${site.address().port}/page` })
+          .first();
+        await until("the icon site's row", 10_000, async () => (await row.count()) === 1).catch(() => false);
+        await until("its icon", 5_000, async () =>
+          (await row.locator("[data-side-mark]").getAttribute("data-side-mark").catch(() => null)) === "favicon",
+        ).catch(() => false);
+        const badge = await row.locator("[data-side-mark]").getAttribute("data-side-mark").catch(() => null);
+        console.log(`     icon kept: asked once → ${typeof got === "string" ? got.slice(0, 22) : got}; after a reload the row wears ${badge}; the site was asked ${icoAsked - before} more time(s)`);
+        if (icoAsked === 0) {
+          fail("probe dead: the icon site was never asked, so nothing could have been kept");
+        } else if (badge !== "favicon") {
+          fail(`after a reload the row wears 「${badge}」 — 「favicon 存盘…重开 app 就有」 (docs/SHELL.md 第五轮 第 8 条)`);
+        } else ok("a site's icon survives a reload");
+        if (icoAsked !== before) {
+          fail(`drawing the kept icon asked the site ${icoAsked - before} more time(s) — 「不从本机偷发请求的规矩照旧」`);
+        } else ok("drawing a kept icon asks nobody");
+      } finally {
+        site.close();
+      }
+    }
+
+    //  ── 网页图标:先认页面自己声明的,只收真是图片的 (2026-09-22) ──
+    //
+    //  The site that sent this: a single-page app answers `/favicon.ico`
+    //  with its index page and a 200, and names its real icon — an SVG —
+    //  in `<link rel="icon">`. The row has to wear **that** SVG. And a
+    //  site with no icon at all (every path its index page) is the
+    //  control: the generic page mark, and nothing kept on disk for it.
+    {
+      const { createServer } = await import("node:http");
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>';
+      const index = (head) => `<!doctype html><html><head>${head}<title>spa</title></head><body>app</body></html>`;
+      const spa = createServer((req, res) => {
+        if (req.url === "/assets/logo-icon.svg") {
+          res.writeHead(200, { "content-type": "image/svg+xml" });
+          return res.end(svg);
+        }
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(index('<link rel="icon" href="/assets/logo-icon.svg" />'));
+      });
+      const bare = createServer((req, res) => {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(index(""));
+      });
+      await new Promise((r) => spa.listen(0, "127.0.0.1", r));
+      await new Promise((r) => bare.listen(0, "127.0.0.1", r));
+      const spaAt = `127.0.0.1:${spa.address().port}`;
+      const bareAt = `127.0.0.1:${bare.address().port}`;
+      try {
+        cli(envB, "tabs", "open", `http://${spaAt}/app`);
+        cli(envB, "tabs", "open", `http://${bareAt}/b`);
+        await ask("page_icon", { url: `http://${spaAt}/app`, proxy: "" }).catch(() => null);
+        const none = await ask("page_icon", { url: `http://${bareAt}/b`, proxy: "" }).then(
+          (v) => String(v).slice(0, 40),
+          () => null,
+        );
+        await page.reload({ waitUntil: "load" });
+        await openBrowser();
+        const rowOf = (at, path) =>
+          page.locator("[data-browse-tabs] [data-side-row]").filter({ hasText: `${at}${path}` }).first();
+        const drawn = async (row) => ({
+          badge: await row.locator("[data-side-mark]").getAttribute("data-side-mark").catch(() => null),
+          src: await row.locator("[data-side-mark] img").getAttribute("src").catch(() => null),
+        });
+        const spaRow = rowOf(spaAt, "/app");
+        await until("the SPA's row", 10_000, async () => (await spaRow.count()) === 1).catch(() => false);
+        await until("its icon", 5_000, async () => (await drawn(spaRow)).badge === "favicon").catch(() => false);
+        const a = await drawn(spaRow);
+        const want = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+        console.log(`     SPA row wears ${a.badge} ${a.src ? a.src.slice(0, 30) : a.src}`);
+        if (a.src !== want) {
+          fail(
+            `a site whose /favicon.ico is its index page and whose <link rel="icon"> names an SVG wears 「${a.badge}」 ${JSON.stringify(a.src?.slice(0, 40) ?? null)} — the page's own icon, the SVG (crates/node/src/favicon.rs)`,
+          );
+        } else ok("a page's <link rel=\"icon\"> SVG is the row's icon, not the index page its /favicon.ico answers with");
+        const bareRow = rowOf(bareAt, "/b");
+        await until("the bare site's row", 10_000, async () => (await bareRow.count()) === 1).catch(() => false);
+        const b = await drawn(bareRow);
+        const keptNow = await ask("page_icons", {}).catch(() => ({}));
+        const keptBare = Object.keys(keptNow).filter((k) => k.includes(bareAt));
+        console.log(`     bare site: page_icon answered ${JSON.stringify(none)}, row wears ${b.badge}, kept ${JSON.stringify(keptBare)}`);
+        if (b.badge !== "page" || none !== null || keptBare.length !== 0) {
+          fail(`a site with no icon at all answered ${JSON.stringify(none)}, wears 「${b.badge}」 and left ${JSON.stringify(keptBare)} on disk — the generic mark, and nothing kept`);
+        } else ok("a site with no icon wears the generic page mark and keeps nothing");
+        // **A borrowed page's icon, HTML included, leaves through its
+        // borrow** — not one ask from this machine to the site. The site
+        // counts what reaches it; a second server stands in for the
+        // borrow's proxy (it is asked in absolute form, and answers).
+        {
+          let direct = 0;
+          const viaBorrow = [];
+          const far = createServer((req, res) => {
+            direct += 1;
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end(index('<link rel="icon" href="/assets/logo-icon.svg" />'));
+          });
+          const borrow = createServer((req, res) => {
+            viaBorrow.push(req.url);
+            const path = new URL(req.url, "http://x").pathname;
+            if (path === "/assets/logo-icon.svg") {
+              res.writeHead(200, { "content-type": "image/svg+xml" });
+              return res.end(svg);
+            }
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end(index('<link rel="icon" href="/assets/logo-icon.svg" />'));
+          });
+          await new Promise((r) => far.listen(0, "127.0.0.1", r));
+          await new Promise((r) => borrow.listen(0, "127.0.0.1", r));
+          const farUrl = `http://127.0.0.1:${far.address().port}/p`;
+          try {
+            const got = await ask("page_icon", { url: farUrl, proxy: `127.0.0.1:${borrow.address().port}` }).catch((e) => `error: ${e}`);
+            console.log(`     borrowed: ${direct} direct ask(s); through the borrow ${JSON.stringify(viaBorrow)}; answered ${String(got).slice(0, 30)}`);
+            if (direct !== 0 || !viaBorrow.includes(farUrl) || !String(got).startsWith("data:image/svg+xml")) {
+              fail(
+                `a borrowed page's icon: ${direct} ask(s) straight to the site, ${JSON.stringify(viaBorrow)} through the borrow — the page's HTML and its icon both leave through the borrow, none from here (page_shim.js, 第四轮)`,
+              );
+            } else ok("a borrowed page's HTML and icon both leave through its borrow, none directly");
+          } finally {
+            far.close();
+            borrow.close();
+          }
+        }
+        // Put back, and **wait for the window to hear it**: the section
+        // after this deletes the last unpinned row it sees, and a row the
+        // terminal already closed is one the node refuses to delete.
+        for (const [at, path] of [[spaAt, "/app"], [bareAt, "/b"]]) {
+          const id = await rowOf(at, path).getAttribute("data-side-row").catch(() => null);
+          if (id) cli(envB, "tabs", "close", id);
+          await until("the window hearing the close", 10_000, async () => (await rowOf(at, path).count()) === 0).catch(() => {});
+        }
+      } finally {
+        spa.close();
+        bare.close();
+      }
+    }
+
+    //  ── 页面在加载,侧边栏那一行在呼吸 (docs/SHELL.md 第十二轮) ──
+    //
+    //  「浏览器这, 如果页面在加载, 左侧的侧边栏应该有状态动效」, drawn as
+    //  the ring a 忙碌 session already wears (`FaceMark`'s `[data-halo]`)
+    //  rather than a second kind of spinner.
+    //
+    //  **What this face can see, and what it cannot.** The app hears the
+    //  page itself (typed `page:navigation`); a browser cannot be handed a borrowed
+    //  webview, so here the row breathes while *khor's* errand for that
+    //  tab is out — opening the borrow, then asking the site for its icon
+    //  through it (`BrowserPane`'s `onBusy`, `use-loading`). A site that
+    //  takes its time is therefore a tab that is still loading, which is
+    //  what this drives: one site that answers slowly, and one that never
+    //  answers at all.
+    //
+    //  **The ring going out is pinned to the site's answer, not to a
+    //  timeout**: the slow site answers its icon, and a row wearing that
+    //  icon is a row whose errand came back. The node gives up on an
+    //  icon after 5s of its own, which is what puts the mute site's row
+    //  out — the 30-second ceiling is section 0b's, and cannot be reached
+    //  from a face with no page events.
+    {
+      const { createServer } = await import("node:http");
+      const SLOW_MS = 2_000;
+      let asked = 0;
+      const slow = createServer((req, res) => {
+        asked += 1;
+        setTimeout(() => {
+          if (req.url === "/favicon.ico") {
+            res.writeHead(200, { "content-type": "image/png" });
+            res.end(Buffer.from("89504e470d0a1a0a", "hex"));
+          } else {
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end("<!doctype html><html><head><title>slow</title></head><body>slow</body></html>");
+          }
+        }, SLOW_MS);
+      });
+      const mute = createServer(() => {
+        /* accepted, never answered — the page that never loads */
+      });
+      await new Promise((r) => slow.listen(0, "127.0.0.1", r));
+      await new Promise((r) => mute.listen(0, "127.0.0.1", r));
+      const slowAt = `127.0.0.1:${slow.address().port}`;
+      const muteAt = `127.0.0.1:${mute.address().port}`;
+      /** Opens a tab on **alpha** at this place, from the terminal.
+          **Through a machine that is not this one, on purpose**: a tab
+          pointed at this machine's own exit borrows nothing on this face
+          (the bridge has no window to open a page in), so khor's errand
+          would settle before the site was ever asked and the ring would
+          blink rather than stay — measured 2026-09-23: 「asked 0
+          time(s)」. Opened from the terminal rather than typed into the
+          address bar because typing the machine and then the address is
+          two navigations, and the first one's pane is torn down mid-open
+          (measured the same day, the same way). */
+      const openOn = (url) => {
+        cli(envB, "tabs", "open", "-m", "alpha", url);
+      };
+      /** What the row for this site is wearing **right now**, read off the
+          document in one go.
+          ⚠️ **Not a locator.** A locator auto-waits — up to playwright's
+          own 30 s — so a poll asking 「is it breathing?」 through one
+          blocks until long after the breath is over, and the loop around
+          it never gets a second look (measured 2026-09-23: the ring was
+          drawn, the site was asked, and the poll still timed out). */
+      const wearing = (at) =>
+        page.evaluate((site) => {
+          const row = [...document.querySelectorAll("[data-browse-tabs] [data-side-row]")].find((r) =>
+            (r.textContent ?? "").includes(site),
+          );
+          if (!row) return { row: false, halo: null, badge: null, title: null };
+          const halo = row.querySelector("[data-halo]");
+          return {
+            row: true,
+            halo: halo ? halo.getAttribute("data-halo") : null,
+            badge: row.querySelector("[data-side-mark]")?.getAttribute("data-side-mark") ?? null,
+            title: row.querySelector("[data-tab-label]")?.textContent ?? null,
+          };
+        }, at);
+      const haloOf = async (at) => (await wearing(at)).halo;
+      const badgeOf = async (at) => (await wearing(at)).badge;
+      try {
+        await openBrowser();
+        openOn(`http://${slowAt}/p`);
+        //  Every look is kept, so a miss says what was on screen instead
+        //  of only that nothing was.
+        const seen = [];
+        const began = Date.now();
+        const lit = await until(
+          "the row breathing",
+          20_000,
+          async () => {
+            const now = await wearing(slowAt);
+            seen.push(`${Date.now() - began}ms ${now.row ? (now.halo ?? "-") : "no row"}`);
+            return now.halo === "busy";
+          },
+          150,
+        ).catch((e) => String(e));
+        console.log(`     the first looks: ${seen.slice(0, 14).join(" · ")}`);
+        if (lit !== true) {
+          fail(
+            `a tab pointed at a site that has not answered draws no ring on its row (${lit}) — ` +
+              "「如果页面在加载, 左侧的侧边栏应该有状态动效」 (src/browse/BrowseLanding.tsx)",
+          );
+        } else ok("a loading tab's row wears the 忙碌 ring");
+        //  The site answers → the row goes quiet, **and wears what the
+        //  site sent**: the icon is the proof that this was the answer
+        //  arriving rather than khor giving up.
+        const out = await until("the ring going out", 20_000, async () => (await haloOf(slowAt)) === null).catch(
+          (e) => String(e),
+        );
+        const badge = await badgeOf(slowAt);
+        console.log(`     slow site: asked ${asked} time(s), row wears ${badge} once the ring is out`);
+        if (out !== true) {
+          fail(`the site answered and the row kept breathing (${out}) — 「finished 灭」`);
+        } else if (badge !== "favicon") {
+          fail(
+            `the ring went out with the row wearing 「${badge}」 — the site's icon never arrived, so what put it ` +
+              "out was khor giving up rather than the page answering",
+          );
+        } else ok("the site answers, the row wears its icon and the ring goes out");
+
+        //  A site that never answers at all: it breathes, it does not
+        //  breathe under reduced motion, and it stops on its own without
+        //  anything else about the row changing (第十二轮 第 2 条:
+        //  「灭了不改标题、不报错」).
+        //
+        //  **Reduced motion is set before the load starts and read in one
+        //  evaluate**, because this row stops breathing by itself after a
+        //  few seconds — a read taken in two steps raced it and came back
+        //  with nothing (measured 2026-09-23).
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        openOn(`http://${muteAt}/q`);
+        const titleOf = async () => (await wearing(muteAt)).title;
+        //  **Found and read inside one `page.evaluate`.** A locator
+        //  resolved in one round trip and read in the next came back with
+        //  empty strings — the row had re-rendered and the element in
+        //  hand was detached, which is what `getComputedStyle` answers
+        //  about a node that is no longer in the document (measured
+        //  2026-09-23).
+        const stilled = await until("the mute site's row breathing", 20_000, async () =>
+          page
+            .evaluate((at) => {
+              const row = [...document.querySelectorAll("[data-browse-tabs] [data-side-row]")].find((r) =>
+                (r.textContent ?? "").includes(at),
+              );
+              const el = row?.querySelector("[data-halo]");
+              if (!el) return null;
+              const s = getComputedStyle(el);
+              return {
+                halo: el.getAttribute("data-halo"),
+                animation: s.animationName,
+                stroke: getComputedStyle(el, "::before").backgroundColor,
+                strokeWidth: parseFloat(getComputedStyle(el, "::before").paddingTop),
+                opacity: s.opacity,
+              };
+            }, muteAt)
+            .then((r) => (r && r.halo === "busy" ? r : false), () => false),
+        ).catch((e) => String(e));
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        console.log(`     never answers, reduced motion: ${JSON.stringify(stilled)}`);
+        if (typeof stilled === "string") {
+          fail(`a tab on a site that never answers drew no ring (${stilled}) — it has to breathe too`);
+        } else if (stilled.animation !== "none") {
+          fail(`reduced motion left the ring breathing (${JSON.stringify(stilled)}) — 「不动」`);
+        } else if (!stilled.stroke || stilled.stroke === "rgba(0, 0, 0, 0)" || stilled.strokeWidth <= 0 || Number(stilled.opacity) !== 1) {
+          fail(`reduced motion took the ring away instead of stopping it (${JSON.stringify(stilled)})`);
+        } else ok("reduced motion stops the breath and keeps the ring");
+        const titleWhileLit = await titleOf();
+        const wentOut = await until("the mute site's ring going out", 40_000, async () =>
+          (await haloOf(muteAt)) === null,
+        ).catch((e) => String(e));
+        const titleAfter = await titleOf();
+        console.log(
+          `     never answers: out=${wentOut === true}; title ${JSON.stringify(titleWhileLit)} → ${JSON.stringify(titleAfter)}`,
+        );
+        if (wentOut !== true) {
+          fail(`a tab on a site that never answers kept breathing (${wentOut}) — it has to stop by itself`);
+        } else if (titleAfter !== titleWhileLit) {
+          fail(`stopping rewrote the row: ${JSON.stringify(titleWhileLit)} → ${JSON.stringify(titleAfter)} — 「灭了不改标题」`);
+        } else ok("a page that never loads stops breathing on its own, with its title untouched");
+        //  The strip's own tab draws none of this (第十二轮 第 3 条: 80px
+        //  wide, no room for a ring), and the narrow face's switcher is
+        //  where that strip lives.
+        const onStrip = await page.locator("[data-tab-strip] [data-halo]").count();
+        if (onStrip !== 0) {
+          fail(`${onStrip} ring(s) on the tab strip — 「标签条上那枚标签不画光晕」`);
+        } else ok("the tab strip draws no ring");
+      } finally {
+        slow.close();
+        mute.close();
+      }
+    }
+
+    //  ── 置顶的目录 retired (docs/SHELL.md 第六轮) ──
+    //
+    //  `khor pin -d` wrote the column the fresh tab no longer draws. It
+    //  refuses now, **non-zero**, and says which verbs do the job — a
+    //  verb that went on answering 0 would be a pin written somewhere
+    //  nothing reads.
+    {
+      for (const verb of ["pin", "unpin"]) {
+        const r = spawnSync(KHOR, [verb, "-d", "beta", "/tmp"], { env: envB, encoding: "utf8", timeout: 30_000 });
+        const said = `${r.stdout}${r.stderr}`;
+        if (r.status === 0 || !said.includes("khor ws pin")) {
+          fail(`\`khor ${verb} -d\` answered ${r.status} and ${JSON.stringify(said.trim().slice(0, 120))} — retired, it must refuse and name \`khor ws pin\``);
+        } else ok(`\`khor ${verb} -d\` refuses and points at \`khor ws pin\``);
+      }
+    }
+
+    //  ── 删除 asks, and 不再提醒 is `khor config` (docs/SHELL.md 第四轮) ──
+    //
+    //  The face gate proves the window and the tick on a fixture; what
+    //  only a real node can say is that the tick landed in the store the
+    //  terminal reads: `khor config get confirm-delete` answers off.
+    {
+      const was = cli(envB, "config", "get", "confirm-delete").trim();
+      const row = page.locator('[data-browse-tabs] [data-side-row][data-side-pinned="false"] [data-side-open]').last();
+      // The unpins above were the terminal's, and the window hears them
+      // on its next beat.
+      await until("an unpinned tab in the column", 10_000, async () => (await row.count()) > 0).catch(() => {});
+      if (was !== "on" || (await row.count()) === 0) {
+        fail(`probe dead: confirm-delete reads ${JSON.stringify(was)} before anything, or no unpinned tab to delete`);
+      } else {
+        await row.click({ button: "right" });
+        await page.locator('[data-row-menu] [data-menu-item="close"]').click();
+        const asked = await until("the delete window", 5_000, async () =>
+          (await page.locator("[data-delete-dialog]").count()) === 1,
+        ).catch(() => false);
+        if (!asked) {
+          fail("删除 on a tab raised no delete window — 「删除这些, 都要弹出一个弹窗」 (src/components/DeleteDialog.tsx)");
+        } else {
+          await page.locator("[data-delete-never-ask]").check();
+          await page.locator("[data-delete-go]").click();
+          const off = await until("the terminal reads the tick", 10_000, () =>
+            cli(envB, "config", "get", "confirm-delete").trim() === "off",
+          ).catch(() => false);
+          if (!off) {
+            fail("ticked 不再提醒 and `khor config get confirm-delete` still reads on — the tick did not reach the store");
+          } else ok("不再提醒 is `khor config get confirm-delete` = off");
+        }
+        cli(envB, "config", "set", "confirm-delete", "on");
+      }
+    }
+  }
+
+  //  ── 按机器暂停, from the row, on real nodes (docs/SHELL.md 第五轮 第 10 条) ──
+  //
+  //  The face gate proves the menu and the grey on a fixture; what only a
+  //  real node can say is that the press reached the store `khor devices`
+  //  reads. From beta's window, alpha's row menu says 暂停; pressed, the
+  //  row goes grey, and beta's `khor devices` marks alpha's id column the
+  //  way `khor pause alpha` would (CLI 与 GUI 等价). Then 恢复, and the
+  //  mark is gone. The marks ride the id column; the columns after it
+  //  carry readings that move on their own, so only that one is compared.
+  {
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await go("devices");
+    const alphaRow = page.locator('[data-side-row][data-device="alpha"]');
+    await until("alpha's row on beta's devices landing", 15_000, async () => (await alphaRow.count()) === 1).catch(() => false);
+    const marks = () => (cli(envB, "devices").split("\n").find((l) => l.includes("alpha")) ?? "").split("\t")[1] ?? "";
+    const before = marks();
+    const pressItem = async (key) => {
+      await alphaRow.locator("[data-side-open]").click({ button: "right" });
+      const item = page.locator(`[data-row-menu] [data-menu-item="${key}"]`);
+      await until(`the ${key} item`, 5_000, async () => (await item.count()) === 1);
+      await item.click();
+    };
+    const state = () => alphaRow.getAttribute("data-paused").catch(() => null);
+    const diag = async () =>
+      JSON.stringify({
+        row: await state(),
+        menuOpen: await page.locator("[data-row-menu]").count(),
+        menuText: (await page.locator("[data-row-menu]").innerText().catch(() => "")).slice(0, 160),
+        cli: marks(),
+      });
+    try {
+      await pressItem("pause");
+      const went = await until("alpha's row greyed as paused", 20_000, async () => (await state()) === "true").catch(() => false);
+      const pausedMarks = marks();
+      if (!went) {
+        fail(`pressed 暂停 on alpha's row and it did not go grey — ${await diag()}`);
+      } else if (pausedMarks === before || !pausedMarks.startsWith(before.slice(0, 16))) {
+        fail(`paused alpha from its row and \`khor devices\` marks ${JSON.stringify(pausedMarks)} (was ${JSON.stringify(before)})`);
+      } else ok("暂停 on alpha's row greys it, and `khor devices` marks it");
+      if (went) {
+        await page.keyboard.press("Escape").catch(() => {});
+        await pressItem("resume");
+        const back = await until("alpha's row back", 20_000, async () => (await state()) === "false").catch(() => false);
+        if (!back || marks() !== before) {
+          fail(`恢复 on alpha's row left it ${await diag()} (was ${JSON.stringify(before)})`);
+        } else ok("恢复 takes the grey and the mark away");
+      }
+    } catch (e) {
+      fail(`按机器暂停 could not be walked: ${String(e).slice(0, 200)} — ${await diag()}`);
+    }
+    await page.keyboard.press("Escape").catch(() => {});
+    if (marks() !== before) cli(envB, "resume", "alpha");
+  }
+
+  //    The narrow face is the shell's, but this landing has to reach it
+  //    too — one press, because the shape itself was proved in 4.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await openBrowser();
+  //    Waited for: the viewport just changed under a landing that was
+  //    already open, and the narrow face is one render away.
+  const counted = await until("a tab count on the narrow face", 5_000, async () =>
+    (await page.locator("[data-tab-count]").count()) === 1,
+  ).catch(() => false);
+  if (!counted) {
+    fail("no tab count on the browser landing's narrow face");
+  } else ok("the narrow switcher is reachable on the browser landing too");
+  const overPage = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  if (overPage > 0) fail(`the browser landing scrolls ${overPage} sideways at 390`);
+  else ok("no sideways scroll at 390");
+  await page.screenshot({ path: join(SCRATCH, "browser-narrow.png") });
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await openBrowser();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(SCRATCH, "browser-wide.png") });
+  console.log(`     ${shot("browser-wide.png")}, ${shot("browser-narrow.png")}`);
+
+  if (thrown.length) fail(`page errors: ${thrown.join(" | ")}`);
+  else ok("zero pageerror throughout");
+  // 测试绝不碰真身份: nothing this run started asked for usage with a login
+  // that is not the fake one (counted, never printed).
+  if (usage.seen.strangers !== 0) {
+    fail(`${usage.seen.strangers} usage request(s) carried a token that is not the fake login — a real credential reached a gate`);
+  } else ok(`no real login reached a gate (${usage.seen.asked} usage request(s), all fake)`);
+} finally {
+  await browser?.close();
+  await cleanup();
+  await usage.close();
+}
+
+if (fails.length) {
+  console.error(`\ntabs gate: ${fails.length} failure(s)\n- ${fails.join("\n- ")}`);
+  process.exit(1);
+}
+console.log("\ntabs gate: the strip, the address bar and the switcher all do what they say");

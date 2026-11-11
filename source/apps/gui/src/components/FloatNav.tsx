@@ -1,0 +1,219 @@
+/**
+ * **The floating navigation, narrow only** (the redesign, 2026-10-02:
+ * Apple's Preview on a phone). One glass capsule: the first four
+ * landings in the user's order (`lib/nav-order`, four since UX-11), then
+ * 更多 — floating,
+ * centred, over the foot of the screen. The wide face
+ * has the landings' strip in its top row instead (`LandingStrip`).
+ *
+ * **更多 opens a menu in place**, anchored above it, and it holds four
+ * things and nothing else (UX-16, the owner 2026-10-05): 我的 khor, the
+ * landing past the fourth (浏览器 by default), 设置 and 诊断. Choosing
+ * one goes there; 更多 is lit while any of them is the page on screen,
+ * because the bar must always answer 我在哪一页.
+ *
+ * The open seat is the ground showing through the glass (`glass-sel`)
+ * with the brand's deep ink, its glyph's solid piece filled (`rail-on-ink`,
+ * `app.css`); the others are ink on the glass.
+ */
+import { useRef, type ReactNode } from "react";
+
+import { MachineAvatar } from "@/components/Avatar";
+import { IconGear, IconRecent, IconMore, IconPulse, IconStore } from "@/components/icons";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import type { Avatar } from "@/gen/bindings/Avatar";
+import { useTravel } from "@/lib/travel";
+import { gui } from "@/gen/catalog";
+import { cn } from "@/lib/utils";
+
+export type NavSeat = { key: string; name: string; glyph: ReactNode; badge?: number };
+
+// A seat is `--nav-item` wide and gives way when five do not fit the
+// screen (UX-11): the bar never runs past the screen's gaps. ⚠️ 墓碑
+// (UX-30 §2 → UX-39 §2): exported for the 附栏's capsule of seats, which
+// was this bar at the top of its box.
+const NAV_SEAT =
+  "relative flex h-full w-nav-item min-w-0 shrink flex-col items-center justify-center gap-px rounded-full text-foreground " +
+  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring " +
+  "[&_svg]:size-nav-glyph data-[on=true]:glass-sel data-[on=true]:text-[var(--rail-on-ink)]";
+
+function Seat({ seat, on, onClick }: { seat: NavSeat; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-slot="button"
+      data-nav-item={seat.key}
+      data-landing={seat.key}
+      data-on={on}
+      aria-current={on ? "page" : undefined}
+      onClick={onClick}
+      className={NAV_SEAT}
+    >
+      {seat.glyph}
+      {/* One weight in both states (F5.2; SYS-12): the chosen piece and the
+          tint say which, and the word does not change width under it. */}
+      <span className="text-nav-label">{seat.name}</span>
+      {seat.badge !== undefined && seat.badge > 0 && (
+        <span
+          data-nav-badge
+          className="absolute top-1 right-3 min-w-4 rounded-full bg-badge px-1 text-center text-caption leading-4 tabular-nums text-badge-foreground"
+        >
+          {seat.badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** The menu is the one menu (`ui/dropdown-menu`); its rows carry a nav glyph. */
+const MENU_ITEM = "[&_svg]:size-nav-glyph";
+
+export function FloatNav({
+  seats,
+  more,
+  active,
+  moreOn,
+  onGo,
+  onSettings,
+  onDoctor,
+  onStore,
+  onNotifications,
+  unreadNotifications = 0,
+  me,
+  onMe,
+  className,
+}: {
+  /** The four on the bar. */
+  seats: NavSeat[];
+  /** The landings past the fourth, at the head of 更多's menu. */
+  more: NavSeat[];
+  /** The open landing's key, or null while a 「…」 page is up. */
+  active: string | null;
+  /** Whether 更多 holds the page on screen. */
+  moreOn: boolean;
+  onGo: (key: string) => void;
+  onSettings: () => void;
+  onDoctor: () => void;
+  onStore: () => void;
+  onNotifications?: () => void;
+  unreadNotifications?: number;
+  /** This machine's face, the glyph of 我的 khor at the head of the menu. */
+  me: { face: Avatar | null } | null;
+  onMe: () => void;
+  className?: string;
+}) {
+  // The chosen seat slides to the one pressed (F7.2, `lib/travel`).
+  const bar = useRef<HTMLElement>(null);
+  useTravel("bar", () => bar.current, active ?? (moreOn ? "more" : null));
+  return (
+    // **Five seats in one capsule** (the owner, round 14: on the narrow
+    // bar 更多 is not a button of its own — ⚠️ 墓碑, round 8 split it into
+    // a circle beside the capsule; the wide strip keeps that). The four
+    // landings (UX-11), then 更多 with its word under the glyph.
+    <nav
+      ref={bar}
+      data-float-nav
+      aria-label={gui.nav}
+      // The padding keeps the hairline the glass had before its edge
+      // became a ring (round 7), so the capsule is still 314 wide.
+      className={cn(
+        "glass flex h-nav-h max-w-[calc(100%-2*var(--nav-gap))] items-stretch rounded-full p-[calc(var(--gap-xxs)+var(--hair))] select-none",
+        className,
+      )}
+    >
+      {seats.map((s) => (
+        <Seat key={s.key} seat={s} on={active === s.key} onClick={() => onGo(s.key)} />
+      ))}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          {/* Chosen (the glass's chosen piece) while its menu is open,
+              and olive too while a page reached through it is the one on
+              screen. */}
+          <button
+            type="button"
+            data-slot="button"
+            data-nav-more
+            data-on={moreOn}
+            aria-label={gui.rail_more}
+            className={cn(NAV_SEAT, "data-[state=open]:glass-sel")}
+          >
+            <IconMore />
+            <span className="text-nav-label">{gui.rail_more}</span>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          side="top"
+          align="end"
+          sideOffset={8}
+          data-nav-menu
+          // Choosing goes somewhere else; the focus does not come back to
+          // 更多 and light it with a ring nobody asked for.
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          className="min-w-nav-menu"
+        >
+          <MoreMenuItems more={more} onGo={onGo} onSettings={onSettings} onDoctor={onDoctor} onStore={onStore} onNotifications={onNotifications} unreadNotifications={unreadNotifications} me={me} onMe={onMe} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </nav>
+  );
+}
+
+/** **更多's items** (UX-16): 我的 khor, the landings past the fourth, 存储
+    (STORE-BRIEF phase 1), 设置 and 诊断 — the narrow bar's menu and the
+    wide strip's (UX-19), one list in one order. */
+export function MoreMenuItems({
+  more,
+  onGo,
+  onSettings,
+  onDoctor,
+  onStore,
+  onNotifications,
+  unreadNotifications = 0,
+  me,
+  onMe,
+}: {
+  more: NavSeat[];
+  onGo: (key: string) => void;
+  onSettings: () => void;
+  onDoctor: () => void;
+  onStore: () => void;
+  onNotifications?: () => void;
+  unreadNotifications?: number;
+  me: { face: Avatar | null } | null;
+  onMe: () => void;
+}) {
+  return (
+    <>
+      {/* 我的 khor first: this machine's face in the glyphs' box, so
+          its word starts where the others' do. */}
+      <DropdownMenuItem data-nav-me className={MENU_ITEM} onSelect={onMe}>
+        <MachineAvatar face={me?.face ?? null} className="size-nav-glyph" />
+        {gui.my_khor}
+      </DropdownMenuItem>
+      {more.map((s) => (
+        <DropdownMenuItem key={s.key} data-more-landing={s.key} className={MENU_ITEM} onSelect={() => onGo(s.key)}>
+          {s.glyph}
+          {s.name}
+        </DropdownMenuItem>
+      ))}
+      {/* 存储 wears its own tray (store-c): the folder is 工作区's. */}
+      {onNotifications && <DropdownMenuItem data-nav-notifications className={MENU_ITEM} onSelect={onNotifications}>
+        <IconRecent />
+        <span className="flex-1">{gui.notifications}</span>
+        {unreadNotifications > 0 && <span className="text-caption tabular-nums text-muted-foreground">{unreadNotifications}</span>}
+      </DropdownMenuItem>}
+      <DropdownMenuItem data-nav-store className={MENU_ITEM} onSelect={onStore}>
+        <IconStore />
+        {gui.settings_store}
+      </DropdownMenuItem>
+      <DropdownMenuItem data-nav-settings className={MENU_ITEM} onSelect={onSettings}>
+        <IconGear />
+        {gui.nav_settings}
+      </DropdownMenuItem>
+      <DropdownMenuItem data-nav-doctor className={MENU_ITEM} onSelect={onDoctor}>
+        <IconPulse />
+        {gui.doctor}
+      </DropdownMenuItem>
+    </>
+  );
+}
