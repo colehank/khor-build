@@ -17,22 +17,22 @@ class WorkloadEvidence(unittest.TestCase):
                 report = Path(tmp)
                 (report / 'source.json').write_text(json.dumps({'tree': 'a' * 40}))
                 for round_id in range(2 if mode == 'missing_round' else 3):
-                    rows = [{'schema': 1, 'revision': 'resident_mixed_workload_v1', 'event': 'manifest',
+                    rows = [{'schema': 1, 'revision': 'resident_mixed_workload_v2', 'event': 'manifest',
                              'samples_per_operation_per_phase': 120, 'period_us': 100000,
                              'caller_us': 2000000, 'slo': False, 'calibrated': False}]
                     for phase_id, phase in enumerate(['idle_before', 'bulk', 'idle_after']):
                         for op in ['directory', 'terminal']:
                             for index in range(120):
                                 started = phase_id * 20000000 + index * 100000
-                                rows.append({'schema': 1, 'revision': 'resident_mixed_workload_v1',
+                                rows.append({'schema': 1, 'revision': 'resident_mixed_workload_v2',
                                              'event': 'sample', 'phase': phase, 'operation': op, 'index': index,
                                              'scheduled_us': started, 'started_us': started, 'ended_us': started + 100,
                                              'elapsed_us': 100, 'caller_us': 2000000, 'outcome': 'ok', 'error': None})
                     rows.extend([
-                        {'schema': 1, 'revision': 'resident_mixed_workload_v1', 'event': 'bulk', 'phase': 'bulk',
+                        {'schema': 1, 'revision': 'resident_mixed_workload_v2', 'event': 'bulk', 'phase': 'bulk',
                          'started_us': 20000000, 'ended_us': 35000000, 'moved': 16 * 1024 * 1024,
                          'expected': 16 * 1024 * 1024, 'outcome': 'ok'},
-                        {'schema': 1, 'revision': 'resident_mixed_workload_v1', 'event': 'complete', 'samples': 720,
+                        {'schema': 1, 'revision': 'resident_mixed_workload_v2', 'event': 'complete', 'samples': 720,
                          'directory_overlap': 120, 'terminal_overlap': 120, 'functional_ok': True,
                          'all_answers': True, 'exact_bytes': True, 'closed': True, 'direct_after': True},
                     ])

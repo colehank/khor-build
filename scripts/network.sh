@@ -167,7 +167,7 @@ else
   export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
   if [[ "$DEV_TASK" == netlab-workload ]]; then
     check_format || exit 1
-    printf '{"layer":"node","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_v1","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::w1_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"layer":"node","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_v2","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::w1_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     workload_status=0
     repeat_netlab workload::w1_ --ignored || workload_status=$?
     python3 - "$REPORT_DIR" <<'PYTHON' || workload_status=$?
@@ -178,7 +178,7 @@ for path in logs:
     result={'log':str(path.relative_to(report)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'valid':False,'functional_ok':False}
     try:
         text=path.read_text();rows=[json.loads(line[len('[netlab-workload] '):]) for line in text.splitlines() if line.startswith('[netlab-workload] ')]
-        assert rows and all(r['schema']==1 and r['revision']=='resident_mixed_workload_v1' for r in rows)
+        assert rows and all(r['schema']==1 and r['revision']=='resident_mixed_workload_v2' for r in rows)
         one=lambda kind: [r for r in rows if r['event']==kind]
         manifests=one('manifest');completes=one('complete');bulks=one('bulk');samples=one('sample')
         assert len(manifests)==len(completes)==len(bulks)==1
@@ -206,7 +206,7 @@ for path in logs:
         result['error']=type(error).__name__+': '+str(error)
     results.append(result)
 passed=len(results)==3 and all(r['valid'] and r['functional_ok'] for r in results)
-(report/'workload-contracts.json').write_text(json.dumps({'schema':1,'revision':'resident_mixed_workload_v1','source':json.loads((report/'source.json').read_text()),'results':results,'passed':passed,'slo':False,'calibrated':False,'limits':['Diagnostic baseline only; no capacity calibration, policy comparison, CPU, energy or p99 acceptance']},indent=2)+'\n')
+(report/'workload-contracts.json').write_text(json.dumps({'schema':1,'revision':'resident_mixed_workload_v2','source':json.loads((report/'source.json').read_text()),'results':results,'passed':passed,'slo':False,'calibrated':False,'limits':['Diagnostic baseline only; no capacity calibration, policy comparison, CPU, energy or p99 acceptance']},indent=2)+'\n')
 sys.exit(0 if passed else 1)
 PYTHON
     exit "$workload_status"
