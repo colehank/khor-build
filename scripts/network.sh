@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -165,7 +165,52 @@ else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
   unshare -Urn sh -ec 'ip link add probe0 type dummy; ip link set probe0 up; tc qdisc add dev probe0 root netem delay 1ms; nft add table inet probe; nft list ruleset' > "$REPORT_DIR/namespace.log" 2>&1
   export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
-  if [[ "$DEV_TASK" == netlab-measure-check ]]; then
+  if [[ "$DEV_TASK" == netlab-workload ]]; then
+    check_format || exit 1
+    printf '{"layer":"node","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_v1","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::w1_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    workload_status=0
+    repeat_netlab workload::w1_ --ignored || workload_status=$?
+    python3 - "$REPORT_DIR" <<'PYTHON' || workload_status=$?
+import collections,hashlib,json,pathlib,re,sys
+report=pathlib.Path(sys.argv[1]);results=[]
+logs=sorted((report/'netlab').glob('*/scenarios.log'))
+for path in logs:
+    result={'log':str(path.relative_to(report)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'valid':False,'functional_ok':False}
+    try:
+        text=path.read_text();rows=[json.loads(line[len('[netlab-workload] '):]) for line in text.splitlines() if line.startswith('[netlab-workload] ')]
+        assert rows and all(r['schema']==1 and r['revision']=='resident_mixed_workload_v1' for r in rows)
+        one=lambda kind: [r for r in rows if r['event']==kind]
+        manifests=one('manifest');completes=one('complete');bulks=one('bulk');samples=one('sample')
+        assert len(manifests)==len(completes)==len(bulks)==1
+        manifest,complete,bulk=manifests[0],completes[0],bulks[0]
+        assert manifest['samples_per_operation_per_phase']==120 and manifest['period_us']==100000 and manifest['caller_us']==2000000 and manifest['slo'] is False and manifest['calibrated'] is False
+        assert bulk['phase']=='bulk' and bulk['expected']==16*1024*1024 and bulk['ended_us']>bulk['started_us']
+        expected={(phase,op) for phase in ['idle_before','bulk','idle_after'] for op in ['directory','terminal']}
+        assert {(r['phase'],r['operation']) for r in samples}==expected and len(samples)==720
+        groups={}
+        for phase,op in sorted(expected):
+            group=[r for r in samples if r['phase']==phase and r['operation']==op]
+            assert len(group)==120 and {r['index'] for r in group}==set(range(120))
+            assert all(r['ended_us']>=r['started_us']>=r['scheduled_us'] and r['elapsed_us']==r['ended_us']-r['started_us'] and r['outcome'] in ['ok','error','timeout','blocked'] for r in group)
+            ordered=sorted(group,key=lambda r:r['index']);base=ordered[0]['scheduled_us']
+            assert all(r['scheduled_us']==base+r['index']*100000 and r['caller_us']==2000000 for r in ordered)
+            times=sorted(r['elapsed_us'] for r in group if r['outcome']=='ok')
+            groups[phase+'/'+op]={'outcomes':dict(collections.Counter(r['outcome'] for r in group)),'all_samples':120,'successful_samples':len(times),'success_p50_us':times[(len(times)-1)//2] if times else None,'success_p95_us':times[(len(times)*95+99)//100-1] if times else None,'success_max_us':max(times) if times else None,'p99_claimed':False}
+        overlap={op:sum(r['phase']=='bulk' and r['operation']==op and bulk['started_us']<=r['started_us']<=r['ended_us']<=bulk['ended_us'] for r in samples) for op in ['directory','terminal']}
+        assert all(complete[op+'_overlap']==n for op,n in overlap.items()) and complete['samples']==720
+        summaries=re.findall(r'^test result: (.*)$',text,re.M)
+        assert len(summaries)==1 and summaries[0].startswith('ok. 1 passed; 0 failed; 0 ignored;')
+        functional=all(r['outcome']=='ok' and r['error'] is None for r in samples) and bulk['outcome']=='ok' and bulk['moved']==16*1024*1024 and all(n>=30 for n in overlap.values()) and all(complete[k] is True for k in ['functional_ok','all_answers','exact_bytes','closed','direct_after'])
+        result.update(valid=True,functional_ok=functional,groups=groups,overlap=overlap,bulk=bulk)
+    except (AssertionError,KeyError,IndexError,ValueError,TypeError) as error:
+        result['error']=type(error).__name__+': '+str(error)
+    results.append(result)
+passed=len(results)==3 and all(r['valid'] and r['functional_ok'] for r in results)
+(report/'workload-contracts.json').write_text(json.dumps({'schema':1,'revision':'resident_mixed_workload_v1','source':json.loads((report/'source.json').read_text()),'results':results,'passed':passed,'slo':False,'calibrated':False,'limits':['Diagnostic baseline only; no capacity calibration, policy comparison, CPU, energy or p99 acceptance']},indent=2)+'\n')
+sys.exit(0 if passed else 1)
+PYTHON
+    exit "$workload_status"
+  elif [[ "$DEV_TASK" == netlab-measure-check ]]; then
     printf '{"layer":"fixture","slo":false,"measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::attempts::"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::attempts:: --ignored
     python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" --calibration > "$REPORT_DIR/attempt-calibration.json"
