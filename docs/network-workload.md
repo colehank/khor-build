@@ -5,6 +5,11 @@ namespace, disk, toolchain, jobs and deadline guards. It does not change GitHub
 dispatch or Mac admission. It runs the fixed ignored `workload::w1_` fixture
 sequentially three times, retaining each failure and all raw scenario logs.
 
+The current source protocol is v4. This lane still validates only the fixed
+streaming functional baseline; the separate `netlab-workload-observer` lane
+validates the guard, timer probes, actual profile and paired recording modes.
+Historical v3 source must use its recorded control revision.
+
 The frozen product protocol is `docs/net-optimization/WORKLOAD.md`. This is an
 uncalibrated diagnostic baseline, not a performance SLO, capacity calibration,
 policy comparison, p99 or phone-energy acceptance. Current production terminal

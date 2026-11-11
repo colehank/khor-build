@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-observer|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -167,7 +167,7 @@ else
   export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
   if [[ "$DEV_TASK" == netlab-workload ]]; then
     check_format || exit 1
-    printf '{"layer":"node","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_v3","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::w1_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    printf '{"layer":"node","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_v4","test_threads":1,"repeats":3,"ignored":true,"filters":["workload::w1_"]}\n' > "$REPORT_DIR/measurement-mode.json"
     workload_status=0
     repeat_netlab workload::w1_ --ignored || workload_status=$?
     python3 - "$REPORT_DIR" <<'PYTHON' || workload_status=$?
@@ -178,7 +178,7 @@ for path in logs:
     result={'log':str(path.relative_to(report)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'valid':False,'functional_ok':False}
     try:
         text=path.read_text();rows=[json.loads(line[len('[netlab-workload] '):]) for line in text.splitlines() if line.startswith('[netlab-workload] ')]
-        assert rows and all(r['schema']==1 and r['revision']=='resident_mixed_workload_v3' for r in rows)
+        assert rows and all(r['schema']==1 and r['revision']=='resident_mixed_workload_v4' for r in rows)
         one=lambda kind: [r for r in rows if r['event']==kind]
         manifests=one('manifest');completes=one('complete');bulks=one('bulk');samples=one('sample')
         assert len(manifests)==len(completes)==len(bulks)==1
@@ -206,10 +206,28 @@ for path in logs:
         result['error']=type(error).__name__+': '+str(error)
     results.append(result)
 passed=len(results)==3 and all(r['valid'] and r['functional_ok'] for r in results)
-(report/'workload-contracts.json').write_text(json.dumps({'schema':1,'revision':'resident_mixed_workload_v3','source':json.loads((report/'source.json').read_text()),'results':results,'passed':passed,'slo':False,'calibrated':False,'limits':['Diagnostic baseline only; no capacity calibration, policy comparison, CPU, energy or p99 acceptance']},indent=2)+'\n')
+(report/'workload-contracts.json').write_text(json.dumps({'schema':1,'revision':'resident_mixed_workload_v4','source':json.loads((report/'source.json').read_text()),'results':results,'passed':passed,'slo':False,'calibrated':False,'limits':['Diagnostic baseline only; no capacity calibration, policy comparison, CPU, energy or p99 acceptance']},indent=2)+'\n')
 sys.exit(0 if passed else 1)
 PYTHON
     exit "$workload_status"
+  elif [[ "$DEV_TASK" == netlab-workload-observer ]]; then
+    check_format || exit 1
+    printf '{"layer":"node_observer","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_v4","test_threads":1,"paired_repeats":3,"expected_order":["streaming","buffered","buffered","streaming","streaming","buffered"],"ignored":true,"guard_filter":"workload::observer::w3_"}\n' > "$REPORT_DIR/measurement-mode.json"
+    observer_status=0
+    NETLAB_RUN_DIR="$REPORT_DIR/observer-guards" NETLAB_TEST_THREADS=1 \
+      bash scripts/netlab.sh workload::observer::w3_ --ignored || observer_status=$?
+    if [[ "$observer_status" == 0 ]]; then
+      # Freeze the order before observing results; preserve every case failure.
+      for observer_filter in workload::w1_ workload::w2_ workload::w2_ workload::w1_ workload::w1_ workload::w2_; do
+        observer_case_status=0
+        NETLAB_TEST_THREADS=1 bash scripts/netlab.sh "$observer_filter" --ignored || observer_case_status=$?
+        if [[ "$observer_status" == 0 && "$observer_case_status" != 0 ]]; then observer_status=$observer_case_status; fi
+      done
+    fi
+    observer_validation_status=0
+    python3 scripts/netlab-observer.py "$REPORT_DIR" || observer_validation_status=$?
+    if [[ "$observer_status" == 0 ]]; then observer_status=$observer_validation_status; fi
+    exit "$observer_status"
   elif [[ "$DEV_TASK" == netlab-workload-calibrate ]]; then
     check_format || exit 1
     printf '{"layer":"kernel_TCP","slo":false,"calibrated":false,"measurement_revision":"workload_kernel_tcp_calibration_v1","test_threads":1,"repeats":3,"ignored":true,"qdisc_units_review_required":true,"filters":["workload::calibration::w0_"]}\n' > "$REPORT_DIR/measurement-mode.json"
