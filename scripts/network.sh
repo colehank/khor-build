@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -58,7 +58,7 @@ check_format() {
   ) > "$REPORT_DIR/format.patch" || return 1
   return 1
 }
-if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime || "$DEV_TASK" == net-wan-peer ]]; then
+if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-node-routes || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime || "$DEV_TASK" == net-wan-peer ]]; then
   check_format || exit 1
   if [[ "$DEV_TASK" == net-unit ]]; then
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
@@ -84,6 +84,39 @@ path.write_text(json.dumps(manifest,indent=2)+'\n')
 PYTHON
       exit "$wan_status"
     fi
+  elif [[ "$DEV_TASK" == net-node-routes ]]; then
+    # Fixed, SSH-runner-only iteration lane. Full net-node remains required
+    # before acceptance; neither filters nor expected counts come from input.
+    printf '{"layer":"node","slo":false,"suite":"route_contracts_v1","full_regression":false,"test_threads":1,"expected_tests":[6,2]}\n' > "$REPORT_DIR/measurement-mode.json"
+    routes_status=0
+    cargo test --locked -p khor-node --lib link::dial_budget::initial_custom:: \
+      -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/initial-route-contracts.log" || routes_status=$?
+    cargo test --locked -p khor-node --lib hop::tests_offer::published::incoming:: \
+      -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/incoming-route-contracts.log" || routes_status=$?
+    if ! python3 - "$REPORT_DIR" <<'PYTHON'
+import hashlib, json, pathlib, re, sys
+report = pathlib.Path(sys.argv[1])
+groups = {}
+for name, expected in [('initial-route-contracts.log', 6), ('incoming-route-contracts.log', 2)]:
+    data = (report / name).read_bytes()
+    rows = re.findall(r'test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;', data.decode(errors='replace'))
+    item = dict(expected=expected, sha256=hashlib.sha256(data).hexdigest(), valid=False, passed=False)
+    if len(rows) == 1:
+        status, good, failed, ignored = rows[0]
+        item.update(passed_count=int(good), failed_count=int(failed), ignored_count=int(ignored))
+        item['valid'] = int(good) + int(failed) == expected and int(ignored) == 0
+        item['passed'] = item['valid'] and status == 'ok' and int(failed) == 0
+    groups[name] = item
+result = dict(schema=1, suite='route_contracts_v1', full_regression=False,
+              source=json.loads((report / 'source.json').read_text()), groups=groups,
+              passed=all(item['passed'] for item in groups.values()))
+(report / 'route-contracts.json').write_text(json.dumps(result, indent=2) + '\n')
+sys.exit(0 if result['passed'] else 1)
+PYTHON
+    then
+      if [[ "$routes_status" == 0 ]]; then routes_status=1; fi
+    fi
+    exit "$routes_status"
   elif [[ "$DEV_TASK" == net-vendor ]]; then
     # Excluded dependencies cannot run their dev-dependencies from the root
     # workspace. Use each committed package lock, and make iroh test our noq
