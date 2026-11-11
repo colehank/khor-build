@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-policy|netlab-workload-wires|netlab-workload-observer|netlab-workload-high-calibrate|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-policy|netlab-workload-wires|netlab-workload-observer|netlab-workload-high-sockets|netlab-workload-high-calibrate|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -262,6 +262,21 @@ PYTHON
     python3 scripts/netlab-observer.py "$REPORT_DIR" || observer_validation_status=$?
     if [[ "$observer_status" == 0 ]]; then observer_status=$observer_validation_status; fi
     exit "$observer_status"
+  elif [[ "$DEV_TASK" == netlab-workload-high-sockets ]]; then
+    check_format || exit 1
+    printf '{"layer":"kernel_TCP","slo":false,"calibrated":false,"diagnostic":"tcp_sockets","measurement_revision":"workload_kernel_tcp_sockets_v1","test_threads":1,"repeats":3,"ignored":true,"qdisc_units_review_required":true,"filters":["workload::calibration::hd0_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    export NETLAB_DIAGNOSTICS=0
+    unset KHOR_NET_DIAGNOSTICS
+    high_status=0
+    for repeat in 1 2 3; do
+      next_status=0
+      NETLAB_TEST_THREADS=1 bash scripts/netlab.sh workload::calibration::hd0_ --ignored || next_status=$?
+      if [[ "$high_status" == 0 && "$next_status" != 0 ]]; then high_status=$next_status; fi
+    done
+    next_status=0
+    python3 scripts/netlab-kernel-sockets.py "$REPORT_DIR" || next_status=$?
+    if [[ "$high_status" == 0 && "$next_status" != 0 ]]; then high_status=$next_status; fi
+    exit "$high_status"
   elif [[ "$DEV_TASK" == netlab-workload-high-calibrate ]]; then
     check_format || exit 1
     printf '{"layer":"kernel_TCP","slo":false,"calibrated":false,"diagnostic":"off","measurement_revision":"workload_kernel_tcp_calibration_high_v1","test_threads":1,"repeats":3,"ignored":true,"qdisc_units_review_required":true,"filters":["workload::calibration::h0_"]}\n' > "$REPORT_DIR/measurement-mode.json"
