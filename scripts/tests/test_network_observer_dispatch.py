@@ -15,7 +15,7 @@ class ObserverDispatch(unittest.TestCase):
         env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1', GIT_AUTHOR_NAME='Fixture',
                    GIT_AUTHOR_EMAIL='fixture@localhost', GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@localhost')
-        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy', 'netlab-workload-high-calibrate', 'netlab-workload-high-sockets', 'netlab-workload-high-long', 'netlab-workload-high-burst', 'netlab-workload-high-queues', 'netlab-workload-high-capacity'], ['success', 'case_failed', 'guard_failed']):
+        for task, mode in itertools.chain(itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy', 'netlab-workload-high-calibrate', 'netlab-workload-high-sockets', 'netlab-workload-high-long', 'netlab-workload-high-burst', 'netlab-workload-high-queues', 'netlab-workload-high-capacity', 'netlab-workload-high'], ['success', 'case_failed', 'guard_failed']), [('netlab-workload-high', 'high_failed')]):
             with self.subTest(task=task, mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root/'source'
@@ -28,7 +28,7 @@ p=pathlib.Path(os.environ['MOCK_TRACE']);rows=json.loads(p.read_text()) if p.exi
 rows.append(dict(args=sys.argv[1:],directory=os.environ['NETLAB_RUN_DIR'],threads=os.environ['NETLAB_TEST_THREADS'],diagnostic=os.environ.get('NETLAB_DIAGNOSTICS')))
 p.write_text(json.dumps(rows));mode=os.environ['MOCK_MODE']
 failure_index=1 if os.environ['DEV_TASK']=='netlab-workload-high-long' else 3
-sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and len(rows)==failure_index else 0)
+sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and len(rows)==failure_index or mode=='high_failed' and len(rows)==6 else 0)
 '''+"\nPY\n")
                 (source/'scripts/netlab-observer.py').write_text("import json,os,pathlib\np=pathlib.Path(os.environ['MOCK_TRACE']);r=json.loads(p.read_text());r.append({'validation':True});p.write_text(json.dumps(r))\n")
                 (source/'scripts/netlab-workload-wires.py').write_text((source/'scripts/netlab-observer.py').read_text())
@@ -39,6 +39,7 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
                 (source/'scripts/netlab-kernel-burst.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 (source/'scripts/netlab-kernel-queues.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 (source/'scripts/netlab-kernel-capacity.py').write_text((source/'scripts/netlab-observer.py').read_text())
+                (source/'scripts/netlab-workload-high.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 git('init','-q');git('add','.');git('commit','-qm','stub fixture')
                 package=root/'package';package.mkdir();git('clone','--bare','--quiet',str(source),str(package/'source.git'))
                 (package/'source.json').write_text(json.dumps(dict(build_commit=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}'))))
@@ -52,6 +53,18 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
                     GITHUB_SHA='control-fixture',MOCK_TRACE=str(trace),MOCK_MODE=mode))
                 calls=json.loads(trace.read_text());self.assertEqual(calls[-1],{'validation':True})
                 cases=calls[:-1]
+                if task == 'netlab-workload-high':
+                    expected = ['workload::observer::w3_']
+                    if mode != 'guard_failed':expected += ['workload::w2_']*3
+                    if mode in ['success', 'high_failed']:expected += ['workload::wh2_']*3
+                    self.assertEqual([r['args'] for r in cases],[[x,'--ignored'] for x in expected])
+                    self.assertEqual(cases[0]['directory'],str(report/'observer-guards'))
+                    for r in cases[1:]:
+                        folder='low-regression' if r['args'][0]=='workload::w2_' else 'netlab'
+                        self.assertEqual(r['directory'],str(report/folder))
+                    self.assertTrue(all(r['threads']=='1' and r['diagnostic']=='0' for r in cases))
+                    self.assertEqual(run.returncode,0 if mode=='success' else 73,run.stdout+run.stderr)
+                    continue
                 if task in ['netlab-workload-high-burst', 'netlab-workload-high-queues']:
                     expected = ['ha0_','hb0_','hb0_','ha0_'] if task == 'netlab-workload-high-burst' else ['hb0_','hq0_','hq0_','hb0_']
                     self.assertEqual([r['args'] for r in cases], [['workload::calibration::'+x,'--ignored'] for x in expected])
