@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Khor",
+  "version": "0.2.0",
+  "identifier": "io.github.colehank.khor",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "macOS": {
+      "bundleName": "khor"
+    },
+    "iOS": {
+      "frameworks": [
+        "QuickLook",
+        "PDFKit"
+      ]
+    }
+  }
+}
