@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-wires|netlab-workload-observer|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-policy|netlab-workload-wires|netlab-workload-observer|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -210,6 +210,24 @@ passed=len(results)==3 and all(r['valid'] and r['functional_ok'] for r in result
 sys.exit(0 if passed else 1)
 PYTHON
     exit "$workload_status"
+  elif [[ "$DEV_TASK" == netlab-workload-policy ]]; then
+    check_format || exit 1
+    printf '{"layer":"node_policy_comparison","slo":false,"calibrated":false,"diagnostic":"off","measurement_revision":"resident_mixed_workload_v4","comparison_revision":"workload_response_priority_v1","test_threads":1,"repeats":3,"ignored":true,"guard_filter":"workload::observer::w3_","filters":["workload::w2_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    export NETLAB_DIAGNOSTICS=0
+    unset KHOR_NET_DIAGNOSTICS
+    policy_status=0
+    NETLAB_RUN_DIR="$REPORT_DIR/observer-guards" NETLAB_TEST_THREADS=1 bash scripts/netlab.sh workload::observer::w3_ --ignored || policy_status=$?
+    if [[ "$policy_status" == 0 ]]; then
+      for repeat in 1 2 3; do
+        next_status=0
+        NETLAB_TEST_THREADS=1 bash scripts/netlab.sh workload::w2_ --ignored || next_status=$?
+        if [[ "$policy_status" == 0 && "$next_status" != 0 ]]; then policy_status=$next_status; fi
+      done
+    fi
+    next_status=0
+    python3 scripts/netlab-workload-policy.py "$REPORT_DIR" || next_status=$?
+    if [[ "$policy_status" == 0 && "$next_status" != 0 ]]; then policy_status=$next_status; fi
+    exit "$policy_status"
   elif [[ "$DEV_TASK" == netlab-workload-wires ]]; then
     check_format || exit 1
     printf '{"layer":"node_diagnostic","slo":false,"diagnostic":"lifecycle","measurement_revision":"resident_mixed_workload_v4","wire_revision":"workload_wire_stages_v1","test_threads":1,"repeats":3,"ignored":true,"guard_filter":"workload::observer::w3_","filters":["workload::w2_"]}\n' > "$REPORT_DIR/measurement-mode.json"

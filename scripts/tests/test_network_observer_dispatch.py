@@ -15,7 +15,7 @@ class ObserverDispatch(unittest.TestCase):
         env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1', GIT_AUTHOR_NAME='Fixture',
                    GIT_AUTHOR_EMAIL='fixture@localhost', GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@localhost')
-        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires'], ['success', 'case_failed', 'guard_failed']):
+        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy'], ['success', 'case_failed', 'guard_failed']):
             with self.subTest(task=task, mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root/'source'
@@ -31,6 +31,7 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
 '''+"\nPY\n")
                 (source/'scripts/netlab-observer.py').write_text("import json,os,pathlib\np=pathlib.Path(os.environ['MOCK_TRACE']);r=json.loads(p.read_text());r.append({'validation':True});p.write_text(json.dumps(r))\n")
                 (source/'scripts/netlab-workload-wires.py').write_text((source/'scripts/netlab-observer.py').read_text())
+                (source/'scripts/netlab-workload-policy.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 git('init','-q');git('add','.');git('commit','-qm','stub fixture')
                 package=root/'package';package.mkdir();git('clone','--bare','--quiet',str(source),str(package/'source.git'))
                 (package/'source.json').write_text(json.dumps(dict(build_commit=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}'))))
@@ -51,5 +52,6 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
                     expected=['workload::w1_','workload::w2_','workload::w2_','workload::w1_','workload::w1_','workload::w2_'] if task=='netlab-workload-observer' else ['workload::w2_']*3
                     self.assertEqual([r['args'][0] for r in cases[1:]],expected)
                     self.assertTrue(all(r['directory']==str(report/'netlab') and r['threads']=='1' for r in cases[1:]))
-                    self.assertTrue(all(r['diagnostic']==('lifecycle' if task=='netlab-workload-wires' else None) for r in cases[1:]))
+                    diagnostic={'netlab-workload-wires':'lifecycle','netlab-workload-policy':'0'}.get(task)
+                    self.assertTrue(all(r['diagnostic']==diagnostic for r in cases[1:]))
                 self.assertEqual(run.returncode,0 if mode=='success' else 73,run.stdout+run.stderr)
