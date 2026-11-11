@@ -15,7 +15,7 @@ class ObserverDispatch(unittest.TestCase):
         env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1', GIT_AUTHOR_NAME='Fixture',
                    GIT_AUTHOR_EMAIL='fixture@localhost', GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@localhost')
-        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy', 'netlab-workload-high-calibrate', 'netlab-workload-high-sockets'], ['success', 'case_failed', 'guard_failed']):
+        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy', 'netlab-workload-high-calibrate', 'netlab-workload-high-sockets', 'netlab-workload-high-long'], ['success', 'case_failed', 'guard_failed']):
             with self.subTest(task=task, mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root/'source'
@@ -27,13 +27,15 @@ import json,os,pathlib,sys
 p=pathlib.Path(os.environ['MOCK_TRACE']);rows=json.loads(p.read_text()) if p.exists() else []
 rows.append(dict(args=sys.argv[1:],directory=os.environ['NETLAB_RUN_DIR'],threads=os.environ['NETLAB_TEST_THREADS'],diagnostic=os.environ.get('NETLAB_DIAGNOSTICS')))
 p.write_text(json.dumps(rows));mode=os.environ['MOCK_MODE']
-sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and len(rows)==3 else 0)
+failure_index=1 if os.environ['DEV_TASK']=='netlab-workload-high-long' else 3
+sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and len(rows)==failure_index else 0)
 '''+"\nPY\n")
                 (source/'scripts/netlab-observer.py').write_text("import json,os,pathlib\np=pathlib.Path(os.environ['MOCK_TRACE']);r=json.loads(p.read_text());r.append({'validation':True});p.write_text(json.dumps(r))\n")
                 (source/'scripts/netlab-workload-wires.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 (source/'scripts/netlab-workload-policy.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 (source/'scripts/netlab-kernel-high.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 (source/'scripts/netlab-kernel-sockets.py').write_text((source/'scripts/netlab-observer.py').read_text())
+                (source/'scripts/netlab-kernel-long.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 git('init','-q');git('add','.');git('commit','-qm','stub fixture')
                 package=root/'package';package.mkdir();git('clone','--bare','--quiet',str(source),str(package/'source.git'))
                 (package/'source.json').write_text(json.dumps(dict(build_commit=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}'))))
@@ -47,9 +49,9 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
                     GITHUB_SHA='control-fixture',MOCK_TRACE=str(trace),MOCK_MODE=mode))
                 calls=json.loads(trace.read_text());self.assertEqual(calls[-1],{'validation':True})
                 cases=calls[:-1]
-                if task in ['netlab-workload-high-calibrate','netlab-workload-high-sockets']:
-                    self.assertEqual(len(cases),3)
-                    selected='hd0_' if task=='netlab-workload-high-sockets' else 'h0_'
+                if task in ['netlab-workload-high-calibrate','netlab-workload-high-sockets','netlab-workload-high-long']:
+                    self.assertEqual(len(cases),1 if task=='netlab-workload-high-long' else 3)
+                    selected={'netlab-workload-high-calibrate':'h0_','netlab-workload-high-sockets':'hd0_','netlab-workload-high-long':'hl0_'}[task]
                     self.assertTrue(all(r['args']==['workload::calibration::'+selected,'--ignored'] for r in cases))
                     self.assertTrue(all(r['directory']==str(report/'netlab') and r['threads']=='1' and r['diagnostic']=='0' for r in cases))
                     self.assertEqual(run.returncode,0 if mode=='success' else 73,run.stdout+run.stderr)
