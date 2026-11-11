@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -210,6 +210,50 @@ passed=len(results)==3 and all(r['valid'] and r['functional_ok'] for r in result
 sys.exit(0 if passed else 1)
 PYTHON
     exit "$workload_status"
+  elif [[ "$DEV_TASK" == netlab-workload-calibrate ]]; then
+    check_format || exit 1
+    printf '{"layer":"kernel_TCP","slo":false,"calibrated":false,"measurement_revision":"workload_kernel_tcp_calibration_v1","test_threads":1,"repeats":3,"ignored":true,"qdisc_units_review_required":true,"filters":["workload::calibration::w0_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    calibration_status=0
+    repeat_netlab workload::calibration::w0_ --ignored || calibration_status=$?
+    python3 - "$REPORT_DIR" <<'PYTHON' || calibration_status=$?
+import hashlib,json,pathlib,re,sys
+# kernel TCP calibration raw validator
+report=pathlib.Path(sys.argv[1]);results=[]
+for path in sorted((report/'netlab').glob('*/scenarios.log')):
+    item={'log':str(path.relative_to(report)),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'valid':False,'functional_and_bounds_ok':False}
+    try:
+        text=path.read_text();rows=[json.loads(line.split('] ',1)[1]) for line in text.splitlines() if line.startswith('[netlab-workload-calibration] ')]
+        assert rows and all(r['schema']==1 and r['revision']=='workload_kernel_tcp_calibration_v1' for r in rows)
+        def one(kind):
+            found=[r for r in rows if r['event']==kind];assert len(found)==1;return found[0]
+        manifest=one('manifest');complete=one('complete');connection=one('connect')
+        assert manifest['warmup']==4 and manifest['echoes']==64 and manifest['echo_bytes']==64 and manifest['bulk_bytes']==8388608
+        assert manifest['min_rtt_us_bounds']==[35000,80000] and manifest['goodput_mbit_bounds']==[6.4,9.6] and manifest['qdisc_units_review_required'] is True
+        echoes=[r for r in rows if r['event']=='echo'];bulks=[r for r in rows if r['event']=='bulk'];captures=[r for r in rows if r['event']=='capture']
+        assert len(echoes)==68 and {r['index'] for r in echoes}==set(range(68))
+        assert all(r['warmup']==(r['index']<4) and r['bytes']==64 and r['ended_us']>=r['started_us'] and r['elapsed_us']==r['ended_us']-r['started_us'] for r in echoes)
+        assert len(bulks)==2 and {r['direction'] for r in bulks}=={'upload','download'}
+        assert all(r['bytes']==8388608 and r['elapsed_us']==r['ended_us']-r['started_us'] and r['elapsed_us']>0 for r in bulks)
+        assert len(captures)==4 and {r['name'] for r in captures}=={'x_before','gateway_before','x_after','gateway_after'}
+        for capture in captures:
+            commands=capture['capture'];assert all(commands[k]['ok'] is True for k in ['qdisc_json','qdisc_text','interfaces'])
+            qdiscs=json.loads(commands['qdisc_json']['stdout']);assert all(any(r['kind']==kind for r in qdiscs) for kind in ['netem','tbf'])
+        successes=[r['elapsed_us'] for r in echoes if not r['warmup'] and r['outcome']=='ok'];minimum=min(successes) if successes else None
+        rates=[8388608*8/r['elapsed_us'] for r in bulks]
+        bounds=minimum is not None and 35000<=minimum<=80000 and all(6.4<=v<=9.6 for v in rates)
+        assert complete['samples']==70 and complete['min_rtt_us']==minimum and complete['goodput_mbit']==rates and complete['bounds_ok']==bounds
+        assert complete['calibrated'] is False and complete['qdisc_units_review_required'] is True
+        summaries=re.findall(r'^test result: (.*)$',text,re.M);assert len(summaries)==1 and summaries[0].startswith('ok. 1 passed; 0 failed; 0 ignored;')
+        functional=bounds and connection['ok'] is True and all(r['outcome']=='ok' and r['error'] is None for r in echoes+bulks) and all(r['exact_bytes'] is True for r in bulks) and all(complete[k] is True for k in ['functional_and_bounds_ok','server_ok','qdiscs_present'])
+        item.update(valid=True,functional_and_bounds_ok=functional,min_rtt_us=minimum,goodput_mbit=rates,echo_samples=68,bulk_bytes=16777216)
+    except (AssertionError,ValueError,KeyError,TypeError,IndexError,ZeroDivisionError) as error:
+        item['error']=type(error).__name__+': '+str(error)
+    results.append(item)
+passed=len(results)==3 and all(r['valid'] and r['functional_and_bounds_ok'] for r in results)
+(report/'workload-calibration-contracts.json').write_text(json.dumps({'schema':1,'revision':'workload_kernel_tcp_calibration_v1','source':json.loads((report/'source.json').read_text()),'results':results,'passed':passed,'calibrated':False,'slo':False,'qdisc_units_review_required':True},indent=2)+'\n')
+sys.exit(0 if passed else 1)
+PYTHON
+    exit "$calibration_status"
   elif [[ "$DEV_TASK" == netlab-measure-check ]]; then
     printf '{"layer":"fixture","slo":false,"measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::attempts::"]}\n' > "$REPORT_DIR/measurement-mode.json"
     NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::attempts:: --ignored
