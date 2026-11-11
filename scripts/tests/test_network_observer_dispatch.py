@@ -15,7 +15,7 @@ class ObserverDispatch(unittest.TestCase):
         env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1', GIT_AUTHOR_NAME='Fixture',
                    GIT_AUTHOR_EMAIL='fixture@localhost', GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@localhost')
-        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy'], ['success', 'case_failed', 'guard_failed']):
+        for task, mode in itertools.product(['netlab-workload-observer', 'netlab-workload-wires', 'netlab-workload-policy', 'netlab-workload-high-calibrate'], ['success', 'case_failed', 'guard_failed']):
             with self.subTest(task=task, mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source = root/'source'
@@ -32,6 +32,7 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
                 (source/'scripts/netlab-observer.py').write_text("import json,os,pathlib\np=pathlib.Path(os.environ['MOCK_TRACE']);r=json.loads(p.read_text());r.append({'validation':True});p.write_text(json.dumps(r))\n")
                 (source/'scripts/netlab-workload-wires.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 (source/'scripts/netlab-workload-policy.py').write_text((source/'scripts/netlab-observer.py').read_text())
+                (source/'scripts/netlab-kernel-high.py').write_text((source/'scripts/netlab-observer.py').read_text())
                 git('init','-q');git('add','.');git('commit','-qm','stub fixture')
                 package=root/'package';package.mkdir();git('clone','--bare','--quiet',str(source),str(package/'source.git'))
                 (package/'source.json').write_text(json.dumps(dict(build_commit=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}'))))
@@ -45,6 +46,12 @@ sys.exit(73 if mode=='guard_failed' and len(rows)==1 or mode=='case_failed' and 
                     GITHUB_SHA='control-fixture',MOCK_TRACE=str(trace),MOCK_MODE=mode))
                 calls=json.loads(trace.read_text());self.assertEqual(calls[-1],{'validation':True})
                 cases=calls[:-1]
+                if task=='netlab-workload-high-calibrate':
+                    self.assertEqual(len(cases),3)
+                    self.assertTrue(all(r['args']==['workload::calibration::h0_','--ignored'] for r in cases))
+                    self.assertTrue(all(r['directory']==str(report/'netlab') and r['threads']=='1' and r['diagnostic']=='0' for r in cases))
+                    self.assertEqual(run.returncode,0 if mode=='success' else 73,run.stdout+run.stderr)
+                    continue
                 self.assertEqual(len(cases),1 if mode=='guard_failed' else (7 if task=='netlab-workload-observer' else 4),run.stdout+run.stderr)
                 self.assertEqual(cases[0]['args'],['workload::observer::w3_','--ignored'])
                 self.assertEqual(cases[0]['directory'],str(report/'observer-guards'))
