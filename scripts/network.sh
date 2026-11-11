@@ -1,7 +1,7 @@
 #!/bin/bash
 # Trusted control driver: portable network checks on Linux/Mac; netlab requires Linux.
 set -euo pipefail
-case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-policy|netlab-workload-wires|netlab-workload-observer|netlab-workload-high|netlab-workload-high-capacity|netlab-workload-high-queues|netlab-workload-high-burst|netlab-workload-high-long|netlab-workload-high-sockets|netlab-workload-high-calibrate|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
+case "$DEV_TASK" in net-unit|net-node|net-node-routes|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-workload-policy|netlab-workload-wires|netlab-workload-observer|netlab-workload-high-policy|netlab-workload-high|netlab-workload-high-capacity|netlab-workload-high-queues|netlab-workload-high-burst|netlab-workload-high-long|netlab-workload-high-sockets|netlab-workload-high-calibrate|netlab-workload-calibrate|netlab-workload|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
@@ -262,6 +262,25 @@ PYTHON
     python3 scripts/netlab-observer.py "$REPORT_DIR" || observer_validation_status=$?
     if [[ "$observer_status" == 0 ]]; then observer_status=$observer_validation_status; fi
     exit "$observer_status"
+  elif [[ "$DEV_TASK" == netlab-workload-high-policy ]]; then
+    check_format || exit 1
+    printf '{"layer":"node_high_policy_comparison","slo":false,"calibrated":false,"diagnostic":"off","measurement_revision":"resident_mixed_workload_high_v2","comparison_revision":"workload_high_response_priority_v1","test_threads":1,"repeats":3,"ignored":true,"guard_filter":"workload::observer::w3_","filters":["workload::wh2_"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    export NETLAB_DIAGNOSTICS=0
+    unset KHOR_NET_DIAGNOSTICS
+    policy_status=0
+    NETLAB_RUN_DIR="$REPORT_DIR/observer-guards" NETLAB_TEST_THREADS=1 \
+      bash scripts/netlab.sh workload::observer::w3_ --ignored || policy_status=$?
+    if [[ "$policy_status" == 0 ]]; then
+      for repeat in 1 2 3; do
+        next_status=0
+        NETLAB_TEST_THREADS=1 bash scripts/netlab.sh workload::wh2_ --ignored || next_status=$?
+        if [[ "$policy_status" == 0 && "$next_status" != 0 ]]; then policy_status=$next_status; fi
+      done
+    fi
+    next_status=0
+    python3 scripts/netlab-workload-high-policy.py "$REPORT_DIR" || next_status=$?
+    if [[ "$policy_status" == 0 && "$next_status" != 0 ]]; then policy_status=$next_status; fi
+    exit "$policy_status"
   elif [[ "$DEV_TASK" == netlab-workload-high ]]; then
     check_format || exit 1
     printf '{"layer":"node_high_preflight","slo":false,"calibrated":false,"measurement_revision":"resident_mixed_workload_high_v2","test_threads":1,"guard_filter":"workload::observer::w3_","low_repeats":3,"high_repeats":3,"ignored":true}\n' > "$REPORT_DIR/measurement-mode.json"
