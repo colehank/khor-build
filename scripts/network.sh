@@ -114,6 +114,38 @@ PYTHON
         2>&1 | tee "$REPORT_DIR/congestion-$congestion_repeat.log" || congestion_status=$?
     done
     exit "$congestion_status"
+  elif [[ "$DEV_TASK" == net-node ]]; then
+    # Isolated prototype branch; not the full net-node acceptance lane.
+    printf '{"suite":"pull_window_contracts_v1","full_net_node_accepted":false,"performance_accepted":false,"test_threads":1,"scopes":["window","files","files_wire","file_handoff_wire"]}\n' > "$REPORT_DIR/pipeline-mode.json"
+    pipeline_status=0
+    pipeline_suite() {
+      local log="$1" status=0
+      shift
+      "$@" 2>&1 | tee "$REPORT_DIR/$log" || status=$?
+      if [[ "$pipeline_status" == 0 && "$status" != 0 ]]; then pipeline_status=$status; fi
+      return 0
+    }
+    pipeline_suite pull-window-unit.log cargo test --locked -p khor-node --lib link::pull_window::tests:: -- --nocapture --test-threads=1
+    pipeline_suite file-unit.log cargo test --locked -p khor-node --lib files:: -- --nocapture --test-threads=1
+    pipeline_suite files-wire.log cargo test --locked -p khor-node --test files_wire -- --nocapture --test-threads=1
+    pipeline_suite file-handoff-wire.log cargo test --locked -p khor-node --test file_handoff_wire -- --nocapture --test-threads=1
+    pipeline_validation=0
+    python3 - "$REPORT_DIR" <<'PYTHON' || pipeline_validation=$?
+import hashlib,json,pathlib,re,sys
+report=pathlib.Path(sys.argv[1]);suites={}
+for name,expected in [('pull-window-unit.log',4),('file-unit.log',None),('files-wire.log',1),('file-handoff-wire.log',1)]:
+ raw=(report/name).read_bytes();summaries=re.findall(r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;',raw.decode(errors='replace'),re.M)
+ row=dict(sha256=hashlib.sha256(raw).hexdigest(),expected=expected,valid=False,passed=False,summaries=summaries)
+ if len(summaries)==1:
+  status,good,bad,ignored=summaries[0];row.update(passed_count=int(good),failed_count=int(bad),ignored_count=int(ignored))
+  row['valid']=int(good)+int(bad)>0 and (expected is None or int(good)+int(bad)==expected) and int(ignored)==0
+  row['passed']=row['valid'] and status=='ok' and int(bad)==0
+ suites[name]=row
+result=dict(schema=1,suite='pull_window_contracts_v1',source=json.loads((report/'source.json').read_text()),suites=suites,passed=all(x['passed'] for x in suites.values()),full_net_node_accepted=False,performance_accepted=False,full_N3_accepted=False,limits=['Prototype window logic and existing real scratch Node file contracts only','No priority/prefetch timing, mobile device, complete preview, fairness or energy acceptance'])
+(report/'pipeline-contracts.json').write_text(json.dumps(result,indent=2)+'\n');sys.exit(0 if result['passed'] else 1)
+PYTHON
+    if [[ "$pipeline_status" == 0 ]]; then pipeline_status=$pipeline_validation; fi
+    exit "$pipeline_status"
   else
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
     cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
