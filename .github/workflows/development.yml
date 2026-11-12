@@ -1,20 +1,17 @@
-name: Source-only development
-run-name: dev ${{ inputs.task }} ${{ inputs.request_id }}
+name: Source-only public builder verification
+run-name: Public builder tooling ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
     inputs:
       snapshot_sha:
-        description: Parentless source snapshot commit in this private repository
         required: true
         type: string
       task:
         required: true
         type: choice
-        options: [fast, native, lab, resolve, updates, ios-lab-prepare, ios-lab, ios-keyboard]
-        default: fast
+        options: [fast]
       request_id:
-        description: Client receipt ID
         required: true
         type: string
 
@@ -22,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  prepare:
+  scripts:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -30,140 +27,34 @@ jobs:
         with:
           path: control
           persist-credentials: false
-      - name: Validate the requested snapshot identity
-        env:
-          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-          REQUEST_ID: ${{ inputs.request_id }}
-        run: |
-          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.snapshot_sha }}
-          path: source
+          path: snapshot
           persist-credentials: false
-      - name: Prepare source and trusted control scripts
+      - name: Verify and materialize the exact source envelope
         env:
           SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-        run: python3 control/scripts/prepare-development.py source "$RUNNER_TEMP/source-package"
-      - name: Prepare the portable check checkout
-        if: inputs.task == 'fast'
+          REQUEST_ID: ${{ inputs.request_id }}
         run: |
+          set -euo pipefail
+          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
+          python3 control/scripts/prepare-development.py snapshot "$RUNNER_TEMP/source-package"
           git clone --no-hardlinks "$RUNNER_TEMP/source-package/source.git" "$RUNNER_TEMP/portable-source"
-          mkdir -p "$RUNNER_TEMP/portable-evidence"
-          cp "$RUNNER_TEMP/source-package/source.json" "$RUNNER_TEMP/portable-evidence/source.json"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        if: inputs.task == 'fast'
-        with:
-          node-version: 22.19.0
-      - uses: dtolnay/rust-toolchain@1.95.0
-        if: inputs.task == 'fast'
-        with:
-          components: rustfmt
-      - name: Check portable Rust formatting on the hosted lint machine
-        id: rust-format
-        if: inputs.task == 'fast'
+          mkdir -p "$RUNNER_TEMP/public-builder-evidence"
+          cp "$RUNNER_TEMP/source-package/source.json" "$RUNNER_TEMP/public-builder-evidence/source.json"
+      - name: Verify public submission and existing private builder contracts
         working-directory: ${{ runner.temp }}/portable-source
         run: |
           set -euo pipefail
-          python3 scripts/check-rust-format.py --check 2>&1 | tee "$RUNNER_TEMP/portable-evidence/format.log"
-      - name: Validate source workflows before using the Mac worker
-        if: inputs.task == 'fast'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          set -euo pipefail
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          curl --fail --location --silent --show-error https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz --output "$RUNNER_TEMP/shellcheck.tar.xz"
-          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum --check
-          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
-          "$(go env GOPATH)/bin/actionlint" -shellcheck "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" 2>&1 | tee "$RUNNER_TEMP/portable-evidence/workflows.log"
-      - name: Attach the formatter patch for a source-only checkout
-        if: always() && inputs.task == 'fast' && steps.rust-format.outcome == 'failure'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          python3 scripts/check-rust-format.py --write
-          git diff --binary > "$RUNNER_TEMP/portable-evidence/format.patch"
-      - name: Run the portable script suite in its canonical CI environment
-        if: inputs.task == 'fast'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          set -euo pipefail
-          python3 scripts/sync-install-components.py
-          python3 -m unittest discover -s scripts/tests -p 'test_*.py' --verbose --failfast 2>&1 | tee "$RUNNER_TEMP/portable-evidence/scripts.log"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always() && inputs.task == 'fast'
-        with:
-          name: dev-portable-evidence
-          path: ${{ runner.temp }}/portable-evidence
-          retention-days: 7
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: dev-source
-          path: ${{ runner.temp }}/source-package
-          retention-days: 3
-          if-no-files-found: error
-
-  development:
-    needs: prepare
-    concurrency:
-      group: mac-mini-worker
-      cancel-in-progress: false
-    permissions: {}
-    runs-on: [khor-mac-mini, khor-dev]
-    timeout-minutes: 180
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: dev-source
-          path: ${{ runner.temp }}/source-package
-      - name: Run the development task under the shared build guard
-        env:
-          SOURCE_SHA: ${{ inputs.snapshot_sha }}
-          CHECK: full
-          DEV_TASK: ${{ inputs.task }}
-          SOURCE_PACKAGE: ${{ runner.temp }}/source-package
-          REPORT_DIR: ${{ runner.temp }}/dev-evidence
-          LAB_DIR: ${{ runner.temp }}/dev-lab
-        run: |
-          set -euo pipefail
-          mkdir -p "$REPORT_DIR"
-          cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
-          REPORT_DIR="$REPORT_DIR/cache-maintenance" /usr/bin/python3 "$SOURCE_PACKAGE/worker-storage.py" ensure-budget
-          /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a /bin/bash "$SOURCE_PACKAGE/development.sh" 2>&1 | tee "$REPORT_DIR/task.log"
+          for suite in test_public_builder.py test_remote_development.py test_developer_lab.py; do
+            python3 -B -m unittest discover -s scripts/tests -p "$suite" -v 2>&1 | tee "$RUNNER_TEMP/public-builder-evidence/$suite.log"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: dev-evidence
-          path: ${{ runner.temp }}/dev-evidence
+          name: public-builder-evidence
+          path: ${{ runner.temp }}/public-builder-evidence
           if-no-files-found: warn
           retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: success() && inputs.task == 'lab'
-        with:
-          name: dev-lab
-          path: ${{ runner.temp }}/dev-lab
-          if-no-files-found: error
-          retention-days: 3
-
-  retire-snapshot:
-    needs: [prepare, development]
-    if: always()
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Retire only this completed request's source branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REQUEST_ID: ${{ inputs.request_id }}
-          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
-          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          ref="heads/dev-snapshots/$REQUEST_ID"
-          actual=$(gh api "repos/$REPOSITORY/git/ref/$ref" --jq .object.sha) || exit 0
-          test "$actual" = "$SNAPSHOT_SHA"
-          gh api --method DELETE "repos/$REPOSITORY/git/refs/$ref"
