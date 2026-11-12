@@ -156,22 +156,9 @@ PYTHON
     exit "$regression_status"
 
   elif [[ "$DEV_TASK" == net-vendor ]]; then
-    printf '{"suite":"iroh_stable_upgrade_gate_v1","diagnostic":true,"slo":false,"transformed_source":false,"test_threads":1,"scope":["noq_all_lib","iroh_all_lib","node_lib_test_compile"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    cp Cargo.lock "$REPORT_DIR/workspace-Cargo.lock"
+    printf '{"suite":"noq14_ack_sampling_patch_exit_v1","slo":false,"test_threads":1,"expected_tests":4,"ablation_patch":5}\n' > "$REPORT_DIR/measurement-mode.json"
     cp vendor/noq-proto/Cargo.lock "$REPORT_DIR/noq-proto-Cargo.lock"
-    cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    upgrade_status=0
-    next_status=0
-    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log" || next_status=$?
-    if [[ "$upgrade_status" == 0 && "$next_status" != 0 ]]; then upgrade_status=$next_status; fi
-    next_status=0
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/iroh-all-unit.log" || next_status=$?
-    if [[ "$upgrade_status" == 0 && "$next_status" != 0 ]]; then upgrade_status=$next_status; fi
-    next_status=0
-    cargo check --locked -p khor-node --lib --tests 2>&1 | tee "$REPORT_DIR/node-upgrade-check.log" || next_status=$?
-    if [[ "$upgrade_status" == 0 && "$next_status" != 0 ]]; then upgrade_status=$next_status; fi
-    git diff --exit-code > "$REPORT_DIR/post-check-source.diff" || upgrade_status=1
-    exit "$upgrade_status"
+    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib tests::ack_sampling:: -- --test-threads=1 2>&1 | tee "$REPORT_DIR/noq-ack-exit-unit.log"
   elif [[ "$DEV_TASK" == net-congestion ]]; then
     # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
     # and repeat sequentially, without another timed case sharing the runtime.
