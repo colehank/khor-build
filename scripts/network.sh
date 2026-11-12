@@ -84,6 +84,15 @@ path.write_text(json.dumps(manifest,indent=2)+'\n')
 PYTHON
       exit "$wan_status"
     fi
+  elif [[ "$DEV_TASK" == net-node ]]; then
+    printf '{"layer":"node","slo":false,"suite":"pull_job_stop_v1","full_regression":false,"diagnostic":true,"test_threads":1,"expected_tests":2}\n' > "$REPORT_DIR/measurement-mode.json"
+    job_stop_status=0
+    KHOR_NET_DIAGNOSTICS=1 cargo test --locked -p khor-node --lib link::dial_budget::pull_window_wire::job_stop:: \
+      -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/pull-job-stop.log" || job_stop_status=$?
+    next_status=0
+    python3 scripts/netlab-pull-job-stop.py "$REPORT_DIR" > "$REPORT_DIR/pull-job-stop-contract.json" || next_status=$?
+    if [[ "$job_stop_status" == 0 && "$next_status" != 0 ]]; then job_stop_status=$next_status; fi
+    exit "$job_stop_status"
   elif [[ "$DEV_TASK" == net-vendor ]]; then
     # Excluded dependencies cannot run their dev-dependencies from the root
     # workspace. Use each committed package lock, and make iroh test our noq
