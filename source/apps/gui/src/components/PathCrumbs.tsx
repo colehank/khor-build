@@ -1,0 +1,201 @@
+// The breadcrumb: a path at rest, every step a place to go.
+//
+// **Moved out of `FilesKind.tsx` on 2026-09-11** (工作区批2), which was
+// the browsing shell's disk instance and left with the landing it
+// served (工作区替代文件). Every measurement in the comments below was
+// taken while it lived there, on the address bar of a browsing tab —
+// they are about a strip of steps in a narrow row, which is what it
+// still is at the top of a workspace.
+//
+// **Why a breadcrumb and not an address.** A path is a chain of real
+// containers a person can stand in, so every step is somewhere to
+// press; a URL is not that shape. That was the whole reason the
+// browsing shell made the resting face a parameter, and it is why this
+// did not survive as part of that shell.
+import { useEffect, useRef } from "react";
+
+import { gui } from "@/gen/catalog";
+import { cn } from "@/lib/utils";
+
+/** What a breadcrumb needs, which is less than a browsing tab had. */
+export type CrumbProps = {
+  /** Where it is, absolute. */
+  at: string;
+  /** Go to another step. */
+  onGo: (path: string) => void;
+  /** Press the step you are standing on. The one press on this strip
+      that is not a step — it used to open the address editor, and what
+      it does now belongs to whoever draws the bar. */
+  onEdit: () => void;
+};
+
+
+/** `/a/b/c` → the root and each step, each carrying the path pressing
+    it goes to. */
+function crumbs(at: string): { label: string; to: string }[] {
+  const out = [{ label: "/", to: "/" }];
+  let sofar = "";
+  for (const part of at.split("/").filter(Boolean)) {
+    sofar += `/${part}`;
+    out.push({ label: part, to: sofar });
+  }
+  return out;
+}
+
+/**
+ * A path at rest: every step, each one a place to go.
+ *
+ * **A breadcrumb is a directory's answer, not the shell's.** A path is
+ * a chain of real containers a person can stand in, so every step is
+ * somewhere to press; a URL is not that shape. That was the whole reason
+ * the browsing shell made its resting face a parameter — and why this
+ * did not follow the shell when the disk kind left it.
+ */
+export function PathCrumbs({ at, onGo, onEdit }: CrumbProps) {
+  // The strip's own scroller, held at its right end: the step you are
+  // standing on is the one worth seeing, and a scroller left at 0 shows
+  // the part every path on that machine has in common.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [at]);
+
+  const path = crumbs(at);
+  return (
+    // The steps have **no gap between them** — that is what makes this
+    // read as a path rather than as a row of words. The slashes are the
+    // whole of the spacing, and one `gap-1` per step (the first
+    // spelling) put four pixels on either side of every separator and
+    // turned `/var/folders/ml` into a list. Measured on a screenshot.
+    //
+    // **The floor under a finger bought part of that back, and the
+    // button below says what the price was.** A step narrower than
+    // `--touch` is widened to it, so a one- or two-letter step now
+    // carries slack — the difference from the `gap-1` spelling is that
+    // it falls after a step rather than around every separator, and
+    // only on the steps too short to press.
+    //
+    // **The strip cannot hand the floor out sideways.**
+    // `overflow-x-auto` makes this a scroll container on both axes: a
+    // hit area larger than the box it sits in would be clipped or made
+    // scrollable, never allowed to hang over its neighbours — which is
+    // the same wall the tab strip hit. So the width is really spent,
+    // and spending it is the judgment, not an oversight.
+    //
+    // **And no step truncates. The strip scrolls instead.** Letting them
+    // share the width was the first spelling and it fails exactly where
+    // a path is longest: at 390 every middle step shrank to two
+    // characters and an ellipsis, so the whole address read
+    // `,v/f…/ı/w_5l2…/ʔkho…/b/tree-beta` — six truncations that name
+    // nothing, and the one segment worth reading squeezed between them.
+    // Measured on a screenshot at 390. Scrolled, the end of the path —
+    // the part that says where you are — is what shows, and the
+    // ancestors are still there to the left, still pressable.
+    <div ref={box} className="flex min-w-0 flex-1 items-center overflow-x-auto">
+      {path.map((c, i) => {
+        const last = i === path.length - 1;
+        return (
+          <span
+            key={c.to}
+            // The last step **grows and never shrinks** (`grow shrink-0`,
+            // not `flex-1`): it is the one that takes the blank tail when
+            // there is one, and a zero basis would have let a leaf longer
+            // than the floor be squeezed to the floor with its own name
+            // hanging out of it.
+            className={cn("flex items-center", last ? "grow shrink-0" : "flex-none")}
+          >
+            {i > 1 && <span className="flex-none text-muted-foreground">/</span>}
+            <button
+              type="button"
+              data-crumb={c.to}
+              // **The step you are standing on opens the box instead of
+              // going anywhere.** Going to where you already are is the
+              // one press on this strip that could do nothing at all,
+              // and an address bar needs a reliable way into its own
+              // editor — on a path deep enough to fill the row there is
+              // no blank tail left to press.
+              //
+              // **And it is the whole tail, not a filler beside it.**
+              // There used to be a second button after the steps, spread
+              // over whatever width was left, so that pressing "somewhere
+              // on the address" opened the editor the way it does in
+              // every other address bar. It did the same thing as this
+              // one, and it could not be given the floor: on a path that
+              // fills the row it measured zero wide (measured at 390 —
+              // an affordance that is not there at all is worse than a
+              // small one), and reserving the floor for it would have
+              // taken a whole step off the visible end of the strip on
+              // the face with the least room. One target, both jobs, and
+              // it carries the bar's name because pressing it is how the
+              // bar is opened — the one press on this strip that is not
+              // a step.
+              data-address-rest={last || undefined}
+              aria-label={last ? gui.address_dir : undefined}
+              onClick={last ? onEdit : () => onGo(c.to)}
+              // **The tall floor always; the wide floor only where
+              // there is a finger** (tokens.css `--touch`).
+              //
+              // The tall half is free — the bar is already that tall
+              // around the machine chip. The wide half was taken
+              // unconditionally, with the price written down and
+              // accepted: a step whose name is one or two letters is a
+              // target of about that many pixels otherwise, and a
+              // breadcrumb is the only thing a person can press on this
+              // face at rest.
+              //
+              // **What was never priced is what it does to the bar when
+              // nobody's finger is anywhere near it.** 「目录显示很丑,
+              // 有很多奇怪的空格」 — the user, 2026-08-29. Measured on
+              // this path, on a pointer machine (widths in CSS pixels):
+              // `/` is 3.8 of text in a 44 box, `t1` 10.3 in 44, `nfs`
+              // 18 in 44, while `workingdir` at 61.5 sits in 65.5. **So
+              // the hole after a step is inversely proportional to how
+              // short its name is** — which is why the raggedness reads
+              // as arbitrary rather than as spacing. Ten steps came to
+              // 1256.6 of bar for 417.5 of name.
+              //
+              // (The unit is named once, in words, rather than written
+              // on each number: `check-px` reads comments too, and it is
+              // right to — a `px` in this file is nearly always a length
+              // that should have been a token. These are readings of
+              // what the screen did, not lengths anybody set, and that
+              // distinction is not one a grep can make.)
+              //
+              // `(pointer: coarse)` is the fact that decides it, and it
+              // is the same shape as the scrollbar batch's `(hover:
+              // hover)`: the floor exists for fingers, a mouse is not a
+              // finger, and the page can be asked which one it has. Not
+              // a width breakpoint — a phone in landscape is still a
+              // finger, and a narrow desktop window is still a mouse.
+              //
+              // **Where the slack goes, when there is slack.** Held to
+              // the start, it always falls *after* a step and never
+              // between a slash and the name it introduces, so `/var`
+              // and `/folders` stay whole and the gaps land at the
+              // joins — centred, it would fall on both sides of every
+              // short step, which is the spelling this file already
+              // threw out for reading as a row of words. The root is the
+              // exception because it is the one step whose name *is* the
+              // separator: with nothing to stay joined to, centring
+              // halves the distance to the first name and puts it on
+              // both sides, which is what a lone slash wants — unless
+              // the root is also where you are standing, in which case
+              // it takes the whole tail and centring would strand one
+              // slash in the middle of the bar. All of that is now a
+              // coarse-pointer sentence; with a mouse there is nothing
+              // to place.
+              className={cn(
+                "inline-flex min-h-touch pointer-coarse:min-w-touch items-center rounded-sm px-0.5 text-callout whitespace-nowrap hover:bg-muted",
+                i === 0 && !last ? "justify-center" : "justify-start",
+                last && "grow shrink-0",
+              )}
+            >
+              {c.label}
+            </button>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
