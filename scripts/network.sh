@@ -33,6 +33,95 @@ for name, content in {
     if not path.exists() or path.read_text() != content:
         path.write_text(content)
 PY
+# Isolated host observation lane: no format/product tests or GUI operations.
+if [[ "$DEV_TASK" == net-node ]]; then
+  python3 - "$REPORT_DIR" <<'HOST_OBSERVER'
+"""Read-only host metadata; no AppleEvents, GUI changes, product code or tests."""
+import json
+import os
+from pathlib import Path
+import platform
+import stat
+import subprocess
+import sys
+import time
+
+
+def command(argv, output=True):
+    started = time.monotonic()
+    try:
+        result = subprocess.run(argv, stdout=subprocess.PIPE if output else subprocess.DEVNULL,
+                                stderr=subprocess.PIPE if output else subprocess.DEVNULL,
+                                text=True, timeout=3, check=False)
+        row = dict(argv=argv, returncode=result.returncode, seconds=time.monotonic()-started)
+        if output:
+            row.update(stdout=result.stdout[:4096], stderr=result.stderr[:4096],
+                       output_truncated=len(result.stdout) > 4096 or len(result.stderr) > 4096)
+        return row
+    except subprocess.TimeoutExpired:
+        return dict(argv=argv, timeout_seconds=3, seconds=time.monotonic()-started)
+    except OSError as error:
+        return dict(argv=argv, error=type(error).__name__, errno=error.errno,
+                    seconds=time.monotonic()-started)
+
+
+def metadata(path):
+    try:
+        value = path.lstat()
+        return dict(exists=True, uid=value.st_uid, gid=value.st_gid,
+                    mode=oct(stat.S_IMODE(value.st_mode)), symlink=stat.S_ISLNK(value.st_mode),
+                    directory=stat.S_ISDIR(value.st_mode),
+                    access_advisory=dict(read=os.access(path, os.R_OK),
+                                         write=os.access(path, os.W_OK), search=os.access(path, os.X_OK)))
+    except OSError as error:
+        return dict(exists=None, error=type(error).__name__, errno=error.errno)
+
+
+def main():
+    assert len(sys.argv) == 2 and platform.system() == 'Darwin'
+    report = Path(sys.argv[1])
+    assert report.is_absolute() and report.is_dir()
+    source = json.loads((report/'source.json').read_text())
+    started = time.monotonic()
+    processes = {}
+    for name in ['Finder', 'osascript']:
+        query = command(['/usr/bin/pgrep', '-x', name])
+        pids = [int(token) for token in query.get('stdout', '').split() if token.isdigit()]
+        row = dict(query=query, count=len(pids), inspected_pids=pids[:8], details=[])
+        for pid in pids[:8]:
+            row['details'].append(command(['/bin/ps', '-p', str(pid),
+                                           '-o', 'uid=,pid=,stat=,etime=,comm=']))
+        processes[name] = row
+    result = dict(schema=1, mode='mac_host_readonly_v1', run_id=os.environ['GITHUB_RUN_ID'],
+                  control_commit=os.environ['GITHUB_SHA'], source=source,
+                  uid=os.getuid(), euid=os.geteuid(), gid=os.getgid(),
+                  console=metadata(Path('/dev/console')),
+                  known_directory_metadata=dict(home=metadata(Path.home()), trash=metadata(Path.home()/'.Trash')),
+                  gui_domain_query=command(['/bin/launchctl', 'print', 'gui/'+str(os.getuid())], output=False),
+                  processes=processes, seconds=time.monotonic()-started,
+                  actual_product_tests=0, apple_events_sent=0, host_changes_performed=False,
+                  full_net_node_accepted=False, performance_accepted=False, full_N5_accepted=False,
+                  limits=['Metadata only; process presence does not prove responsiveness or AppleEvent permission',
+                          'No directory entries, TCC database, credentials, process arguments or environment captured',
+                          'No Finder restart, GUI changes, trash operation, product execution or tests'])
+    with (report/'host-observation.json').open('x') as stream:
+        json.dump(result, stream, indent=2)
+        stream.write('\n')
+    mode = dict(mode='mac_host_readonly_v1', actual_product_tests=0, format_executed=False,
+                full_net_node_accepted=False, performance_accepted=False, full_N5_accepted=False)
+    with (report/'host-observation-mode.json').open('x') as stream:
+        json.dump(mode, stream, indent=2)
+        stream.write('\n')
+    print(json.dumps(dict(mode=result['mode'], actual_product_tests=0,
+                          process_counts={k: v['count'] for k, v in processes.items()},
+                          host_changes_performed=False)))
+
+
+if __name__ == '__main__':
+    main()
+HOST_OBSERVER
+  exit $?
+fi
 repeat_netlab() {
   local status=0 repeat
   for repeat in 1 2 3; do
