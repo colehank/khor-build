@@ -85,14 +85,30 @@ PYTHON
       exit "$wan_status"
     fi
   elif [[ "$DEV_TASK" == net-node ]]; then
-    printf '{"layer":"node","slo":false,"suite":"pull_job_stop_v1","full_regression":false,"diagnostic":true,"test_threads":1,"expected_tests":2}\n' > "$REPORT_DIR/measurement-mode.json"
-    job_stop_status=0
-    KHOR_NET_DIAGNOSTICS=1 cargo test --locked -p khor-node --lib link::dial_budget::pull_window_wire::job_stop:: \
-      -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/pull-job-stop.log" || job_stop_status=$?
+    printf '{"layer":"node","slo":false,"suite":"pull_job_stop_regressions_v1","full_regression":false,"test_threads":1,"filters":["road::tests::","drops::tests::","tree::tests::","post::tests::"],"pull_logic_tests":4,"pull_wire_tests":3}\n' > "$REPORT_DIR/measurement-mode.json"
+    regression_status=0
+    for area in road drops tree post; do
+      next_status=0
+      cargo test --locked -p khor-node --lib "${area}::tests::" -- --nocapture --test-threads=1 \
+        2>&1 | tee "$REPORT_DIR/${area}-unit.log" || next_status=$?
+      if [[ "$regression_status" == 0 && "$next_status" != 0 ]]; then regression_status=$next_status; fi
+    done
+    wire_report="$REPORT_DIR/pull-wire-regression"
+    mkdir -p "$wire_report"
+    cp "$REPORT_DIR/source.json" "$wire_report/source.json"
+    printf '{"scheduler":"rolling","diagnostic":true,"slo":false}\n' > "$wire_report/measurement-mode.json"
     next_status=0
-    python3 scripts/netlab-pull-job-stop.py "$REPORT_DIR" > "$REPORT_DIR/pull-job-stop-contract.json" || next_status=$?
-    if [[ "$job_stop_status" == 0 && "$next_status" != 0 ]]; then job_stop_status=$next_status; fi
-    exit "$job_stop_status"
+    cargo test --locked -p khor-node --lib link::pull_window::tests:: -- --nocapture --test-threads=1 \
+      2>&1 | tee "$wire_report/pull-window-logic.log" || next_status=$?
+    if [[ "$regression_status" == 0 && "$next_status" != 0 ]]; then regression_status=$next_status; fi
+    next_status=0
+    KHOR_NET_DIAGNOSTICS=1 cargo test --locked -p khor-node --lib link::dial_budget::pull_window_wire:: \
+      -- --skip job_stop:: --nocapture --test-threads=1 2>&1 | tee "$wire_report/pull-window-wire.log" || next_status=$?
+    if [[ "$regression_status" == 0 && "$next_status" != 0 ]]; then regression_status=$next_status; fi
+    next_status=0
+    python3 scripts/netlab-pull-window.py "$wire_report" > "$wire_report/pull-window-contract.json" || next_status=$?
+    if [[ "$regression_status" == 0 && "$next_status" != 0 ]]; then regression_status=$next_status; fi
+    exit "$regression_status"
   elif [[ "$DEV_TASK" == net-vendor ]]; then
     # Excluded dependencies cannot run their dev-dependencies from the root
     # workspace. Use each committed package lock, and make iroh test our noq
