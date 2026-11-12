@@ -1,7 +1,9 @@
 # Khor build worker
 
-Private control repository for the rented Mac mini development runner.
-It contains no Khor source fork, signing credentials, model credentials, or cluster access.
+Public control repository for the rented Mac mini development runner and GitHub-hosted development checks.
+The owner made this repository public on 2026-11-13 to restore standard hosted Actions builds.
+Source snapshots, retained snapshot bundles, Actions logs, and artifacts are public; only repository collaborators can manually dispatch workflows.
+The default branch carries build-control scripts. Do not store signing credentials, model credentials, or cluster access here.
 Public Khor pull requests cannot submit jobs here. Workflows are manually dispatched by repository collaborators.
 
 The runner executes as z13. Its host is not a release trust boundary.
