@@ -156,19 +156,22 @@ PYTHON
     exit "$regression_status"
 
   elif [[ "$DEV_TASK" == net-vendor ]]; then
-    # Excluded dependencies cannot run their dev-dependencies from the root
-    # workspace. Use each committed package lock, and make iroh test our noq
-    # patch rather than the registry copy. Keep the exact resolution as evidence.
+    printf '{"suite":"iroh_stable_upgrade_gate_v1","diagnostic":true,"slo":false,"transformed_source":false,"test_threads":1,"scope":["noq_all_lib","iroh_all_lib","node_lib_test_compile"]}\n' > "$REPORT_DIR/measurement-mode.json"
+    cp Cargo.lock "$REPORT_DIR/workspace-Cargo.lock"
     cp vendor/noq-proto/Cargo.lock "$REPORT_DIR/noq-proto-Cargo.lock"
     cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log"
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
-    # The path filter omits our relay-home, QAD and interface regressions.
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib khor_ 2>&1 | tee "$REPORT_DIR/iroh-home-unit.log"
+    upgrade_status=0
+    next_status=0
+    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log" || next_status=$?
+    if [[ "$upgrade_status" == 0 && "$next_status" != 0 ]]; then upgrade_status=$next_status; fi
+    next_status=0
+    cargo test --locked --manifest-path vendor/iroh/Cargo.toml --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/iroh-all-unit.log" || next_status=$?
+    if [[ "$upgrade_status" == 0 && "$next_status" != 0 ]]; then upgrade_status=$next_status; fi
+    next_status=0
+    cargo check --locked -p khor-node --lib --tests 2>&1 | tee "$REPORT_DIR/node-upgrade-check.log" || next_status=$?
+    if [[ "$upgrade_status" == 0 && "$next_status" != 0 ]]; then upgrade_status=$next_status; fi
+    git diff --exit-code > "$REPORT_DIR/post-check-source.diff" || upgrade_status=1
+    exit "$upgrade_status"
   elif [[ "$DEV_TASK" == net-congestion ]]; then
     # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
     # and repeat sequentially, without another timed case sharing the runtime.
