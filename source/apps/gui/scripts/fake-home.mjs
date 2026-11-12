@@ -1,0 +1,208 @@
+// A home that is not the operator's, for every process a gate starts.
+//
+// **测试与 smoke 绝不碰真身份** (docs/handoff/001.md). Until 2026-09-22 the
+// gates gave their children a scratch `KHOR_HOME` and the operator's own
+// `HOME` — and Claude's login lives under `HOME` (`~/.claude`) and in the
+// login keychain, so the dev bridge a smoke run started read the real
+// login and spent it against Anthropic's usage endpoint (s25-investigator's
+// reading: quota 1835 ms, quota_board 5477 ms).
+//
+// So every child gets:
+//   · a `HOME` of its own under the run's scratch directory, holding a
+//     **fake** Claude login (`.claude/.credentials.json`, a token nobody
+//     issued) and the two dotfiles a login shell and git need to behave
+//     like the operator's without reading theirs: `.zprofile` carries the
+//     PATH this script was started with, `.gitconfig` an author;
+//   · `KHOR_CLAUDE_USAGE_URL` pointing at a fake usage endpoint this
+//     script runs, which answers a reading and **writes down the token
+//     every request carried** — so the gate can say not only that the
+//     subscription was read, but that it was read with the fake login and
+//     with nothing else (`usage.strangers`).
+//
+// Codex's login (`~/.codex/auth.json`) follows `HOME` and nothing else —
+// the node reads it under `$HOME` only, never `$CODEX_HOME`
+// (`khor_node::quota::codex`) — and gets its own fake and its own count.
+//
+// The keychain is the one store `HOME` does not move; the node now asks it
+// only when `HOME` is the account's own home (`khor_node::quota`), which a
+// scratch one never is.
+import { spawn } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+/** The token the fake login carries. Recognisably not a real one. */
+export const FAKE_TOKEN = "khor-gate-fake-oauth-token";
+/** The fake Codex (ChatGPT) login's token and account (docs/SHELL.md
+    第九轮): `~/.codex/auth.json` is a login too, and it counts. */
+export const FAKE_CODEX_TOKEN = "khor-gate-fake-codex-token";
+export const FAKE_CODEX_ACCOUNT = "khor-gate-fake-account";
+
+/** Lays a home out under `dir` and answers the variables that point a
+    child at it. `usageUrl` is the fake endpoint's address. */
+export function fakeHome(dir, usageUrl) {
+  mkdirSync(join(dir, ".claude"), { recursive: true });
+  writeFileSync(
+    join(dir, ".claude", ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: FAKE_TOKEN,
+        // A day ahead, in milliseconds — the shape Claude Code writes.
+        expiresAt: Date.now() + 86_400_000,
+        rateLimitTier: "default_claude_max_5x",
+        subscriptionType: "max",
+      },
+    }),
+  );
+  // …and a fake Codex login, the shape Codex writes (`auth_mode`
+  // chatgpt, tokens with an account id).
+  mkdirSync(join(dir, ".codex"), { recursive: true });
+  writeFileSync(
+    join(dir, ".codex", "auth.json"),
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: { access_token: FAKE_CODEX_TOKEN, refresh_token: "khor-gate-fake-refresh", account_id: FAKE_CODEX_ACCOUNT },
+    }),
+  );
+  // What a login shell would have found in the operator's own
+  // `.zprofile`: the PATH this script was started with. Written out
+  // rather than read, so their file is never opened.
+  writeFileSync(join(dir, ".zprofile"), `export PATH=${JSON.stringify(process.env.PATH ?? "")}\n`);
+  writeFileSync(join(dir, ".gitconfig"), "[user]\n\tname = khor gate\n\temail = gate@khor.invalid\n");
+  // **The keychain, caught rather than trusted** (docs/SHELL.md 第五轮
+  // 第 11 条). `HOME` does not move the login keychain, so the node asks
+  // it only when `HOME` is the account's own (`keychain_is_ours`) — and
+  // until now nothing watched that rule from outside. A `security` that
+  // is this file's, first on every child's PATH (`keychainGuard`): it
+  // writes down that it was asked and answers nothing, so the real
+  // keychain is never reached even by a run where the rule broke, and
+  // the gate reads the count at the end (`keychainAsked`). ⚠️ It only
+  // catches a lookup by PATH, which is how the node asks today
+  // (`Command::new("security")`); an absolute `/usr/bin/security` would
+  // walk past it without a word.
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  const shim = join(dir, "bin", "security");
+  writeFileSync(shim, `#!/bin/sh\necho asked >> ${JSON.stringify(join(dir, "keychain-asked"))}\nexit 44\n`);
+  chmodSync(shim, 0o755);
+  // The fake endpoint is on this machine's loopback, and this machine
+  // sets `http_proxy` / `all_proxy`: loopback is let past them, so the
+  // request cannot wander off to a proxy that has no way to reach it.
+  const loopback = [process.env.NO_PROXY, "127.0.0.1", "localhost"].filter(Boolean).join(",");
+  return {
+    HOME: dir,
+    // No scratch node on the segment: every machine on this Wi-Fi decodes
+    // every node's mDNS announcement, the operator's own app included
+    // (`endpoint::NO_MDNS_ENV`).
+    KHOR_NO_MDNS: "1",
+    KHOR_CLAUDE_USAGE_URL: usageUrl,
+    KHOR_CODEX_USAGE_URL: codexUrlOf(usageUrl),
+    NO_PROXY: loopback,
+    no_proxy: loopback,
+  };
+}
+
+/** The fake endpoint answers both vendors; Codex's is asked on its own
+    path, so one server counts both logins separately. */
+export function codexUrlOf(usageUrl) {
+  return usageUrl.replace("/api/oauth/usage", "/backend-api/wham/usage");
+}
+
+/** The directory holding the fake home's `security`, to put first on a
+    child's PATH. Known before `fakeHome` has laid it out, because the
+    gates build their environments at the top of the file. */
+export const keychainGuard = (dir) => join(dir, "bin");
+
+/** How many times anything this run started asked the keychain. */
+export function keychainAsked(dir) {
+  try {
+    return readFileSync(join(dir, "keychain-asked"), "utf8").split("\n").filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The fake usage endpoint. `seen.asked` counts every request;
+ * `seen.strangers` the ones whose bearer was not `FAKE_TOKEN` — **their
+ * tokens are never kept or printed**, only counted: the one thing a gate
+ * must not do with a real credential that reached it is write it into a
+ * log.
+ *
+ * **A process of its own**, not a server inside the gate's: the gates
+ * call `khor` through `execFileSync`, which blocks this event loop for
+ * the whole call — a server living here could not answer a request made
+ * *during* that call, and the reading would come back 问不出来 for a
+ * reason that has nothing to do with the code (measured, this file's
+ * first version). The counts come back through a file.
+ */
+export async function fakeUsage() {
+  const dir = mkdtempSync(join(tmpdir(), "khor-fake-usage-"));
+  const counts = join(dir, "counts.json");
+  const portFile = join(dir, "port");
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      `
+      const { createServer } = require("node:http");
+      const { writeFileSync } = require("node:fs");
+      const [counts, portFile, token, codexToken, codexAccount] = process.argv.slice(1);
+      const seen = { asked: 0, strangers: 0, codex: { asked: 0, strangers: 0 } };
+      writeFileSync(counts, JSON.stringify(seen));
+      createServer((req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        if ((req.url ?? "").includes("/wham/usage")) {
+          seen.codex.asked += 1;
+          if ((req.headers.authorization ?? "") !== "Bearer " + codexToken || req.headers["chatgpt-account-id"] !== codexAccount) {
+            seen.codex.strangers += 1;
+          }
+          writeFileSync(counts, JSON.stringify(seen));
+          return res.end(JSON.stringify({
+            plan_type: "plus",
+            rate_limit: {
+              allowed: true,
+              limit_reached: false,
+              primary_window: { used_percent: 9, limit_window_seconds: 18000, reset_after_seconds: 3600 },
+              secondary_window: { used_percent: 31, limit_window_seconds: 604800, reset_after_seconds: 86400 },
+            },
+            credits: { has_credits: false, unlimited: false, balance: "0" },
+          }));
+        }
+        seen.asked += 1;
+        if ((req.headers.authorization ?? "") !== "Bearer " + token) seen.strangers += 1;
+        writeFileSync(counts, JSON.stringify(seen));
+        res.end(JSON.stringify({ five_hour: { utilization: 37, resets_at: null }, seven_day: { utilization: 58, resets_at: null } }));
+      }).listen(0, "127.0.0.1", function () {
+        writeFileSync(portFile, String(this.address().port));
+      });
+      `,
+      counts,
+      portFile,
+      FAKE_TOKEN,
+      FAKE_CODEX_TOKEN,
+      FAKE_CODEX_ACCOUNT,
+    ],
+    { stdio: "ignore", detached: false },
+  );
+  const end = Date.now() + 10_000;
+  while (!existsSync(portFile)) {
+    if (Date.now() > end) throw new Error("the fake usage endpoint never came up");
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const port = readFileSync(portFile, "utf8").trim();
+  return {
+    url: `http://127.0.0.1:${port}/api/oauth/usage`,
+    get seen() {
+      try {
+        return JSON.parse(readFileSync(counts, "utf8"));
+      } catch {
+        return { asked: 0, strangers: 0, codex: { asked: 0, strangers: 0 } };
+      }
+    },
+    close: async () => {
+      child.kill("SIGTERM");
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
