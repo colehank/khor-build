@@ -16,15 +16,41 @@ CONTROL_FILES = ["prepare-development.py", "native.sh", "development.sh", "packa
                  "update-lab.py", "cli-update-lab.py", "worker-storage.py", "network.sh", "netlab-vz.py", "wan-probe-lease.py", "wan-probe-peer.py"]
 
 
+def read_limited(response, maximum):
+    chunks, size = [], 0
+    while True:
+        part = response.read(min(1024 * 1024, maximum + 1 - size))
+        if not part:
+            return b''.join(chunks)
+        size += len(part)
+        if size > maximum:
+            raise ValueError('repository response exceeds the transport limit')
+        chunks.append(part)
+
+
 def api(path, maximum):
     request = Request(os.environ['GITHUB_API_URL'] + '/repos/' + os.environ['GITHUB_REPOSITORY'] + '/' + path,
                       headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
                                'Accept': 'application/vnd.github+json', 'User-Agent': 'Khor network development'})
     with urlopen(request, timeout=120) as response:
-        data = response.read(maximum * 2 + 8193)
-    if len(data) > maximum * 2 + 8192:
-        raise ValueError('repository response exceeds the transport limit')
+        data = read_limited(response, maximum * 2 + 8192)
     return json.loads(data)
+
+
+def bundle_data(bundle_blob, bundle_hash):
+    # GitHub's supported raw blob media type avoids inflating a source pack
+    # into a large base64 JSON string. A partial response is never admitted.
+    request = Request(os.environ['GITHUB_API_URL'] + '/repos/' + os.environ['GITHUB_REPOSITORY']
+                      + '/git/blobs/' + bundle_blob,
+                      headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                               'Accept': 'application/vnd.github.raw+json',
+                               'User-Agent': 'Khor network development'})
+    with urlopen(request, timeout=120) as response:
+        content = read_limited(response, MAX_BUNDLE)
+    digest = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+    if digest != bundle_blob or hashlib.sha256(content).hexdigest() != bundle_hash:
+        raise ValueError('source bundle checksum mismatch')
+    return content
 
 
 def blob(data, maximum):
@@ -56,10 +82,7 @@ def main():
     if controls.exists() or checkout.exists() or package.exists():
         raise ValueError('preserving existing materialization directories')
 
-    response = api('git/blobs/' + bundle_blob, MAX_BUNDLE)
-    content = blob(response, MAX_BUNDLE)
-    if response['sha'] != bundle_blob or hashlib.sha256(content).hexdigest() != bundle_hash:
-        raise ValueError('source bundle checksum mismatch')
+    content = bundle_data(bundle_blob, bundle_hash)
     bundle = temporary / 'network-source.bundle'
     bundle.write_bytes(content)
 
@@ -89,7 +112,7 @@ def main():
     report = Path(os.environ['REPORT_DIR'])
     report.mkdir(parents=True, exist_ok=True)
     (report / 'bundle-transport.json').write_text(json.dumps({
-        'transport': 'github_api_git_bundle', 'snapshot_commit': snapshot, 'source_tree': source['tree'],
+        'transport': 'github_api_git_bundle', 'bundle_media_type': 'application/vnd.github.raw+json', 'snapshot_commit': snapshot, 'source_tree': source['tree'],
         'bundle_blob_sha': bundle_blob, 'bundle_sha256': bundle_hash,
         'control_commit': control, 'control_files': identities,
     }, indent=2) + '\n')
