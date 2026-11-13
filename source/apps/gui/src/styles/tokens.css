@@ -1,0 +1,3215 @@
+/* The one table every screen draws from — shadcn/ui's standard variable
+ * scheme carrying mandala's palette (tokens repo, styles.css): warm
+ * paper / warm near-black, the liquid-green brand family, and its state
+ * doctrine — green belongs to done, blocked is the app's only cold
+ * color, red sinks with failed. (This line said "busy takes no hue (it
+ * breathes)" until 2026-08-30; 忙碌 has a hue now and the reasoning is
+ * on the token.)
+ *
+ * ── what the brand green is for, and what it is not ──────────
+ *
+ * **The green never carries text, and never means "press me."** It held
+ * both jobs and could do neither: `#93b04d` has a relative luminance of
+ * .378, which caps its contrast against *pure white* at 2.45 — so white
+ * on green measured 2.45, and no change of backdrop could have fixed it
+ * because there is no lighter backdrop than white. The same green was
+ * `--ring`, at 2.39 against the card, under the 3.0 a non-text graphic
+ * needs: a keyboard user could not see where they were. It was also
+ * saying two different things at once — "this is the main action" and
+ * "this session is done" — which is one job too many for one colour.
+ *
+ * So green keeps three posts and gives up the fourth:
+ *
+ *   identity — the avatar palettes and the app's own mark. The values
+ *              live in `crates/core/src/avatar.rs`; `--lq1..3` below
+ *              mirror them, and `--lq3` is the one thing in this
+ *              stylesheet anything else is built from: the rail's open
+ *              block is mixed from it rather than written out again.
+ *              (`--accent` still carries the literal, and is the older
+ *              of the two.)
+ *   state    — 完成, and only that one of the six words.
+ *   soft fill— `--accent`: a tint to lie *behind* something, never to
+ *              be read as a shape or a word. (The rail's open block was
+ *              the other one and is gone — 2026-08-31, tombstone below
+ *              on `--rail-on`; the rail says「open」on the glyph now.)
+ *   ~~action~~ gone. The main action is ink on paper (`--primary`),
+ *              which is also the only thing on either theme with
+ *              contrast to spare.
+ *
+ * **Why it needs writing down rather than just doing**: a colour with no
+ * job left becomes decoration, and decoration drifts back into whatever
+ * the next screen feels like using it for. These three posts are the
+ * whole list.
+ *
+ * Pages never invent a number: utilities come from this theme, and the
+ * px gate (scripts/check-px.mjs) turns a stray pixel literal into a
+ * build error. Dark follows the system — no toggle (docs/UX.md 设置). */
+
+@import "tailwindcss";
+/* Enter/exit utilities for the Radix overlays (menus, dialogs, the rail's
+ * tooltip). It reads Tailwind's own `--tw-duration` / `--tw-ease`, so the
+ * components feed it the motion tokens below and nothing here invents a
+ * second timing vocabulary. */
+@import "tw-animate-css";
+
+:root {
+  /* **This page has two themes, and the engine has to be told.** With
+   * this line missing, `color-scheme` computes to `normal`, the engine
+   * assumes light, and everything it draws itself — scrollbars first,
+   * but also the caret, `<select>`, the check in a checkbox and the
+   * canvas behind the page — stays in its light appearance while the
+   * palette below goes dark. Measured on the sessions pane in the dark
+   * theme: the scrollbar came back byte for byte the same pixels as in
+   * the light theme.
+   *
+   * `light dark` rather than `dark`: this says which two the page has,
+   * not which one it is in. **There is a toggle now** (批 D2), and the
+   * pair of rules under it is the half that names the one — this line
+   * is what answers before either of them matches.
+   *
+   * **What it does not fix**: how much room the scrollbar takes. That
+   * belongs to the platform; the rule in `app.css` is the half that
+   * answers it, and neither half can do the other's job. */
+  color-scheme: light dark;
+  /* …and once a theme is stamped, the engine is told which **one** this
+     page is in. Without this pair the scrollbars, the caret, `<select>`
+     and the check in a checkbox follow the *desktop* while the palette
+     follows the choice — two halves of one screen each answering a
+     different question. The line above stays as the answer for the
+     frame before the stamp lands, and for any face that never stamps. */
+
+  /* ── shadcn scheme, mandala light values ─────────── */
+  /* **One ground** (the redesign, 2026-10-02, the owner after a day on a
+     real iPhone). Light is 米白 #f4f4ef, dark pure black; the paper, the
+     frame and the left block are one value now, and what separates a
+     list from its content, or a row from the next, is a hairline
+     (`--border`). `--card` and `--side` stay as names because a hundred
+     places ask for them, and each is the ground. Controls that float (the
+     navigation, a list's buttons, a page's verbs, the session bar) are
+     glass (`--glass*` below), never a second ground. The paragraphs that
+     follow are the three-ground rule this replaced, kept for their
+     measurements. Spec: the 「khor 新布局」 canvas (`gen.mjs` `P`). */
+  /* **The board is paper, the ground is its frame** (2026-09-30, the
+     owner: 「用灰色背景，黑色内容怎么样」, then 「大改，浅色也类似的去做。
+     这是抽象的更改，要作用到整个 app 上」). One rule, both themes:
+     `--card` is the most extreme ground the theme has — the whitest
+     here, the blackest on the dark one — and everything that is content
+     lands on it: a terminal, a conversation, a file tree, a machine card,
+     the rings, a settings group, a web page. `--background` is the frame
+     round it: R0, the `gap-in` about the board, the window's foot, and
+     the page a settings group stands on. macOS draws a window the same
+     way — its chrome a step greyer than the content in light, a step
+     lighter in dark.
+
+     **The step is macOS's, taken from this paper.** Its light chrome
+     (#ececec) sits 6.6 L* under its white content; 7.1 under this white
+     is #ebebe5 — the value the left block wore until today, which every
+     word on the page had already been measured on (忙碌 4.52, 空闲 4.52:
+     on the floor). **So it is also as grey as this frame can go**
+     without moving the six words: 0.005 of OKLCH L darker and 空闲 reads
+     4.50. What it replaces: a #f4f4ef ground 2.85 L* under a #fcfcfa
+     board, a difference the owner could not see as a frame at all.
+     `check-palette` holds the two ≥ 6 L* apart and the paper at the end.
+
+     **The paper is pure white** because white is the extreme: at L 1.0
+     there is no chroma left to hold, so this palette's warmth (h 106.6,
+     C .007–.008) lives in the frame and the left block. */
+  --canvas-solid: #f4f4ef;
+  --background: var(--canvas-solid);
+  --foreground: rgba(26, 26, 20, 0.94);
+  --card: var(--background);
+  /* **A settings group's card** (UX-11, the owner's ruling on ux-9's
+     I10): settings pages are inset-grouped, iOS 26's grouped lists and
+     the Mac's grouped form — rounded groups on the ground — and nothing
+     else is; every other page keeps one ground and hairlines. White on
+     the cream, as iOS's secondary grouped background is on its grouped
+     ground. */
+  --grouped: #ffffff;
+  /* **The left block's own ground** (docs/SHELL.md 第十三轮 第 1 条:
+     「竖栏和列表一种底色, 体现出侧边栏和侧边栏内容是一体的」): the rail
+     and every list column sit on it, under a first row of the same
+     material. A third ground beside the frame and the paper, which is
+     what makes the block read as one piece of furniture.
+
+     **Between the paper and the frame, on both themes** (2026-09-30):
+     lighter than the frame here, darker than it at night. Its rows are
+     read, so the block leans toward the paper; and it cannot go the
+     other way on this theme — the frame is already on the six words'
+     floor, and anything greyer drops 忙碌 and 空闲 under 4.5. It took
+     the frame's old value: 3.2 L* over the frame, 3.9 under the paper,
+     each a step a person sees (`check-palette` asks 3 of both). On the
+     macOS app the system's sidebar material stands here instead (D4).
+     `check-palette` reads a row's two lines against it; `check-boot`
+     holds the first frame to it. */
+  --side: var(--background);
+  --card-foreground: rgba(26, 26, 20, 0.94);
+  /* What floats — a dialog, a sheet, a menu, the search results, a
+     tip. **The paper's value on this theme and not on the other**: on
+     the board `--shadow-float` does the lifting, a soft dark shadow on
+     white; on the frame it is also 7.1 L* lighter than what it lands
+     on. The dark block says why a shadow cannot do it there. */
+  --popover: #ffffff;
+  --popover-foreground: rgba(26, 26, 20, 0.94);
+  /* Ink, not the brand green — see the green doctrine at the top of this
+     file. White on this measures 17.47; white on the green it replaces
+     measured 2.45, which was the whole reason. */
+  /* **The main action is the brand again** (docs/design-system/guidelines/40-migration.md, 第十五轮). It went to ink
+   * because the green of the day (#93b04d) carried white at 2.45; the
+   * solid form `--brand-strong` carries it at 4.88, so the post can go
+   * back to olive. The rule it serves is unchanged — one per dialog. */
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand);
+  --secondary: rgba(26, 26, 20, 0.06);
+  --secondary-foreground: rgba(26, 26, 20, 0.78);
+  --muted: rgba(26, 26, 20, 0.06);
+  /* **.70 since 2026-10-03, from .63** (the audit fix plan F6.2, SYS-20):
+     the two themes are held to one reading of the ladder, not to one
+     alpha. At .63 this read 4.88 on the frame against dark's 6.86, so
+     every second line was about a third weaker by day. .70 reads 6.15
+     on the frame, 5.70 on the glass and 5.87 on a menu (dark: 6.86 /
+     6.33). The 2026-09-23 floor it replaced — a selected row's second
+     line over `--accent` over `--side` at 4.54 — is now well clear.
+     `check-palette` reads it. */
+  --muted-foreground: rgba(26, 26, 20, 0.7);
+  /* The ink a conversation is read in — softer than `--foreground`, and
+   * worn only by prose. Measures 12.25 on this theme's paper (`--card`,
+   * white), where `--foreground` measures 14.87.
+   *
+   * **.88 since 2026-09-30, from .90**, and only because the paper moved:
+   * the board went from #fcfcfa to white (板是纸), and .90 on white reads
+   * 13.10. The pair below is the point — the dark theme reads 12.23 on
+   * its paper — so the ink thinned by two points to keep one reading.
+   * (Until today the 12.07 written here was measured on #f4f4ef, the old
+   * ground; the conversation itself stood on the card and read 12.81.
+   * Both themes now answer on the surface prose is actually read on.)
+   *
+   * **Why prose gets an ink of its own rather than the page moving.**
+   * The case for coming down off the top of the range is a case about
+   * text that *wraps* and is looked at for minutes. It is not a case
+   * about a session's title at aux size, which is read in a glance and
+   * wants every bit of separation there is — so `--foreground` stays
+   * where it is and this sits beside it. One token moved, one surface
+   * changed.
+   *
+   * **Why it stops at 12 and does not keep going.** Not the 4.5 of the
+   * standard: two other things bind first. A CJK glyph carries several
+   * times the strokes of a letter at the same size, and thinning the
+   * ink closes the gaps between strokes faster than it dims a
+   * letterform. And the aux ink above measures 4.73 on purpose — body
+   * has to stay plainly above it, or that demotion stops saying
+   * anything.
+   *
+   * The two themes are held to one reading, which they were not: 13.60
+   * light against 15.17 dark meant the same paragraph had two weights
+   * depending on an OS setting nobody had written down. */
+  --read-ink: rgba(26, 26, 20, 0.88);
+  /* No code palette of its own since 2026-09-15: the sheet and the
+     rendered turns paint with Shiki in GitHub's two themes, and every
+     token carries its own colour (`styles/app.css`). */
+  /* `--brand-wash` is the design system's name for this; `--accent`
+   * stays as the name shadcn's components read. */
+  --brand-wash: rgba(143, 179, 30, 0.16);
+  --accent: var(--brand-wash);
+  /* **The halo under this machine on the 我的 khor dial** (UX-26): a
+   * softer wash than `--brand-wash`, a disc and never a row's ground —
+   * the page's one olive. */
+  --brand-halo: rgba(143, 179, 30, 0.10);
+  /* The third ink (docs/design-system README 「三层墨」): times, counts,
+   * key hints, group headers — **never something a person must read**;
+   * it is macOS's tertiaryLabelColor and sits under 4.5 on purpose.
+   * **.56 since 2026-10-03, from .45** (F6.2, SYS-20): 2.84 on the frame
+   * read weaker than dark's 3.54; .56 reads 3.92 on the frame, 3.73 on
+   * the glass and 3.80 on a menu (dark: 3.54 / 3.64, 3.37 on its
+   * popover, the lowest it lands on). */
+  --tertiary: rgba(26, 26, 20, 0.56);
+  --accent-foreground: rgba(26, 26, 20, 0.94);
+  --destructive: #b23a2e;
+  /* **What stands on a solid is named for the solid** (`on-*`, 第十五轮):
+   * a white written into a component is wrong the day the dark theme
+   * puts dark ink there. */
+  --on-destructive: #ffffff;
+  --destructive-foreground: var(--on-destructive);
+  --border: rgba(26, 26, 20, 0.12);
+  /* **The one scrim** (UX-39; UX-44 §2; UX-49 §1): what the page behind
+     every sheet and every dialog turns while it is up — the 附栏's, the
+     tabs sheet's, a form's, a question's. It darkens in both themes.
+     Light is the tabs sheet's dimming (the owner, 2026-10-07: 「都用标签
+     列表的深灰」), black at half. Dark is the same black at half: over
+     the black ground it is the terminal's rejoin fade exactly (the
+     content at `opacity-50` over black, `TerminalPane`), which is the
+     darkening the owner chose (2026-10-08). ⚠️ 墓碑 (UX-39 → UX-44): ink
+     at .32, the 附栏's alone, beside the dialogs' `bg-black/50`.
+     ⚠️ 墓碑 (UX-44 → UX-49): dark lifted the page with a light veil,
+     `rgba(238, 238, 231, 0.16)` — a black terminal read as grey. */
+  --sheet-scrim: rgba(0, 0, 0, 0.5);
+  /* **The session pill grown** (NOTICE-BRIEF, the owner 2026-10-08: 「a
+     light scrim」; the notice lab's values, approved 10-09): lighter than
+     a sheet's — the pill grows in place, nothing rises over the page —
+     and darker in the dark theme, where a light veil would grey a black
+     terminal. */
+  --notice-scrim: rgba(0, 0, 0, 0.16);
+  --input: rgba(26, 26, 20, 0.12);
+  /* The focus ring, ink for the same reason and to the same reading.
+   *
+   * **Written out rather than `var(--primary)`**, though the two happen
+   * to coincide today: they answer to different questions — one is "what
+   * does the main action look like", the other is "can a keyboard user
+   * see where they are" — and a future tint of the action must not
+   * silently take the focus ring with it.
+   *
+   * Its old value was the brand green at 2.39 against the card. Worth
+   * recording that the light theme was not the only broken one: the ring
+   * and the primary button were **the same colour in both themes**, so a
+   * ring drawn tight against that button measured 1.00 — invisible on
+   * precisely the control that matters most, dark theme included. The
+   * gap that fixes that is on the button (`ui/button.tsx`), not here. */
+  /* 第十五轮 (docs/design-system/guidelines/40-migration.md, 第十五轮): the ring is `--brand-strong` — 4.88 on the paper
+   * light, 8.69 dark (4.08 / 6.17 at its lowest, the light frame and the
+   * dark popover; 2026-09-30), over the 3.0 a graphic needs. It still sits a gap
+   * off the primary button it now matches (`ui/button.tsx`), which is
+   * what the paragraph above is about. */
+  --ring: var(--brand-strong);
+
+  /* ── the liquid family — the brand's greens ─────────
+   *
+   * **Chroma raised one step on 2026-09-25, and nothing else moved.**
+   * Solved in OKLCH: lightness and hue held exactly, chroma × 1.28
+   * (`--lq3` C 0.131 → 0.167, against a ceiling of 0.176 at that
+   * lightness). Because only chroma moved, **every contrast in the file
+   * is the number it was** — white on the filled green still measures
+   * 4.88, and `check-palette`'s two 「not the identity green again」
+   * rules still compare against a `--lq3` no `--primary` or `--ring`
+   * equals.
+   *
+   * The reason is the same one the rail's open glyph had: the greens
+   * were derived by moving through HSV, which spends lightness and
+   * saturation but lets chroma fall where it may. They were sitting at
+   * roughly three quarters of the green their own lightness could
+   * carry, and the grey that buys read as a tint of khaki rather than
+   * as a brand.
+   *
+   * `crates/core/src/avatar.rs` carries the same three values and must
+   * move in the SAME COMMIT: one identity painted two colours by two
+   * files is worse than either colour. */
+  --lq1: #d4e77d;
+  --lq2: #b9d75e;
+  --lq3: #8fb31e;
+
+  /* ── the brand, solid, and what is written on it (第十五轮, D6) ──
+   *
+   * **The one place the brand is a fill**: where macOS paints its accent
+   * colour — the selected list row while the window is in front, a
+   * switch that is on, the one primary button in a dialog. Everywhere
+   * else the green stays a wash (`--accent`) or an ink (`--rail-on-ink`).
+   *
+   * **The owner's own value, and the draft's arithmetic agrees with
+   * it.** The frozen draft (docs/handoff/design/2026-09-25-draft.md) had
+   * `#5d7b00`, derived from `--lq3`: the same hue, the chroma step the
+   * family took on 2026-09-25, lightness brought down to 0.54 until
+   * white on it passes. The lead then set `#5d7b06` — the solid
+   * selected row in the owner's own mock — and it is the same colour
+   * to the eye: OKLCH L 0.540 / C 0.133 / h 125.0 against the draft's
+   * 0.540 / 0.135 / 124.8, **white on it 4.88** (the draft's 4.89),
+   * over the 4.5 text needs, which `lq3` itself (2.45) never could.
+   * `check-palette` measures a real selected row on it, both themes,
+   * in front and not.
+   *
+   * `--fill` / `--fill-strong` are the two neutral grounds a control or
+   * a row lies on (`--secondary` is `--fill` under shadcn's name); the
+   * strong one is the selected row's ground **while the window is not
+   * in front** — macOS greys a selection the moment the window loses
+   * key, and so does this (`lib/window-key.ts`, `app.css`). */
+  --brand-strong: #5d7b06;
+  --on-brand: #ffffff;
+  /* The hue itself (= `--lq3`), named for the post it holds in the
+   * design system: a source of hue, never a text colour. */
+  --brand: var(--lq3);
+  /* Ink on a `--brand-wash`: 9.65 over the wash on `--side` (2026-09-30). */
+  --brand-ink: #2f3b0d;
+  /* ── depth: one shadow for what floats, one for a face in a track ──
+   * (a switch's knob, the chosen segment of a segmented control)
+   * (docs/design-system README 「间距、形状、材质」). The board and the
+   * settings groups are never shadowed — they are paper on the frame. */
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --fill: rgba(26, 26, 20, 0.06);
+  --fill-strong: rgba(26, 26, 20, 0.1);
+  /* The chosen segment of a segmented control (docs/design-system
+   * components/SegmentedControl, 2026-09-28): a face sitting in the
+   * `--fill` track, lifted by `--shadow-knob` — the switch's knob's
+   * relative. **Not `--card`**: on the dark theme the card is darker
+   * than a track laid over a sheet, and a chosen segment would read as
+   * a hole. Light is white over the track (+4.8 L* on the white paper,
+   * 2026-09-30; +5.8 on the old #fcfcfa), dark a lighter wash over it
+   * (+12.7 L* on a sheet); ink on it 14.87 / 5.68 (`check-palette`). */
+  --segment: #ffffff;
+  /* The switch's knob (docs/design-system components/Switch): white in
+   * both themes — it is the one face that does not follow the theme, the
+   * way AppKit's switch knob does not — and lifted by `--shadow-knob`.
+   * Named so the component does not write `bg-white` (2026-09-28); not
+   * `--segment`, which is white only in the light theme. */
+  --knob: #ffffff;
+  /* **Glass** (the redesign, 2026-10-02: iOS 26's controls, drawn in CSS
+     because this is a web view): a translucent fill, the ground blurred
+     and saturated behind it, and a soft shadow. Worn by what floats over
+     content, never by a region (the `glass` utility). `--glass-menu` is
+     the denser fill of a menu that opens from glass (更多), where words
+     have to be read over whatever is behind it.
+     **Its edge is a one-pixel ring whose brightness changes with the
+     angle** (the owner's reference, round 7: the first rim's inner glow
+     read as thick): `--glass-rim`, drawn by the utility's `::before` and
+     cut to a ring by a mask — bright at the top-left, almost gone in the
+     middle, a little brighter again at the bottom-right. No border, no
+     inner blur; `--glass-in` is a hairline of tone inside it. */
+  /* By day the glass is a grey tint over the 米白 (about #e3e3de), the
+     mirror of the night's (the owner, 2026-10-02, round 13: the bars are
+     not the white of the chosen thing). */
+  --glass: rgba(120, 120, 114, 0.14);
+  --glass-rim: linear-gradient(155deg, #ffffff 0%, rgba(255, 255, 255, 0.5) 28%, rgba(255, 255, 255, 0.12) 55%, rgba(255, 255, 255, 0.85) 100%);
+  --glass-in: inset 0 0 0 0.5px rgba(26, 26, 20, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --glass-shadow: 0 1px 3px rgba(26, 26, 20, 0.05), 0 18px 44px -16px rgba(26, 26, 20, 0.2);
+  /* **What is chosen inside glass stands apart from the glass, the other
+     way in each theme** (the owner, after his reference: 「浅色下比底色更
+     亮，深色下比底色更暗」; round 13 overruled 「the ground showing
+     through」 for the day): **by day a raised white piece** on the grey
+     glass, with a soft drop shadow; **at night the content's black**
+     showing through the grey glass. Its edge is the reference's lens: a
+     specular line, a breath of blue on the left and of amber on the
+     right (`--glass-sel-shadow`), inside a one-pixel ring that changes
+     with the angle (`--glass-sel-rim`). The open landing, the front tab,
+     a pressed verb, 更多 pressed, a glass menu's chosen row. A chosen row
+     in a list (not in glass) keeps `fill-strong`. */
+  --glass-sel: #ffffff;
+  --glass-sel-shadow: inset 0 1px 0 #ffffff, inset 0 -0.5px 0 rgba(26, 26, 20, 0.06), inset 1px 0 0 rgba(55, 140, 255, 0.14), inset -1px 0 0 rgba(255, 190, 40, 0.2), 0 1px 1.5px rgba(26, 26, 20, 0.05), 0 4px 12px -7px rgba(26, 26, 20, 0.16);
+  --glass-sel-rim: conic-gradient(rgba(26, 26, 20, 0.015) 0deg, rgba(26, 26, 20, 0.04) 60deg, rgba(26, 26, 20, 0.15) 140deg, rgba(26, 26, 20, 0.05) 200deg, rgba(26, 26, 20, 0.1) 250deg, rgba(26, 26, 20, 0.015) 320deg, rgba(26, 26, 20, 0.015) 360deg);
+  /* A menu opened from glass: the same grey, denser, so its chosen row
+     can be white too. */
+  --glass-menu: rgba(232, 232, 227, 0.92);
+  --glass-blur: blur(28px) saturate(1.85);
+  /* **A head with content under it is a bar of the ground's own glass**
+     (round HEADS, 2026-10-03; `app.css` `[data-band]`): the ground at a
+     translucency that still reads as the ground, blurred, with a
+     hairline under it — an iOS / macOS navigation bar once something
+     scrolls beneath it. A bar, not a floating piece: no rim, no shadow.
+     Only while something is under it; at rest the head is the plain
+     ground. */
+  --band: rgba(244, 244, 239, 0.78);
+  --band-blur: blur(20px) saturate(1.6);
+  /* A band's height, written by `lib/scroll-edge` on the band's parent,
+     and a scroller's own top padding, written on it there: nothing until
+     then. */
+  --band-h: 0px;
+  --band-pad: 0px;
+
+  /* ── the six words (mandala's doctrine) ─────────────
+   * **The four that call you sit a lightness apart from the two that do
+   * not, and that separation is the token's whole job here.**
+   *
+   * They used to span 3.0 in L* — the entire palette on one lightness,
+   * differing only in hue — so "the quiet one" and "the one that wants
+   * you" read as the same weight and only the colour told them apart.
+   * Which meant the six words, this product's most valuable signal,
+   * were carrying their meaning on the one channel a person is worst at
+   * comparing across rows they cannot see at once.
+   *
+   * These four are pushed down in lightness until the gap is 8.2, and
+   * **only lightness moved**: hue angle and chroma are held (solved in
+   * OKLCH), because which hue means what is doctrine — 待批 is the only
+   * cold one, 完成 is green, 中断 amber, 失败 red.
+   *
+   * **Down rather than up, and there was no choice about that.** The
+   * floor is 4.5, the two quiet words already sit on it, so the only
+   * direction with room is darker. Light theme's ink reaches past 10
+   * against paper; underneath there is nothing.
+   *
+   * Why 8: L* is near enough perceptually uniform to reason in, and 1
+   * is what two samples need to differ by when held side by side. These
+   * never are — they appear on separate rows with content in between,
+   * so the comparison is from memory, which needs several times the
+   * threshold. 8 is about one step of a ten-step tonal ramp: the
+   * smallest step that can be named on its own.
+   *
+   * ── three things this ordering does *not* mean ──────────────
+   *
+   * **Lightness does one job here, and it is not ranking.** It separates
+   * the four that want something from the two that do not, and that one
+   * gap — 8.2 light, 8.4 dark — is the only difference in this palette
+   * anybody designed. Everything else about which word is which is
+   * carried by hue.
+   *
+   * **So the order *within* a group is arithmetic, not perception, and
+   * it is not something to go and fix.** The four that call you sit
+   * 0.5–1.4 apart in light and 1.9–2.1 apart in dark. By this file's own
+   * standard — 1 is what two samples need when held side by side, and
+   * these are never side by side — **none of those differences is
+   * visible at all**. Reading a ranking off them is the same mistake
+   * "空闲 is the faintest" was before it was fixed: true in the numbers,
+   * absent from the screen. A future reader who notices that 失败
+   * measures "loudest" and sets out to correct it will be correcting
+   * something nobody can see.
+   *
+   * **And sinking is about order, not about weight.** `Activity::rank`
+   * puts 失败 last and the badge rule keeps it off the count — that
+   * governs where a row sits and whether it is tallied, which is a
+   * different question from how much ink the word is set in. A deep red
+   * reads as settled and heavy, not as come-here; it does not contradict
+   * sinking, and making it paler to "match" the sinking would trade a
+   * legible word for a tidier-looking rule.
+   *
+   * Written down because a status quo with no reason attached is an
+   * invitation: the red proof in 批⑨b simulated exactly this edit — one
+   * word nudged past its neighbour to tidy the ramp — and the gate
+   * catches it, but the gate cannot explain why it is red. This can. */
+  /* 忙碌, indigo since 2026-08-30.
+   *
+   * **Tombstone: it said `var(--muted-foreground)` here, with the note
+   * "no hue; it breathes".** The argument was that a word which asks for
+   * nothing needs no colour of its own, and that the breath is what
+   * tells it from 空闲. Both halves were true and the conclusion still
+   * came out wrong: the other five words are found by hue, so the one
+   * word without one is the one word a person has to identify by
+   * elimination — and it is the word this app shows most. The user asked
+   * for it, saw the alternatives side by side, and chose the indigo.
+   *
+   * **The hue is the empty slot.** H≈275 in OKLCH, 57° from 待批 (218)
+   * and 92° from 完成 — the widest gap this palette has. Yellow (16°
+   * from 中断), orange (between 失败 and 中断) and green (11° from 完成)
+   * were the alternatives and all three collide.
+   *
+   * **The lightness is the part that is easy to get wrong, and it did
+   * not move.** In this palette hue says *which word* and lightness says
+   * *whether it wants you* — and 忙碌 is the one word that explicitly
+   * says「I am working, I need nothing」, so it has to stay in the quiet
+   * band with 空闲. The value proposed was `#505ba7`, which is the right
+   * hue at the wrong lightness: measured, it put 忙碌 at ΔL* 4.5 from
+   * the four that call you, under the 8 this file's own doctrine
+   * requires, and `check-palette` goes red on it. This one is placed at
+   * **exactly today's loudness** — 4.63 at worst, ΔL* 8.2 — so the
+   * change is hue and nothing else.
+   *
+   * Measured on all three grounds a word lands on (card / paper /
+   * selected row, the last being the worst): **5.26 / 4.90 / 4.65**,
+   * against 空闲's 4.56 and the four loud ones' 6.28–7.01. ΔL* 8.1.
+   *
+   * **The chroma is at the palette's own ceiling, and getting there was
+   * free.** The first indigo landed at .125 and the person reading the
+   * app said it was hard to tell from the grey it replaced. Chroma is
+   * what that complaint is about — the grey measures .007 — so it was
+   * walked up with everything else held: at .158 the contrast, the ΔL*
+   * and the order are all where they were at .125 (measured at .13,
+   * .14, .15, .158 — the readings move by hundredths). .158 is where it
+   * stops because that is 失败's chroma, the most saturated word this
+   * theme already has; past it this would be introducing a new loudest
+   * colour rather than joining the ones there. */
+  --state-busy: #5560c7;
+  /* Selected rows keep the six hues (2026-10-13). Only the two quiet
+     inks need more contrast on fill-strong: busy lowers OKLCH L .03
+     with C/H held; idle raises its neutral ink coverage. */
+  --state-selected-busy: #4d57bd;
+  --state-selected-idle: rgba(26, 26, 20, 0.66);
+  --state-blocked: #005a6c;              /* the only cold color */
+  --state-done: #425b00;                 /* green = go collect */
+  --state-errored: #754f00;
+  --state-failed: #992017;               /* red sinks, no badge */
+  /* **The faintest of the six, and still readable — those are two
+   * requirements, not one.** These are not decoration: each of them is
+   * painted straight onto a row as the word itself
+   * (`var(--state-<word>)` on `[data-word-text]`), so a state colour is
+   * a text colour and answers to 4.5.
+   *
+   * 空闲 was .45 — **2.88** on the card, and the quietest word in the
+   * app was also the one nobody could read.
+   *
+   * **The ground that decides this is a selected row, not the card.**
+   * The same word is painted on the card, on the app's paper, and on a
+   * row tinted with `--accent`, and the tinted one is the worst of the
+   * three. Measured against the card alone, .60 looks like 4.54 and
+   * passes; measured against the ground it can actually land on, .60 is
+   * 4.35 and does not. .615 is 4.56.
+   *
+   * It stays under 忙碌 (.62, 4.63), so "the faintest of the six"
+   * survives the fix. **But only just, and that is worth writing down**:
+   * the light palette's quiet half is bunched between 4.6 and 5.1, so
+   * being both readable and visibly the quietest is not available here
+   * without moving the other five. Re-balancing them is a decision of
+   * its own, not a side effect of this one.
+   *
+   * The halo drawn from the same token (批⑨) only needs 3.0 and is the
+   * redundant channel anyway — the word at the row's end carries the
+   * state. It improved along with this and did not decide it. */
+  --state-idle: rgba(26, 26, 20, 0.615);
+
+  /* One new colour for one new thing: a resource nearly full (memory,
+     disk — khor_core::Strain). Deliberately none of the six words'
+     hues: 中断 owns amber and 失败 owns red, and a 95% disk wearing
+     either would read as a session's face. Escalation within strain is
+     weight, not a second hue. */
+  --strain: #7a3b5e;
+
+  /* The change gutter in a workspace's file view (工作区批3).
+     **Deliberately no hue at all**, where `--strain` above took one:
+     a bar beside a line says「这里和 HEAD 不一样」, which is a fact
+     about the file rather than a state anything is in, and every hue
+     this palette has is already spoken for — the six words own five of
+     them and strain owns the sixth. A green for「added」would be the
+     worst of the available mistakes: green in this app means 完成
+     (docs/UX.md 绿色), and lines a person has not committed yet are
+     the opposite of finished.
+
+     So it is the file's own ink at partial strength, and what makes it
+     read is width rather than colour. The same token carries both
+     themes because it is defined from `--foreground`, which already
+     flips. */
+  --git-mark: color-mix(in srgb, var(--foreground) 50%, transparent);
+
+  /* ── the letter on a file row (工作区批⑦) ──────────────────────
+   *
+   * 「文件列表中,git 状态如 vscode,颜色与字符表示,黄色是已修改。list
+   * 最右侧末尾加一个 M;还有 U 等状态,使用对应的颜色与标识」— the user,
+   * 2026-09-15. So a hue here after all, and the paragraph above is not
+   * contradicted: that one is about the *gutter*, a bar beside a line
+   * that says only 「different」. These say **which way** different, and
+   * a letter is what a person actually reads — the colour is the half
+   * that can be seen from across the list.
+   *
+   * **Not the six state words and not the brand green.** The words
+   * belong to sessions (docs/UX.md) and green here would mean 完成 on a
+   * file nobody has committed. These are VS Code's own git decoration
+   * colours — the ones a person already reads in that explorer — lifted
+   * where khor's grounds need it, exactly as the highlighting took
+   * GitHub's published themes rather than inventing nine roles.
+   *
+   * Worst contrast of each against the three grounds a row can land on
+   * (card, paper, selected), measured by `npm run palette`:
+   *
+   *            light  dark
+   *   modified  5.36  7.54
+   *   added     5.27  6.51
+   *   deleted   6.42  5.32
+   *   conflict  5.30  5.74
+   *
+   * VS Code's own light 添加 (#587c0c) measures 4.19 on this paper and
+   * its dark 删除 (#c74e39) measures 2.84 — under the 4.5 a word answers
+   * to here, which is why those two are its hue at khor's weight rather
+   * than its value.
+   *
+   * **Two reds and they are not one token.** `D` is a file that is gone
+   * and `C` is a file nobody can commit past; they lead to different
+   * next moves, so they are told apart by weight as well as by letter. */
+  --git-modified: #895503;
+  --git-added: #4d6b0a;
+  --git-deleted: #ad0707;
+  --git-conflict: #c0143c;
+
+  /* **Three more for a workspace row's git symbols** (UX-51, the owner
+   * 2026-10-08: 「颜色更丰富」 — every symbol its own ink). The letters
+   * above have no hue for what a file is not: commits to move between
+   * here and a remote (⇣⇡), a path git does not know (?), work put
+   * aside (*). Blue, teal and violet, at the letters' own lightness
+   * (OKLCH .49–.51 here, .78 dark) and chroma (.08–.15), so the seven
+   * read as one family. ≥ 4.5 on the ground and on a picked row
+   * (`--fill-strong` over it), both themes:
+   *
+   *            light        dark
+   *   remote    5.66 / 4.64  10.47 / 7.69
+   *   untracked 5.64 / 4.62  10.95 / 8.04
+   *   stash     5.63 / 4.61  10.02 / 7.35
+   *
+   * Hue neighbours, told apart by where they stand rather than by hue:
+   * the blue (256°) sits by 忙碌's indigo (275°), dark's teal (195°) by
+   * 待批's cyan (214°) — the six words are on sessions, these only on a
+   * workspace row's top right. */
+  --git-remote: #1460b4;
+  --git-untracked: #0a6c6c;
+  --git-stash: #7a4aa9;
+
+  /* ── the overview ruler (2026-09-16) ───────────────────────────
+   *
+   * 「取消 git 文件上方的状态栏……然后,右侧滑动条后方,就是全文件带颜色
+   * 的 git 差异的那个竖线。跟 vscode 一样」— the user. A column past
+   * the scrollbar carrying the whole file at once, so a hunk eight
+   * hundred lines down is a thing you can see and press rather than
+   * something you have to scroll to find.
+   *
+   * 14 is VS Code's own width for it. **A mark inside it is a
+   * proportion, not a line height**: the whole file is squeezed into
+   * one screen, so a one-line hunk in a long file rounds to nothing —
+   * the floor is what keeps it visible, and it is the smallest bar
+   * this palette still reads as a bar rather than as dirt. */
+  /* The thin scrollbar's own width (app.css measured 11 on Blink, 13 on
+     WKWebView); the ruler lies over that strip, so it is that wide. */
+  --overview-ruler: 12px;
+  --overview-mark: 3px;
+
+  /* ── which model spent it ─────────────────────────────────
+   *
+   * **Hue is the family, lightness is the generation.** The names go on
+   * growing (opus-4-6, opus-4-8, opus-5, and whatever is next) while
+   * the supply of distinguishable hues does not, so the two axes are
+   * split: a family gets a hue for good, and the generations inside it
+   * are steps of lightness worked out from that hue. A model this face
+   * has never seen lands in the right hue the first time it appears,
+   * because the band is looked up by the family in its **name** rather
+   * than handed out in arrival order.
+   *
+   * **Only the hue is a token; the generations are computed.**
+   * ⚠️ This block held three fixed steps per family until 2026-09-08,
+   * and three was already wrong when it was written: `fable` has
+   * **four** generations on this machine's own transcripts (fable-5,
+   * fable-5-1, fable-5-1-medium, fable-5-medium), and a fixed ladder
+   * gives the fourth the same colour as the third — two models drawn as
+   * one band, which is the same screen a folded band gives and the
+   * thing the 「every model gets its own band」 rule exists against. So
+   * the steps are `color-mix` toward `--card` — the paper the bands are
+   * drawn on (toward `--background` until 2026-09-30, when the ground
+   * became the frame and stopped being what is behind a chart) — cut by
+   * how many generations that family actually has. See `lib/model-band`, which
+   * also decides the *order* of those steps — from the name, over every
+   * day the account has, so switching the window cannot recolour a
+   * model.
+   *
+   * **Five families is the ceiling, and it was counted rather than
+   * guessed.** khor's seven avatar palettes hold 35 values, 30 of them
+   * with a definite hue — and they cluster, so the most that can be
+   * picked at 40° apart is five or six.
+   *
+   * The two hue constraints, **as measured 2026-09-08 rather than as
+   * remembered** (HSL hue, the same function `avatar.rs` judges by):
+   *
+   *   - apart from each other: the closest pair is fable/haiku at
+   *     **42.4°** here and 44.4° on the dark values. ⚠️ An earlier
+   *     draft of this comment claimed 「at least 44°」 — false for this
+   *     theme by 1.6°, and nothing would ever have gone red over it.
+   *   - away from 待批's cold blue (`#01aac6`): the floor is **35°**,
+   *     and it is not this file's to pick — `crates/core/src/avatar.rs`
+   *     owns it as `BLOCKED_KEEPOUT` with a test
+   *     (`presets_keep_off_the_blocked_hue`), because that mark and
+   *     these bands share a screen and a model wearing the colour of
+   *     「waiting for you」 is a sentence nobody wrote. The closest here
+   *     is spare at **39.6°**.
+   *
+   * So the way past five is not a sixth hue — it is what
+   * `--model-tail` does: everything outside the top few folds into one
+   * neutral band. **Neutral rather than a family colour on purpose**:
+   * that band spans several families at once, and any hue would be
+   * saying something about it that is not true.
+   *
+   * Values are the design's (liquid / monokai / okabe palettes). Each
+   * is the **newest** generation of its family at full strength; older
+   * ones are mixed toward the page from it. */
+  --model-opus: #3f4482;
+  --model-fable: #6f7d47;
+  --model-sonnet: #7d2540;
+  --model-haiku: #a5620f;
+  /* ⚠️ 墓碑 (UX-53): `--model-spare` #08763d, the one hue a model outside
+     the families got — every further one went grey. */
+  /* The unnamed row (「nobody said which model」), and only that: a named
+     model is a family or a series slot below. */
+  --model-tail: #a1a19c;
+  /* **A family's oldest generation** (`lib/model-band` mixes the steps
+     between the hue and this): here the design's 58% toward the paper. */
+  --model-opus-old: #a8aac1;
+  --model-fable-old: #bcc2a8;
+  --model-sonnet-old: #c29da6;
+  --model-haiku-old: #d3b791;
+
+  /* ── a model outside the four families (UX-53, 2026-10-08) ─────────
+   *
+   * The owner: 「非订阅的，不同 model id 的颜色都是灰色」. Six slots, handed
+   * out over every model id on the 额度 board by name, so one id wears
+   * one slot on every page (`lib/model-band`). Searched in OKLCH, then
+   * validated (Machado 2009 at full severity, OKLab ΔE×100) on this
+   * theme's paper #f4f4ef: contrast 3.42–7.50; neighbours ≥ 14.9 for a
+   * red or green deficiency, slots 1–4 all-pairs ≥ 13.5; full colour
+   * vision all-pairs ≥ 17.3. Every slot keeps ≥ 35° (HSL) off 待批's
+   * cold blue (`avatar.rs` BLOCKED_KEEPOUT). Which slots sit by which
+   * family is `CLOSE` in `lib/model-band`. */
+  --model-series-1: #0b663c;
+  --model-series-2: #4c68eb;
+  --model-series-3: #9a8202;
+  --model-series-4: #d34198;
+  --model-series-5: #be1506;
+  --model-series-6: #7223aa;
+  /* The usage chart's median rule and its word (UX-53, 「中位颜色看不
+     清」): the ink, on a halo of the paper, so it reads across any band
+     at ink-on-paper — 13.6 here. ⚠️ 墓碑: `currentColor` at 0.45 / 0.6. */
+  --chart-median: var(--foreground);
+
+  /* The day strip's 不知道 — **no signal**, not a seventh word
+   * (`khor_core::DayCell`). Deliberately a tint of the page's own ink
+   * and not a hue: a hue here would be a colour people learn to read as
+   * a state, which is the one thing this must never become.
+   *
+   * **It is a full-height block, and that is why the ink is this
+   * light.** It was a hairline first, and a hairline has to be dark to
+   * survive being one pixel of four — 55% of the ink, 3.51 / 5.05. The
+   * user then read the band as two objects rather than one axis: 「左边
+   * 有一条细线,右边才是 bar」. Area carries what a stroke could not, so
+   * the block can be quiet — which is also what 「没有信号」 should look
+   * like next to a word.
+   *
+   * **Measured, and the numbers are a pair of bounds.** Composited on
+   * the row: **1.65 light / 2.05 dark**.
+   * - over the floor a filled block needs, both themes. That floor is
+   *   1.15, not the 3.0 a stroke needs — `check-rail` carries both
+   *   numbers and the reason. The reference point is that same file's
+   *   rail block, which ships at **1.30 / 1.61** and is judged visible;
+   *   this sits above it on both themes.
+   * - and **far under the faintest of the six words** (空闲, 4.79 /
+   *   5.36) — ×2.9 light, ×2.61 dark. That gap is the one that matters
+   *   now: 空闲 is the only word left without a hue (忙碌 took indigo),
+   *   so a 不知道 block creeping up in weight would end up two grey
+   *   blocks apart only by lightness — 「没有数据」画成了「空闲」, which
+   *   is the thing this whole batch exists to refuse. 35% closes the
+   *   dark gap to ×1.9; 25% keeps both near three.
+   *
+   * A tint of `--foreground` rather than a literal per theme, so it
+   * follows the ink when the ink moves. */
+  --day-unwatched: color-mix(in srgb, var(--foreground) 25%, transparent);
+
+  --badge: #b23a2e;
+  --on-badge: #ffffff;
+  --badge-foreground: var(--on-badge);
+
+  /* ── the hairline around a face ───────────────────────
+   * The avatar palettes are tuned for dark editors, so they contrast
+   * only 1.12–1.56 against a light card: unedged, half the faces
+   * dissolve into the paper and the row reads as failed to paint. Not
+   * `--border` (alpha .08/.10): measured as "the edge against the card,
+   * worst slot", that gives 1.36 light / 2.21 dark, still no boundary.
+   * At .22 the same measurement gives 1.78 light / 3.00 dark. Worst
+   * cases are liquid's `#f2f6cb` on a white card and its `#7d2540` on
+   * the dark one — **both directions need covering**, since these
+   * palettes hold near-white papers and inks that nearly touch the
+   * card. Taking the theme's own ink handles both at once. */
+  --avatar-edge: rgba(26, 26, 20, 0.22);
+
+  /* ── a kind mark drawn on a face (类型标记「浮现」) ─────────
+   * The owner, 2026-10-02:「画在脸上感觉很好看」. The mark that says what
+   * a row is (an agent, a terminal, a system, a repository) is painted
+   * on the machine's face, centred, instead of on a corner.
+   *
+   * **The face says which ink, and how much veil** (the owner, same day,
+   * choosing from six ways on real faces:「按脸换墨，不够才压」): a bright
+   * face gets the dark ink, a dark face the light one, and **no veil**;
+   * only a face whose centre mixes light and dark is veiled, and only as
+   * much as its worst pixel needs — black under the light ink, white
+   * under the dark one. The choice and the alpha are `khor_core::avatar`'s
+   * (`Avatar.mark`, the rule in `avatar/mark.rs`), derived per face so
+   * the phone and the desktop draw the same mark; the brush paints them.
+   * These four are only the colours, and the core holds the two inks'
+   * hex beside its rule (`MARK_INK_LIGHT` / `MARK_INK_DARK`) —
+   * `check-palette` 「a mark on a face」 reads both and red if they part.
+   *
+   * **The same in both themes, and that is the point**: the face never
+   * reads the theme (`Avatar.tsx`), and what sits on it must not
+   * either. Not redefined under `[data-theme="dark"]`.
+   *
+   * ⚠️ 墓碑 (2026-10-02, the same day): `--mark-veil` was one black at
+   * 0.42 over **every** face under a mark, and `--mark-ink` one white.
+   * 0.42 was a bound — white under it reads 3.04 against white ink, so
+   * any face cleared 3:1 — and it stays as the ceiling on the black veil
+   * (`MAX_BLACK_VEIL`). As the one look it greyed every face, bright and
+   * dark alike:「浮现这，给原始头像上了蒙板？感觉没那么好看了」. On the 336
+   * sample faces the per-face rule leaves 269 with no veil at all. */
+  --mark-ink-light: #ffffff;
+  --mark-ink-dark: #14140f;
+  --mark-veil-dark: #000000;
+  --mark-veil-light: #ffffff;
+  /* **The blank is not a face** (`AvatarBlank`: no identity, so no
+   * record to say an ink) — it is the theme's own `--muted`, so its ink
+   * is the theme's: the dark ink on the light theme's pale grey, the
+   * light ink on the dark theme's, and no veil on either. Redefined
+   * under `[data-theme="dark"]`. `check-palette` measures it in both. */
+  --mark-ink-blank: var(--mark-ink-dark);
+
+  /* ── the rail's ink, and the two densities inside it ──
+   * The family draws each glyph as one solid piece (`data-body`) held
+   * in a line: one colour at two depths, never two colours (`app.css`).
+   * That reads as depth only while the depths are the *only* thing
+   * dividing the two layers — and they were not. The button wore
+   * `text-muted-foreground`, which already carries alpha (.62 light /
+   * .55 dark), and the body took a further .6 **of that**, so the two
+   * multiplied. Every number below is a reading from a real browser
+   * (`scripts/check-contrast.mjs`), against what the glyph actually
+   * sits on — which is `--background`, since the rail paints nothing
+   * of its own:
+   *
+   *              was            is
+   *   body    2.30 / 2.71    3.31 / 4.80     (light / dark)
+   *   line    4.73 / 5.51    6.59 / 8.76
+   *
+   * 3.0 is the floor a non-text graphic needs to be made out at all, so
+   * the filled half of every glyph was under it in both themes while
+   * its outline stayed crisp: a clear outline around a fog, which is
+   * exactly what "看不清" turned out to mean.
+   *
+   * So the rail owns its ink instead of borrowing the one paragraphs
+   * are muted with. **What that blocks is a change made for text
+   * silently re-dimming a graphic** — `--muted-foreground` is tuned for
+   * prose on a card and knows nothing about a 1.4/24 stroke, and the
+   * damage arrived one multiplication away from anywhere anyone would
+   * look for it.
+   *
+   * **Both numbers are fenced; neither was free.** Measured, not
+   * argued:
+   *
+   *   - The ink cannot simply go opaque, which is what a ".6 fill"
+   *     assumed. At alpha 1 the *resting* outline measures 15.84 light,
+   *     against 13.60 for this app's own prose — a rail whose unlit
+   *     state out-shouts the writing reads as entirely lit.
+   *   - The ratio cannot stay at .60. Clearing the floor through .60
+   *     needs the ink near .78, and that lands the body at **2.99** —
+   *     still red, with the outline already up at 8.09. .72 × .70 is
+   *     the pair that buys margin at the quieter ink.
+   *
+   * A ratio rather than a second colour, so the themes cannot drift:
+   * `--icon-body` moves both at once, which is the only form in which
+   * "one colour, two depths" stays a checkable claim. */
+  --rail-ink: rgba(26, 26, 20, 0.72);
+  /* The open rail glyph, **in the brand's own hue** (2026-09-01: 「选中
+   * 是 icon 以品牌色上色,而非现在的白色」).
+   *
+   * **Two values because the ground decides how deep the brand can be,
+   * not taste.** The open glyph has to clear a resting one by
+   * `GLYPH_MARGIN` (check-rail) — it is the only thing saying which
+   * item is open — and a resting glyph is already 6.59 on paper and
+   * 8.76 at night. On paper that leaves a mark no lighter than ~8.6
+   * against the page, and no green *that* light exists: `--lq3` itself
+   * measures 2.22 there, which is why the previous ruling said "green
+   * works as a plate and not as a mark" and reached for full ink.
+   *
+   * The ruling was right about `--lq3` and wrong about the family. The
+   * hue goes as deep as the paper needs it to (77.6°, the same hue and
+   * saturation as `--lq3`, taken down in lightness) and the mark is
+   * green on both grounds — deep green on paper, the brand's own green
+   * at night, where the ground is dark enough to carry it.
+   *
+   * `#303a19`, one step deeper than the `#35401c` of 2026-08-31, since
+   * 2026-09-23 (docs/SHELL.md 第十三轮): the rail moved onto `--side`,
+   * which is darker paper than `--background`, and a hovered open glyph
+   * — this ink over the hover wash over `--side` — read 8.21 against a
+   * resting 6.32, under the 2 margin check-rail asks for. Same hue,
+   * taken down another notch: 10.06 open, 8.95 hovered.
+   *
+   * **`#2d3e00` since 2026-09-25, and the whole change is CHROMA.**
+   * The complaint was that the open item does not read as highlighted,
+   * and the cause was not the margin — it was how the deep green was
+   * derived. 「Same hue and saturation as `--lq3`, taken down in
+   * lightness」 is an HSV move, and lowering V at fixed S **throws
+   * chroma away**: `#303a19` measures C 0.054 in OKLCH, against a
+   * ceiling of 0.084 at its own lightness. It was spending 64% of the
+   * green available to it, which is why it read as「another dark ink」
+   * rather than as green.
+   *
+   * Solved in OKLCH instead: hold the hue (124.8°), take the MAXIMUM
+   * chroma the lightness allows, and let lightness land wherever the
+   * gate needs it. That is C 0.086 — **59% more green at the same
+   * weight**. Nothing else moved: `--rail-ink` is untouched, so both
+   * of check-rail's resting floors read exactly what they read before,
+   * and the margins keep their headroom (9.75 open / 8.67 hovered,
+   * against the 8.32 the gate asks for).
+   *
+   * The dark side had far more room and was wasting more of it
+   * (`#dce9a6`, C 0.088 against a ceiling of 0.228). Same treatment at
+   * the same lightness: 14.48 open, 12.22 hovered (as check-rail
+   * measures them), against a required 10.51.
+   *
+   * **`#5d7b06` (light) since 2026-09-27 — lighter, not deeper, and the
+   * margin above is retired.** On paper even the maximum-chroma deep
+   * olive read as no colour at all (the owner:「选中没有颜色」): at 9.31
+   * the eye sees darkness, not hue. The open glyph now says 「open」 the
+   * way a Mac sidebar does — by being the accent colour — so it is
+   * `--brand-strong`, the green of an open switch and the focus ring:
+   * 4.08 on the rail, 3.63 hovered (over the 3.0 a graphic needs), C 0.133
+   * against a resting grey of C 0.010. check-rail now holds the hue
+   * (`OPEN_CHROMA`) and the graphic floor, not a weight margin. Dark is
+   * unchanged. */
+  --rail-on-ink: #5d7b06;
+  --icon-body: 0.7;
+
+  /* **Tombstone: `--rail-on` was the block behind whichever rail item
+   * was open, and there is no block any more (2026-08-31).**
+   *
+   * It was the brand green thinned to 35% light / 22% dark, and the two
+   * percentages were not taste: green is a light colour, so the same
+   * fraction reads far louder against near-black than against paper.
+   * 22% put the light block at 1.17 and 35% at 1.30, against a 1.15
+   * floor for「there is something there」; on the dark theme the block
+   * *lifted the ground the open glyph stood on*, so a heavier block
+   * dimmed the very glyph it was lighting — at 30% the open glyph fell
+   * to 7.68 against a resting 8.76 and `check-rail` went red.
+   *
+   * **Why it is gone**: the person using this app said the icon should
+   * change, not the icon's background. The signal moved entirely onto
+   * the glyph, which was already carrying half of it. See `app.css`.
+   *
+   * **What went with it**: the brand green is no longer anywhere in the
+   * rail, against an earlier instruction on this same rail. It cannot
+   * be both — green measures 2.22 as a mark on the light ground (under
+   * SC 1.4.11's 3.0) and works only as a plate, and a plate is a
+   * background. The way to have both is mandala's: a hairline bar down
+   * the open item's edge, which is a graphic and not a ground. */
+
+  /* ── the scrollbar's thumb ────────────────────────────
+   * The one mark in this app that has to be ignorable at rest and
+   * findable on purpose, which is why neither neighbour could hold it —
+   * this is a missing semantic, not a value two percent off one that
+   * exists. `--border` (.10 / .08) is the weight of a line nobody is
+   * meant to look at, and a thumb that faint cannot be found when you
+   * go looking for it; `--muted-foreground` (.62 / .60) is reading ink,
+   * and a bar that heavy running down the edge of every list is exactly
+   * what got reported ("很突兀").
+   *
+   * Measured, as painted against the card it lies on: .25 comes back
+   * rgb(196,196,192) on rgb(252,252,250) — 1.70 — and .22 comes back
+   * rgb(72,72,69) on rgb(25,25,23) — 1.92. **Both are meant to be that
+   * low**: macOS draws its own thumb against its own track at 1.72, and
+   * this is a bar that appears at the edge your eye is already at, with
+   * a wheel, a trackpad and a keyboard all still able to scroll without
+   * it. What it replaces measured 9.78 (and its track 16.87) against
+   * the dark list, while the body text beside it measures 13.92 — the
+   * scrollbar was drawn louder than the words.
+   *
+   * The dark alpha is the lower of the two because the same alpha reads
+   * louder against near-black; the two land within 2 of each other in
+   * L* (19.9 light, 21.8 dark), which is what makes them the same mark
+   * in two themes rather than two marks.
+   *
+   * The track gets no token because it gets no colour: `transparent`
+   * there is the absence of a surface, and the surface it would
+   * otherwise cover is the list itself.
+   *
+   * No `--color-` mapping on purpose — nothing wears this as a utility;
+   * one rule in `app.css` consumes it, and that rule also carries which
+   * engines honour it and what the rest fall back to.
+   *
+   * **What it does not block**: an engine with no `scrollbar-color` at
+   * all never reads this, and draws its own bar — dark, by then,
+   * because `color-scheme` at the top of this block told it to. */
+  --scroll-thumb: rgba(26, 26, 20, 0.25);
+  /* **The file column's own thumb, and it is the only scroller that
+     reads this** (2026-09-16:「文件右侧的滑动按钮还是在状态条下看不清,
+     透明度再低一点」— the user, meaning the thumb, which is what is
+     hard to see). The overview ruler is painted on that scrollbar's
+     strip, so a thumb at the app's ordinary wash disappears the moment
+     it crosses a mark. This is the wash that still reads over one, and
+     it is a token rather than a `color-mix` at the call site because
+     the number was argued once and the dark theme needs its own. */
+  --scroll-thumb-strong: rgba(26, 26, 20, 0.5);
+
+  /* ── control heights: three, no fourth ──────────────
+   * macOS's own (docs/design-system/guidelines/40-migration.md, 第十五轮): 22 a mini push button or a pop-up in a dense
+   * row, 28 a push button, a search field, a pop-up button, 32 a
+   * dialog's buttons. They were 24 / 30 / 40; the 40 was a finger's
+   * height worn by a pointer, and the finger's floor is `--touch`'s job
+   * (the coarse-pointer block at the foot of this file) — the look is
+   * the pointer's.
+   *
+   * ⚠️ 墓碑: for one draft of this round these lived beside the old
+   * three as `--control-sm/md/lg`. Two names for one question is the
+   * thing the design system was written to end; `ctl-*` is its name. */
+  --ctl-sm: 22px;
+  --ctl-md: 28px;
+  --ctl-lg: 32px;
+  /* A list or settings row: one line (32) or title over subtitle (48)
+   * (`components/ListRow`). */
+  --row-1: 32px;
+  --row-2: 48px;
+
+  /* ── touch floor ─────────────────────────────────────
+   * The smallest hit area a finger can trust: 44 — Apple HIG's minimum
+   * tappable target (44×44pt) and WCAG 2.5.5 (AAA)'s 44 CSS px; Material
+   * asks 48dp, but 44 is the floor every guideline shares and the rail's
+   * geometry was drawn on Apple's grid. **It sizes hit areas, never
+   * glyphs**: a control grows to it with min-height/min-width while its
+   * icon keeps `--icon-rail`, and whatever paints the pressed/selected
+   * state must paint the grown box, or the finger finds a target the eye
+   * was never shown. Not a fourth `--ctl-*`: those are the *look* of
+   * inline controls beside text; this is a floor under anything a finger
+   * must land on, and the two move for different reasons. */
+  --touch: 44px;
+  /* ── the redesign's own measures (2026-10-02; written here, read by
+   * name, check-px) ─────────────────────────────────────────────────
+   * Gesture state the page writes while a finger moves: at rest, 0. */
+  --pull: 0px;
+  --swipe: 0px;
+  --row-reveal: 0px;
+  --sheet-kb: 0px;
+  --sheet-pull: 0px;
+  /* The page lifted by an edge swipe casts this over the one under it. */
+  --shadow-swipe: -10px 0 30px rgba(0, 0, 0, 0.18);
+  /* A bottom sheet's grabber: 36 × 5, 6 under the sheet's top edge. */
+  --grabber-w: 36px;
+  --grabber-h: 5px;
+  --grabber-top: 6px;
+  /* The one focus ring's width and its offset (F1.3). */
+  --ring-w: 2px;
+  --ring-off: 2px;
+  /* A tab's face is small: its ring and its gap are 1.5 each (the owner,
+     2026-10-02: 「我都要」). */
+  --halo-tab: 1.5px;
+  /* Fades where a scroller is cut: a menu cut by its height, a page
+     scrolled with no band over it (`app.css` `[data-band]`), a tab strip
+     cut at its ends. */
+  --fade-menu: 24px;
+  --fade-head: 20px;
+  --fade-tabs: 12px;
+  /* A terminal key's hit box reaches its neighbour's: no dead gap. */
+  --term-key-reach: 6px;
+  /* The width xterm's fit addon takes off for xterm's own scrollbar
+     (`overviewRuler.width`'s default); there is no bar, so the screen
+     gives it back (`app.css`, the terminal). */
+  --term-bar: 14px;
+  /* A listing's hairline starts at its names: 16 inset, 20 kind box, 8. */
+  --files-hair-start: 44px;
+  /* A row's swiped-out actions are at least this wide each. */
+  --row-action-w: 74px;
+  /* The composer's menus and its who panel. */
+  --mode-menu-w: 232px;
+  --who-panel-w: 272px;
+  --who-label-w: 52px;
+  --who-mark: 18px;
+  --ctx-dial: calc(var(--composer-item) - 2px);
+  --stop-corner: 3px;
+  /* The file tree's kind glyph, nudged onto the chevron's ink axis. */
+  --tree-icon-nudge: 5.4px;
+  /* A settings stepper's button stands 2 inside the control height. */
+  --stepper-h: calc(var(--ctl-md) - 4px);
+  /* The sort chevron pair's overlap. */
+  --chevron-pair: 3px;
+  /* **The floor a control actually gets** (2026-09-26, the user's
+   * 「丑，太丑了」 after every control on a Mac stood 44 tall): with a
+   * mouse it is the default control height, `--ctl-md`; a finger puts
+   * `--touch` back (the coarse-pointer block at the foot of this file).
+   * design-system `components/Button`: 「指针是手指时热区涨到 touch 44，
+   * 样子不变」— the 44 was only ever the finger's number.
+   * `min-h-touch` / `min-w-touch` / `size-touch` all read this. */
+  --hit: var(--ctl-md);
+  /* ── the top row of a pane, and the foot a tab stands on ──────
+   *
+   * **One number, two surfaces, because they are one line of the
+   * window** (2026-09-20 第 5 条:「标签页的高度, 要和侧边栏搜索框的高度
+   * 一致, 保持和谐. 现在, 标签页普遍比侧边栏更高一些」). The search row
+   * of every secondary sidebar (`PaneBar`, the tree's own head) and the
+   * band the tabs stand in are drawn at exactly this, and the gate
+   * subtracts the two and asks for zero — **the same token, not two
+   * numbers that happen to agree**, which is the whole of what that
+   * ruling is about.
+   *
+   * It is not a fourth `--ctl-*`: those are the *look* of a control
+   * beside text. This is the height of a region's first row.
+   *
+   * **One centreline** (2026-09-29, the owner: 「怎么标签页到app上沿有
+   * 空白空间 可以整体顶到上沿，为显示内容腾出空间」 — and of the ways
+   * offered, 「整行收紧到 38」). macOS's three buttons, the search box,
+   * the page's title, the tabs and the page's buttons are centred on
+   * this row's middle. A tab is a `--hit` tall label on that middle plus
+   * a foot, `--tab-lip`, that carries it down into the board it is
+   * joined to — so the lip is what is left above the label as well:
+   * `(--pane-head − --hit) / 2`, 5 under a mouse. It was the strip of
+   * band *above* a tab that stood on the row's floor, 20 under the
+   * window's edge on the 48 row: the blank the owner pointed at.
+   * `check-boot` holds the arithmetic in both postures (a finger's lip
+   * is at the foot of this file); `check-face` §12 measures it drawn. */
+  --tab-lip: 12px;
+  /* **38: macOS's compact toolbar** (2026-09-29; 48 from 第十五轮 until
+   * then) — Safari's and Finder's with 「使用紧凑布局」, every page ten
+   * pixels taller. **Written, not summed** (docs/design-system/
+   * guidelines/40-migration.md): a design decision about the window's
+   * first rows, not a by-product of two other numbers. Everything that
+   * stands in it is `--ctl-md` (28), so 5 either side.
+   * `src-tauri/src/traffic.rs` carries this number too, to put macOS's
+   * buttons on its middle (`check-boot` holds them together).
+   *
+   * **The row follows the pointer, not the width** (the coarse block at
+   * the foot of this file puts 48 back under a finger): what has to fit
+   * in it is a target, and a finger's is `--touch` 44 — a phone's
+   * header and an iPad's tab strip keep the row they had. A narrow Mac
+   * window has a mouse and keeps this one, which is also the only row
+   * its three buttons can be centred on: AppKit places them once, when
+   * the window is built, and a row that changed height at 760 wide
+   * would leave them five points off its middle. */
+  /* 52 at every pointer since the redesign (2026-10-02): the canvas's
+     first row, list column and content alike. */
+  --pane-head: 52px;
+  /* ── the session page on the narrow face (2026-10-02, iOS 第三步 A) ──
+   *
+   * The owner, of another phone's terminal: 「上方完全交给内容，下方是操作
+   * 与标签页」. Inside a session on the narrow face the content takes
+   * everything above and a bar at the foot holds the way back and the
+   * tabs — **that row is `--pane-head`**, the same first row a tab
+   * stands in at the top, so it is 38 under a mouse (a Mac window
+   * dragged narrow) and 48 under a finger. Under it, on a finger and on
+   * a terminal only, one more row: the keys a soft keyboard lacks (Esc,
+   * Ctrl, Tab, the arrows…). **The key row is the finger's floor**,
+   * because every key in it is a target and nothing else: a cap is
+   * drawn `--gap-xxs` inside its 44 box (`radius-xs`, the key cap's
+   * corner in the design system), the box is what a thumb lands on. */
+  --key-row: var(--touch);
+  /* **The phone's own edges, said by the phone** (`viewport-fit=cover`
+   * in `index.html`): the status bar and the notch over the top, the
+   * home indicator under the foot. Zero everywhere else — a desktop
+   * window has no such edge, so these cost the Mac nothing. The bottom
+   * one goes to nothing while the soft keyboard is up (`[data-keyboard]`
+   * at the foot of this file): the keyboard covers the indicator, and
+   * the bar sits straight on top of the keys. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* A tab's close cell (`components/Tab`): always this wide, the name
+   * truncates before it. It was `--ctl-sm` until the control heights
+   * went to macOS's 22 — a cell is not a control's look. */
+  --tab-close: 24px;
+  /* ⚠️ 墓碑: `--ws-switch` (32) sized the two switches at the head of
+   * the file tree (docs/SHELL.md 第 7 条, 2026-09-20). On 2026-09-28
+   * they moved to R0's right end as toolbar buttons (`--hit` like every
+   * other), and the tree's head became a search box and ＋. */
+  /* How wide the veil is at the cut edge of a sideways scroller
+     (`app.css` `[data-side-cut]`).
+     **Derived from the floor above it, not picked.** The narrowest
+     column in the table this exists for is `min-w-touch` wide, so a
+     veil of half that or more would leave the outermost figure
+     unreadable while the table is sitting still — and a table whose
+     last visible number cannot be read has traded one silence for
+     another. Twenty is under half of forty-four with room to spare. */
+  --cut-wide: 20px;
+
+  /* ── spacing: four gaps, named for what they separate ─
+   * The one dimension this theme still left to chance. Colours, control
+   * heights and motion were all collected; gaps stayed as whichever
+   * `gap-1` / `gap-3` / `pt-6` / `pt-8` a component happened to reach
+   * for.
+   *
+   * **What this blocks is not untidiness — it is an unreadable
+   * grouping.** A gap is the only thing on screen that says which items
+   * are one group, so while every component picks its own number there
+   * is no distance a reader can recognise as deliberate, and a group
+   * that was meant cannot be told from a rounding. The rail was the
+   * live case: the app's mark sat one `gap-1` from the four landings,
+   * the very distance the landings sit from each other, while `App.tsx`
+   * argued in a comment that the mark is not one of them. The judgment
+   * was right and nothing on screen carried it.
+   *
+   * Named for the relation and not the size, so reaching for the wrong
+   * one is wrong on sight rather than merely off by a step. Four,
+   * because a fifth would have to name a relation these do not cover —
+   * and if one ever does, it earns its own line here rather than an
+   * arbitrary number at the call site.
+   *
+   * **This is a vocabulary, not a sweep.** Existing call sites move over
+   * as they are touched; a pass over every `gap-*` in the app would put
+   * one lane's formatting into everybody else's hunks for no reading
+   * anybody asked for.
+   *
+   * **And these join the family `cn()` cannot override.** They become
+   * `--spacing-*` utilities, tailwind-merge does not recognise the names
+   * as sizes, so `p-in` passed to a component that already sets `px-4`
+   * leaves *both* classes in the markup and the stylesheet's emission
+   * order picks the winner. It is safe from a call site (the caller's
+   * class is emitted later); it is not safe *against* a vendored
+   * component's own padding. That was measured the hard way on the rail
+   * button: 44px wide became 60, six of them overflowed a 390px narrow
+   * rail, and the app's mark was shrunk to nothing. */
+  --gap-in: 8px;     /* inside one thing: glyphs in a group, a control's parts */
+  --gap-row: 12px;   /* between the parts of one row */
+  /* One level of the workspace tree (工作区批⑦). **Its own number
+     rather than `--gap-row`**: what this spaces is depth, and a step
+     that borrowed the row's gap would move the whole tree the next time
+     somebody retunes a row. 12 is the smallest step where a child's
+     name still reads as sitting under its parent's rather than beside
+     it, on the 224-wide column the tree opens at. */
+  --tree-step: 12px;
+  /* The tree row's type slot: a file's kind icon, a directory's chevron
+     centred in it; the indent guide hangs from the slot's middle.
+     **28 — the row's own height — where this was 16** (2026-09-16:
+     「文件类型的icon仍然不够大. 试试看基本占满这一个文件显示高度」).
+
+     The box is the row and the line still breathes, because **Seti
+     keeps its air inside its own canvas**: measured, a 28 box paints
+     about 16–18 of ink. The ruling asked for 24 on the assumption that
+     a 24 box would paint 17; it paints 12–15, which is where the
+     previous size already was — the box is not what the eye reads, and
+     that is the same lesson the strip's end learned one ruling earlier
+     (44 boxes, three different marks). The chevron stays `size-3`: a
+     directory says what it is with a small turn, and 28 of chevron
+     would be a different kind of shout.
+     **Since 2026-10-02 the air is gone** (icons.tsx `LIVE`: every shape
+     fills 0.90 of its box), so the slot keeps the row's 28 — names line
+     up on it — and the shape is drawn in 20 of it (`p-1`), 18 of ink. */
+  --tree-slot: 28px;
+  /* One row of the file tree. **28, not the 44 finger floor, on a
+     screen with a pointer** (2026-09-16:「文件树的不同行间距太大了,屏幕
+     空间宝贵」): the floor is for fingers, and a mouse has none
+     (`check-face` section 3 walks the face with a finger emulated and
+     sees 44 below; the rest of the gate walks it with a mouse, 28). VS Code's row is 22; 28 seats the type icon
+     beside 12.5px text with air (`--tree-slot`, whose ink is ~17 of the
+     28). A coarse pointer puts the floor back below. */
+  --tree-row: 28px;
+  --gap-xxs: 4px;    /* the grid's step itself */
+  --gap-base: 16px;  /* between paragraphs, between sections of one page */
+  /* 20, not 18 (第十五轮): the one spacing that was off the 4-grid. */
+  --gap-group: 20px; /* between groups that must not read as one list */
+  --gap-pane: 24px;  /* a region's own breathing room, against its edge */
+
+  /* ── layout ───────────────────────────────────────── */
+  /* 64, not the 56 this began at: a 56px rail around a 26px glyph left
+     15px of air, and the glyphs read as crowded before anyone got as
+     far as their colour. */
+  /* ⚠️ No rail draws this since the redesign (方案 B: the landings are a
+     strip in the window's top row, `LandingStrip`); kept because older
+     derivations below still read it. */
+  --rail-w: 64px;
+  /* **The wide face's top row** (the redesign, 方案 B): the window's
+     buttons' room (macOS draws them; a browser leaves the room), then the
+     landings' strip at 80 from the window's edge — in the list column
+     and, folded, at the start of the content's row alike. **The strip is
+     the largest control in that row** (the owner: it must never read
+     smaller than the session tabs beside it): 36 high, 36 × 30 pills,
+     glyphs at `--ctl-glyph` like every glass control's — 20 of ink, over
+     the tabs' 16 faces. ⚠️ 墓碑: `--strip-glyph` 22, its own number. */
+  --wide-lead-start: 80px;
+  /* The strip is a glass capsule like any other (the audit fix plan
+     F1.4): its height and its pills are the capsule rule's. */
+  --strip-h: var(--glass-btn);
+  --strip-item: var(--glass-item-w);
+  --strip-item-h: var(--glass-item-h);
+  /* **A detail page's one left and right edge** (the redesign, the
+     owner: the head's avatar and verbs stand exactly on the content's
+     edges). R0's head and the page under it both inset by this: 24 in a
+     window, 20 on the narrow face (`app.css`). */
+  --page-inset: var(--gap-pane);
+  /* One glyph box on the rail: a `--icon-rail` glyph (32) with eight
+     of padding each side (`RailItem`'s `px-2`). Written down because the
+     next token is measured from its edge. */
+  --rail-item: 48px;
+  /* Where the rail's glyph box starts: that box centred in the rail.
+     **The left block's first row starts its controls here too**
+     (docs/SHELL.md 第十三轮 第 2 条) — the search box's left edge on
+     the rail's glyph box, and on macOS the first of the three buttons —
+     which is why it is derived and not picked. `src-tauri/src/traffic.rs`
+     carries the same number for the window, and `check-boot` holds the
+     two together. */
+  --side-inset: calc((var(--rail-w) - var(--rail-item)) / 2);
+  /* **A menu hung from the seated box starts at the list, not at the
+     box** (第十三轮): the box starts on the rail's glyph box, so a menu
+     hung straight down from its left edge — the omnibox's candidates,
+     ⌘K's hits — would lie over the rail's glyphs, and a press meant for
+     the rail would land on a candidate (the face gate caught it on the
+     devices glyph, under 「待批」). This is how far in from the box's
+     left edge the list column starts: the rail's width less where the
+     box began, never negative (on macOS the box already starts past
+     the rail). `--menu-inset` is what a menu reads, `0` everywhere but
+     the seat, which sets it to this. */
+  /* 0 since the redesign: there is no rail for a seated menu to clear. */
+  --seat-menu-inset: 0px;
+  --menu-inset: 0px;
+  /* How wide the left block's first row keeps clear at its left end for
+     **the system's own three buttons**, which khor never moves or
+     resizes: macOS puts them inside this row (tauri's
+     `trafficLightPosition`) and this is the width they stand in — from
+     `--side-inset`, the trio, and one `--gap-in` before the search box.
+     Zero on every other face, and that is the whole of「不改行为」for
+     this one: the web face, Windows (its own three are drawn at the
+     tab strip's right end) and Linux (system decorations) leave no
+     strip here. */
+  --traffic: 0px;
+  /* 340 since the redesign (方案 B): the canvas's left column — and its
+     floor (`--wide-column-min`): the top row is the window buttons' room
+     (80) and the strip (about 229), and a drag must not cut it. */
+  --list-w: 340px;
+  --wide-column-min: 340px;
+  /* The list pane's drag bounds. The floor is where the PaneBar stops
+   * being usable — below ~180 the search field is a slit before the
+   * pane itself has failed, so the pane should give way first. Under
+   * the snap line a drag stops meaning "this wide" and starts meaning
+   * "away" — the pane collapses whole rather than grinding through
+   * widths nothing fits in (the ceiling, half the window, is a ratio
+   * and lives where the drag is measured). */
+  --list-w-min: 180px;
+  --list-w-snap: 100px;
+  /* The wide list's ceiling (the audit fix plan F2.8; W19): past it a
+     row's title and its state stand half a window apart. */
+  --list-w-max: 420px;
+  /* How narrow the file may be squeezed by a column beside it
+     (2026-09-17 ruling 52). **The floor of the thing being read**, not
+     of a control: 240 is about forty columns of the file view's mono at
+     its own size, which is where a line of code stops being one line.
+     It is what the workspace's seams subtract when they work out how
+     far they may be dragged (`use-list-width`'s `roomBeside`) — the
+     middle column has no seam of its own, so its floor has to be
+     written down rather than dragged. */
+  --ws-mid-min: 240px;
+  /* A tab that is not in front, and the most the one in front may take.
+   *
+   * **Two widths, not a range** (2026-09-02:「标签页没有被选中的时候
+   * 固定长度,选中了变宽来显示完整标签」). A tab that is not in front
+   * is exactly `--tab-w` wide: a face and the head of a name, the same
+   * size as its neighbours, so a strip reads as a row of equal stubs
+   * and a finger finds the fifth one where the fifth one always is.
+   * The tab in front grows to its whole name — the one tab whose name
+   * matters is the one that says all of it — and stops at `--tab-w-on`
+   * so a pasted-path-of-a-name does not push every other tab off the
+   * strip.
+   *
+   * What this replaced was a `flex-1` between a ceiling and a floor:
+   * every tab shared the room equally and shrank together, and its
+   * floor (102: a `--touch` to open plus a `--touch` to close, and the
+   * gaps) was where the strip gave up and scrolled. Under fixed widths
+   * that floor has no tab to bound — an unselected tab never shrinks,
+   * so it is never a stub with a 12px label; the strip scrolls as soon
+   * as the stubs no longer fit, which is the same place Chrome's does.
+   *
+   * 160 is a face, a gap, and about ten characters of a name at
+   * `--text-sm`, then the close mark: enough to tell `khor` from
+   * `khor-docs`, not enough for the whole of most. 420 holds a name of
+   * about forty, which is longer than a session is usually called —
+   * **and never more than the strip itself**: the ceiling is
+   * `min(420px, 100%)`, because the narrowest wide face leaves the
+   * strip less than 420, and a tab wider than its own strip is a tab
+   * that scrolls off it while it is the one in front.
+   *
+   * Neither is `--list-w` (a region, dragged) nor a `--ctl-*` (a
+   * height): a tab is a control with a width, and that is its own
+   * kind of number. */
+  --tab-w: 160px;
+  --tab-w-on: min(420px, 100%);
+  /* …and the floor a stub is pressed down to before the strip gives up
+   * and overflows (docs/SHELL.md 第三轮 第 1 条:「先压，再溢出」): a face,
+   * the tab gap, two or three characters **and the ×'s own cell**
+   * (第十三轮 第 6 条:「标签页的 x 按钮不要覆盖在文字上, 就是标签页的
+   * 一块」— the cell is `--ctl-sm` wide and always there, so the name
+   * ends before it rather than running under it; 80 was the floor while
+   * the × lay over the name's end). Every stub shrinks by the same
+   * amount, so they are still one width — 2026-09-02's 「未选中固定
+   * 长度」 is about stubs not following their names, and they still do
+   * not. */
+  --tab-w-min: 104px;
+  /* **Every wide glass tab, front or not** (UX-45, the owner 「等宽先看
+   * 看」): Chrome's look, all one width, shrinking together. 200 holds a
+   * face, a gap, about fourteen characters and the ×. */
+  --tab-w-even: 200px;
+  /* …and the narrowest one may get (the owner 2026-10-07: crowded, a
+   * pressed tab still showed no ×): the face and the ×, never less —
+   * 6 + the 18 face + 6, the 24 × cell, its 2, and 8 between. Past it
+   * the strip scrolls. */
+  --tab-w-floor: 64px;
+  /* A kind's tile on a new tab's page (UX-45): the dial's 40 face and a
+   * name of about eight characters under it. */
+  --new-tile: 76px;
+  /* How tall the chat box may grow before it starts scrolling itself.
+   * Not a control height: those three are what a control *is*, and this
+   * is a ceiling a growing box stops at. Without a ceiling a pasted
+   * essay eats the conversation it is being written into; without the
+   * growth the box lies about how much has been typed. */
+  --chat-box: 160px;
+  /* How tall the machine card's process table is, whatever a machine is
+   * running. The same kind of number as `--chat-box` — a ceiling on a
+   * box whose content has no natural end — and it is a ceiling rather
+   * than an unfold because the alternative was worse both ways
+   * (2026-09-03:「就不要展开了,就是一个固定相对高度的窗口,鼠标在里面
+   * 可以直接拖」): a folded table hides how much there is, and an
+   * unfolded one puts four hundred processes between the card's head
+   * and everything under it, so the control that folds it back is a
+   * long scroll away from the eye that wants it.
+   *
+   * Nine rows at the table's own line height, near enough: eight is
+   * `top`'s own fold on a short terminal, and the ninth row half in
+   * view is what says the box scrolls without a word saying so. */
+  /* **The drawer under the dials, and it is a fixed height on purpose.**
+   * Pressing GPU and pressing 磁盘 must leave the block exactly as tall
+   * — a drawer that grows to its content makes the whole card jump as
+   * somebody looks around it, and the thing they were reading moves out
+   * from under the eye. Four rows plus the group's own heading; more
+   * than four scrolls inside, with the same drag the process window
+   * takes.
+   *
+   * Stopping half-way down a row is what a scroll box does by default,
+   * and a half-drawn row reads as a broken one — the rows snap
+   * (`app.css`). **Not a fading mask**: the codex forbids gradients,
+   * and a mask says 「there is more below」 as a material effect rather
+   * than as a fact. */
+  --drawer-row: 27px;
+  /* **The slot under the four rings**, which the 24-hour figure and
+   * whichever drawer is open both live in (2026-09-04:「上环下趋势,合成
+   * 一个模块」). One height for both, because a slot that resized would
+   * make the whole card jump every time somebody pressed a ring — and
+   * pressing rings is what this block is for.
+   *
+   * **Set by the tallest thing it has to hold**, which is the parallel
+   * figure (叠放). Measured on the real face, the three readings' own
+   * parts:
+   *
+   *     reading   drawing   readout   words   + margin   total
+   *     热力带         92        14      44          6     156
+   *     山脊          108        14      44          6     172
+   *     叠放          153        14      44          6     217
+   *
+   * plus this block's own rule and the room under it (13), so 230 is
+   * the floor and 232 is it with two pixels of slack. 热力带 then
+   * leaves 76 under it, which is the price of one height — and the
+   * price of the other choice is the whole card moving under a press.
+   *
+   * ⚠️ **The readout's 6px `margin-top` is in that table on purpose.**
+   * It is not in `getBoundingClientRect().height`, and leaving it out
+   * is how the first number here came out 224: every reading fitted
+   * except 叠放, which overflowed by exactly six.
+   *
+   * The old `--drawer-h` is gone with it: it was a height written for a
+   * block that stood on its own (four rows plus its heading), and the
+   * drawer does not decide its own height any more. */
+  --slot-head-h: var(--hit);
+  --slot-h: 232px;
+  /* The three columns every part row shares. Named widths rather than
+   * content sizing, because the point of the grid is that the bar's two
+   * edges are **one value each** down the whole list — 「对齐」 has to
+   * be structural, not two numbers somebody keeps equal by hand. The
+   * name column is measured against `GPU0 NVIDIA GeForce RTX 4090`: a
+   * width that truncates here would put a truncation mark somewhere the
+   * text actually fits, which turns a real signal into decoration. */
+  /* The process table's eight columns. The three text ones are in `ch`
+   * because what they hold is characters: a pid is at most seven
+   * digits, a process name is the platform's short name. The command
+   * line takes what is left and truncates — it is the one column whose
+   * content has no natural end, so it is the one that carries the mark
+   * saying so. */
+  /* A hairline. One place, because a border width written into a
+   * stylesheet is a pixel literal and the px gate refuses those
+   * outside this file — correctly: it is how 614 stray pixels got in
+   * somewhere else. */
+  /* The process window when the table is in its stacked shape. A
+   * stacked row is three lines rather than one — measured 63 tall on
+   * this tree — so the height that showed nine rows wide shows four
+   * here. **Measured, not carried over**: 232→4, 280→5, 320→6, 344→6,
+   * 400→7 at 390 wide on turing (2026-09-04). Six is where 「who is
+   * eating this machine」 is still answerable at a glance, and 344
+   * keeps a little slack over the 320 that first reaches it, because
+   * rows without a command line are shorter and the mix changes.
+   *
+   * Keyed off the table's own width, like everything else on this
+   * card — the window is not the box. */
+  --top-h-tight: 344px;
+  --hair: 1px;
+  /* The file editor's caret stroke: VS Code's line caret, 2 wide (the
+     owner 2026-10-16:「光标不够显眼」「按 VS Code 来」). Its height is
+     the line's, `--text-mono--line-height`, as VS Code's (the owner
+     2026-10-16, `lib/code/theme`). */
+  --caret-w: 2px;
+  --cw-pid: 7ch;
+  /* ⚠️ **Tombstone: `--cw-name-max` and `--cw-cmd-arg-min` are gone,
+   * and there is no replacement pair.**
+   *
+   * They were the ceiling on the name and the floor under the word
+   * inside the 「命令」 cell. Between them they gave that cell two
+   * widths, and 2026-09-04 the person using this said what two widths
+   * cost: 「这俩就是俩字符串,放一列是有原因的,干嘛还要单独显示宽度呢?
+   * 他俩加一块共享列宽」 — after seeing a row where the process name
+   * had been squeezed out entirely and stood as a single `▪`.
+   *
+   * The cell is one flowing line now with one truncation at its end
+   * (`Cut`, and the tombstone in app.css). Nothing in it has a width of
+   * its own, so there is nothing here to name. */
+  --cw-run: 56px;
+  /* ⚠️ **The whole `--cw-*` set was re-measured on 2026-09-05**, when
+   * the table went from seven columns to eleven. Every one of them is
+   * now close to the ink it holds rather than comfortable over it —
+   * `check-face`'s 「room beyond ink」 line prints the margin for each,
+   * and the two that read *negative* are the two that truncate on
+   * purpose (用户, and 状态 when it is printing a token it has no word
+   * for).
+   *
+   * What that buys: eleven columns fit a 679px table, which is a 1100
+   * window with the list pane open. What it costs: **a machine whose
+   * numbers run wider than this fixture's will clip**, and the place
+   * that shows is a real card, not this file.
+   *
+   * The four columns of 2026-09-05 (「列太少了,不饱满」).
+   *
+   * **状态 is sized to its longest word, not its commonest.** 「运行」 and
+   * 「休眠」 are two characters and carry 99% of the rows, but 「说不准」
+   * and 「已暂停」 are three — and a column sized to the common case
+   * clips exactly the rows worth reading, which are the uncommon ones.
+   *
+   * **用户 is the one column here that truncates**, and that is a
+   * decision rather than an oversight: account names have no bound
+   * (`_windowserver`, `zzl-zgh`), and giving them room for the longest
+   * would spend on a column whose rows are usually identical — on one
+   * person's own machine every row says the same word. Truncation with
+   * the first characters kept is what tells 「谁的」 apart, which is all
+   * this column is asked.
+   *
+   * **CPU时间 is a clock, so it is sized in digits** — and the digits
+   * were counted wrong the first time: `999:59:59` looked like the
+   * ceiling, and hinton's `go.d.plugin` came back at **`1374:35:10`**,
+   * ten characters, which spilled into the gap beside it (seen on a
+   * real card, not here). A process that has been up 98 days on a
+   * many-core box passes four figures of hours without being unusual.
+   * The shape is what keeps
+   * it from being read as the 时长 beside it — a duration in words
+   * (「3天」) next to a stopwatch (「72:14:03」) cannot be confused, two
+   * durations in the same words can.
+   *
+   * **读写 is 内存's width** because it prints the same `bytes()` and
+   * the same magnitudes; a second width for the same shape of number
+   * would be two answers to one question. */
+  /* ⚠️ **Every one of these has to hold its own head, chevron and
+   * all** — and the head is usually the widest thing in a numeric
+   * column, not the numbers. At 44px 「CPU」 plus the sort chevron
+   * rendered as 「CPL」 on all three machines (seen in the screenshots;
+   * no gate caught it, because every gate here measures tracks and
+   * gaps rather than whether a word survived). The arithmetic per
+   * column: the word, plus `--gap-in`, plus a 12px chevron — and the
+   * chevron is on whichever column is sorted, which is every column in
+   * turn. */
+  --cw-status: 48px;
+  --cw-user: 52px;
+  --cw-cputime: 72px;
+  --cw-io: 56px;
+  --cw-cpu: 48px;
+  --cw-gpu: 46px;
+  --cw-vram: 50px;
+  --cw-mem: 52px;
+  /* **A floor under the 「命令」 column, and the column takes the rest
+   * of the table.** 2026-09-04:「表那应该表根据屏幕铺开。现在全挤在
+   * 左边了」— the table was 690 wide in a 1378 box, with the whole
+   * right half of the pane empty.
+   *
+   * **Where the slack goes is a question with a history, and every
+   * other answer here was tried and was wrong.** On the process name it
+   * opened 799px between a name and its CPU. On the first quantity it
+   * opened the same hole one column further along (measured at a 1100
+   * window: the 时长 track held 123px for content wanting 78). So it
+   * was put to the *right of the last column*, which is what「挤在左边」
+   * is describing.
+   *
+   * The merge is what makes an answer possible: **「命令」 is the only
+   * column whose content is genuinely unbounded**, so width given to it
+   * lands on that content rather than between two numbers. A wide card
+   * simply folds fewer command lines.
+   *
+   * `1fr` and not a ceiling, because the ceiling is already there and
+   * is not made of pixels: the bordered mark, which opens the whole
+   * line in place.
+   *
+   * **The floor is what decides where the table stops being a table**,
+   * and 2026-09-05 made that literal: eleven columns instead of seven,
+   * and the sum of the fixed tracks plus this floor is exactly what the
+   * grid asks its box for. Measured that day, this floor at `12ch` came
+   * out **3 pixels** over a 690px box (a 1100 window with the list pane
+   * open) — three pixels that cost the whole card its column heads,
+   * because a table that does not fit falls back to stacked rows and
+   * the heads go with the grid. At `10ch` the eleven fit from a 679px
+   * box up, which is that window and everything above it.
+   *
+   * So it is deliberately mean, and it is a floor rather than a width:
+   * the track is `minmax(this, 1fr)`, so at any comfortable width the
+   * column is hundreds of pixels wide and this number is not in play.
+   *
+   * In `ch` and not `em`: this column is a name and a path, so what
+   * matters is how many characters fit, read against `--text-sm`, the
+   * table's own size. */
+  --cw-cmd: 10ch;
+  /* How wide the 「命令」 hover may get. **A ceiling, not a width**: the
+   * tooltip is `w-fit`, so a short command stays short and only a path
+   * reaches this. `80vw` keeps it on the card at any window; the 640
+   * stops it running the width of a wide screen, where a line that long
+   * is harder to read than the wrap it replaces. */
+  --tip-cmd-max: min(80vw, 640px);
+  --part-name: 220px;
+  --part-num: 172px;
+  --top-h: 232px;
+  /* How wide the process-name column may get before it clips
+   * (`max-w-top-name`). **A ceiling, not a width**: the column takes
+   * what the names on that machine actually need, and this only stops
+   * the runaway case — a table whose name column follows one 200-char
+   * command line puts the numbers off the right of the card.
+   *
+   * In `em` for the reason `--measure` is, and read against
+   * `--text-sm`, the table's own size: 32em is about 70 Latin
+   * characters there. The widest name on the three machines to hand
+   * measured **267px = 21.4em** on 2026-09-03 (「Google Chrome Helper
+   * (Renderer)」 and friends), so real names sit under this with room
+   * to spare and nothing is clipped that did not have to be. */
+  --top-name: 32em;
+  /* How wide a line of prose may get — **in `em`, and the unit is the
+   * whole point.** A CJK glyph's advance is exactly 1em in this app's
+   * font stack (measured 2026-08-30 in system Chrome, at 11, 12.5, 14,
+   * 15, 16 and 17: the advance came back equal to the size every time),
+   * so this number *is* the count of Chinese characters on a line, not
+   * a length that happens to produce one. Latin follows from the same
+   * measurement, and **the number that matters is the one at the tier
+   * this cap actually runs on**: at `--text-read`'s 16px a Latin
+   * character is **.4570em** (2026-08-31). That is the only reason one
+   * cap can answer for both scripts at once.
+   *
+   * The whole sweep, re-measured 2026-08-31 in system Chrome, is
+   * .4511–.4824em — 11px .4824, 12.5 .4736, 14 .4658, 15 .4609, 16
+   * .4570, 17 .4511, shrinking monotonically as the size grows. **The
+   * sweep is context, not the input.** An em resolves against one font
+   * size, so only the `--text-read` row ever enters this arithmetic;
+   * the other five are here to show the drift is real and directional
+   * rather than noise. This line read「.465–.514em」until 2026-08-31,
+   * a range wrong at both ends — and wrong in the way that mattered,
+   * since .4570 sits below its floor, so the one row the cap uses was
+   * outside the range quoted to justify the cap.
+   *
+   * **Whatever wears `max-w-measure` must also carry `text-read`.** An
+   * em is resolved against the element's own font size, so this cap on
+   * a wrapper left at the shell's base would come out a sixth narrower
+   * than it reads. Both places that use it put the two classes on one
+   * element for that reason.
+   *
+   * **46, transcribed from claude.ai.** Measured 2026-08-30 in a 1580
+   * window: its paragraph column is 736 wide at size 16, which is 46
+   * glyphs of CJK. 46 × 16 = 736 here, to the pixel.
+   *
+   * **This version knowingly does not meet WCAG 2.x SC 1.4.8 (AAA),
+   * and the standard stays written down for exactly that reason.** That
+   * SC caps a line at 80 characters — **40 if CJK**, because a CJK
+   * glyph is about twice a Latin character's width at the same
+   * legibility. 46 is 15% past the CJK half; the Latin half is missed
+   * too (below). The reference product misses both as well, at 46 and
+   * 99.3. Deleting the citation and never having looked it up read the
+   * same to the next person, so it is here, with the gap stated.
+   *
+   * **Tombstone, and the round trip is the point.** 32 → 38 → 44
+   * (`280ad2b`, chasing「the screen is not full」) → 40 (`caec6d2`,
+   * pulled back once the standard was looked up) → 46 (here, matching
+   * the reference product the reader actually reads). Two of those
+   * moves were corrections of the move before. The lesson that survives
+   * all of them: **a reader's preference is a real signal about a real
+   * problem, and it is not evidence about where the limit is** — which
+   * is why the standard is still quoted above even though this value
+   * does not satisfy it.
+   *
+   * **What is still not satisfied, said out loud.** The same SC also
+   * caps non-CJK at 80, and with this font stack a Latin character is
+   * 1/2.189 of a CJK one (2026-08-31) — so 46 glyphs of CJK is **~100**
+   * of Latin. Both halves hold only at ≤36.5em. The standard's two
+   * numbers were written for text in one script; these paragraphs run
+   * 32–74% CJK.
+   *
+   * **2.189 is an illustration, not an assertion, and it is expected to
+   * drift.** It is a property of the font stack rather than a decision
+   * anyone made: change the stack and it moves, and nothing here would
+   * stop it or notice. What is actually asserted is `LAT_PER_CJK` in
+   * `check-read.mjs`, a band wide on purpose for that reason. And the
+   * live figure is never more than one division away — the gate prints
+   * both counts on every run (`46 cjk / 100.7 latin`), so **swapping
+   * the font stack is not a reason to come and edit this number**;
+   * read it off the gate instead. It carries a date because a number
+   * like this going stale should be *visible* rather than something the
+   * next reader discovers by walking into it.
+   *
+   * **「Match it exactly」turns out to be possible in Latin too: the
+   * limit this paragraph used to argue for is not there.** Re-measured
+   * 2026-08-31 against a live claude.ai conversation: the same 736
+   * column at the same 16px prose holds **46** CJK and **99.3** Latin
+   * — 100 of them counted directly, character by character, on one
+   * line box — against 100.7 here. All three numbers transcribe: the
+   * column to the pixel, the CJK count exactly, the Latin count to
+   * within 1.4 characters on a line. Its face (`anthropic-serif`) does
+   * run wider than this stack's `system-ui`, but by 1.3% a character,
+   * .463em against .457em. **Nothing here was capped, tuned or bent to
+   * get that agreement** — the two faces simply draw Latin at nearly
+   * the same advance, and the number that used to sit here hid it.
+   *
+   * **Tombstone: this read 88.3 until 2026-08-31, and drew from it a
+   * constraint that does not exist.** 88.3 was one measurement, never
+   * reproduced, and it was 12% off. Its likely origin, stated as
+   * inference and not as record: the same face and the same sample
+   * measured at **18px** gives 736 / 8.3268 = 88.4. The
+   * column and the CJK count were read off the prose's real 16px and
+   * the Latin count off 18 — one fact carried in two units. What is
+   * measured is only that 18px reproduces the number; why it was 18 is
+   * not known, so it is not asserted.
+   *
+   * **The re-check that mattered is the one that failed first, and it
+   * failed green.** The obvious control — drop `anthropic-serif` from
+   * the stack and see whether the width moves — cannot answer the
+   * question it is asked: the next entry is `"Anthropic Serif Fallback
+   * Georgia"`, a `size-adjust`ed face built to match its metrics. It
+   * measures 7.4407 a character against the real face's 7.4092, 0.4%
+   * apart, so it reports「same width, so the webfont never rendered」
+   * whether or not the webfont rendered. `document.fonts.check()` is no
+   * better — it answered `true` for a family name that does not exist.
+   * The control that does discriminate drops the metric-matched
+   * fallbacks as well: plain Georgia measures 7.1033, a 4.3% move, and
+   * the full stack then matches `anthropic-serif` in isolation to four
+   * decimals. **A control whose two arms were built to agree is not a
+   * control** — and its answer reads exactly like a finding.
+   *
+   * **The real answer to「the screen is not full」is a different axis**
+   * and is not in this batch: the column is 46 glyphs *of the reading
+   * size*, so a larger size on a wider window fills more of it with the
+   * same 46 glyphs a line. That is a change to `--text-read`, not to
+   * this. (Both numbers read 40 until 2026-08-31 — left over from the
+   * `caec6d2` value. The argument never depended on which number it
+   * was, which is exactly why nobody noticed it stop being true.) */
+  --measure: 46em;
+  /* **A detail page stops at about 960** (the audit fix plan F6.6,
+   * W24): the machine page and 额度's detail stretched with the window,
+   * and at 1600 a quota label stood 920 from where its bar began. The
+   * content is capped and stays on the page's left line — the room to
+   * its right is the window's, not a column to fill. (Settings already
+   * stop at `--measure`.) */
+  --detail-max: 960px;
+  --avatar: 32px;
+  /* The floor of this machine's face on the machines' map (`MandalaMap`).
+   * Its own token rather than a class override on `size-avatar`: `cn()`
+   * cannot beat a `--spacing-*` utility (tailwind-merge does not read
+   * `avatar` as a size), so both classes would survive into the markup
+   * and the winner would be whichever the stylesheet emitted last.
+   * ⚠️ 墓碑 (09-30 → 2026-10-01): it was also the face on the machine
+   * detail's contact card, which the strip of facts replaced. */
+  --avatar-lg: 72px;
+  /* The mandala map's middle. One step above the ring's faces, because
+     the size difference is carrying a fact — that seat is this machine —
+     and two sizes a few pixels apart would read as a rendering accident
+     rather than as a statement. */
+  --avatar-xl: 96px;
+  /* **32, up from 28 on 2026-08-31.** mandala's rail glyph is 30 and
+   * the person reading both said that one is comfortable and this one
+   * is not — but mandala's sits in a 36-tall row *beside its own
+   * label*, and this one stands alone in a 64 column with nothing to
+   * share the work. **An icon that is the only thing gets more than one
+   * that has a word helping it**, which is the whole of why this is not
+   * simply 30. The button around it is `min-w-touch` and `px-2`, so at
+   * 32 the box is 48 — still inside the 64 rail, with the 44 finger
+   * floor cleared by the glyph alone. */
+  --icon-rail: 32px;
+  /* The app mark at the head of the rail. Larger than a rail glyph and
+   * smaller than this machine's face at the foot: it is the app, not a
+   * place to go and not a machine, so it should not measure the same as
+   * either of its neighbours.
+   *
+   * The band is only 4px wide now (28 below, `--avatar` 32 above), so
+   * this sits in the middle of it. It moved because the rail glyph
+   * moved: leaving it at 28 would have made it *equal* to a landing,
+   * which is the one thing the paragraph above says it must not be. */
+  /* ⚠️ 墓碑: this was 30, the app mark at the rail's head, which is gone
+   * (nothing reads the token). The design system spends the name on the
+   * inline mark's canvas (docs/design-system/guidelines/40-migration.md, 第十五轮). */
+  --icon-mark: 16px;
+  /* **The small affordances' box** (2026-10-02): ×, the 预览 eye, a
+   * twisty, a sort arrow, a find bar's steps — marks that say what a
+   * press does to the thing beside them, not glyphs of a control. One box
+   * for the family wherever it sits (a tab, a list row, a column head).
+   * 16 since × and the chevrons are bare line glyphs (icons.tsx, 0.72 of
+   * the box): × and a twisty paint 11.5 of ink, as they did at 13 before,
+   * and the eye, which has a body, 14 — the two matched by weight. The
+   * glass controls' glyphs are `--ctl-glyph`; the popup button's stacked
+   * ⌃⌄ keep their own 10 (two in an 18 pill). */
+  --affordance: 16px;
+  /* **The tabs circle's figure** (round UX-3, `SessionBar`'s
+   * `TabsGlyph`): two 16 squares, a page behind a page, the front one
+   * holding the count. Their corner, their stroke (the weight of a
+   * line glyph at 22, 0.72 of the box drawn at 1.4) and the count's
+   * size, which has to fit two digits in the square. */
+  /* The squares' fill: the glass's tint over the ground, one opaque
+   * colour in either theme (the owner, 2026-10-04: the back page showed
+   * through the front). A gradient so it can be laid over `--background`
+   * as one `background`. */
+  --tabs-fill: linear-gradient(var(--glass), var(--glass));
+  --badge-radius: 4px;
+  --badge-stroke: 1.4px;
+  --badge-text: 10px;
+  /* The rest of the size family the design system names
+   * (docs/design-system/tokens.json `size`): a switch (32×18, 第十七轮
+   * draws it), the day's band under a tab (4), a dialog's width (380),
+   * and the one breakpoint (760 — `hooks/use-narrow.ts` holds the same
+   * number for `matchMedia`, which cannot read a custom property). */
+  --switch-w: 32px;
+  --switch-h: 18px;
+  --day-strip: 4px;
+  --dialog-w: 380px;
+  --narrow: 760px;
+  /* The session row's corner mark: a frame holding a glyph, sat on the
+   * bottom-right of the machine's face. The glyph is a step under the
+   * frame, not full-bleed — a glyph filling a rounded frame reads as
+   * about to spill. The frame is a solid punch-out (bg-card): brand
+   * glyphs are transparent-bottomed strokes, and laid straight on a
+   * painted face they dissolve into its light and dark.
+   *
+   * **18/14 since 2026-09-20**, from mandala's verbatim 14/11
+   * (docs/SHELL.md 第 3 条:「session 类别的icon大一点, 现在有点不可读」
+   * — the user). This is the one thing on a session row that says
+   * **what kind of session this is**, and at 11 the three shapes
+   * (chat / term / agent) are a difference people stop trying to read.
+   *
+   * It costs the row nothing: the mark is positioned on the face's
+   * corner rather than sitting in the row's flow, so what grew is what
+   * hangs over that corner and no column moved. 18 against the face's
+   * `--avatar` 32 is the same proportion VS Code gives a badge. */
+  --kind-mark: 18px;
+  --kind-mark-glyph: 14px;
+  /* **The same corner on a tab's face** (2026-09-28 audit 第 6 条). A tab
+   * wears the row's assembly — halo for the state, corner for the kind
+   * (2026-09-02) — but on a tab's 16 face, not the row's 32: the row's
+   * 32 plus its halo is 40, in a tab 28 tall, and it stood 6 over the
+   * tab's top edge. At 16 the halo reaches 24 and the corner has to
+   * shrink with the face — an 18 frame on a 16 face is bigger than the
+   * face it marks.
+   *
+   * 12/10 rather than the row's proportion (9/7): the row's corner grew
+   * from 11 to 14 because 11 was unreadable, and 7 would repeat that
+   * mistake at a smaller size. 10 is the smallest the three shapes
+   * (chat / terminal / agent) stay apart at; the frame keeps the row's
+   * one-step margin around it. */
+  /* The mark on the dial's 72 middle face (UX-26): 28, a whole-pixel 22
+   * margin all round; the 40 seats take the row's 18. */
+  --kind-mark-dial-me: 28px;
+  --kind-mark-tab: 12px;
+  --kind-mark-tab-glyph: 10px;
+  /* The gap between a tab's face and the name beside it (第 3 条:
+   * 「标签页上的标题距离头像稍远一些, 现在有些拥挤」— the user,
+   * 2026-09-20). It was 4 — the same 4 the tab puts between the name
+   * and the × on the other side — so the face read as the first
+   * letter of the word rather than as a thing beside it.
+   *
+   * 12 rather than a step up in `--gap-in`: what is being separated is
+   * a picture from a sentence, not the parts of one control, and
+   * moving `--gap-in` would move every clump in the app to answer one
+   * complaint about tabs. It is also `--gap-row`'s number, which is
+   * what this app already uses between the parts of a list row — a tab
+   * is a row that happens to be lying on its side. */
+  --tab-gap: 12px;
+
+  /* Tombstone (2026-08-29): `--gauge-bar` / `--gauge-bar-len` — the
+   * thickness of a reading drawn as a bar and the length one took in a
+   * caption. **There is no bar left in this app.**
+   *
+   * They were minted on the judgment that "a reading in an overview is
+   * a shape, not a number", against a map that printed `CPU 24% 内存
+   * 80% GPU 63%` under every machine. The judgment turned out to be
+   * half right and the wrong half was the expensive one: the user's
+   * word for the shapes was 「看不懂,可以取消」 (2026-08-28) — **an
+   * unlabelled bar has to be learnt exactly like a number does, and it
+   * has one thing less to learn from.** What replaced it is flatter:
+   * an overview carries no readings at all, and where a real "full"
+   * exists a ring says it, because the shape carries its own whole
+   * (`components/Ring`).
+   *
+   * The last bar standing was 今天's, kept because its denominator was
+   * named out loud (「和最忙的一天比」); it went with the 今天 line on
+   * 2026-08-29. Its component (`components/Gauge.tsx`) went with it —
+   * **a primitive whose last caller left is not a spare part, it is a
+   * second way to draw something this app has decided not to draw.** */
+
+  /* The ring of state around a machine's face on a session row, and the
+   * clear space between the two.
+   *
+   * **The gap is not decoration — it is what keeps two edges from eating
+   * each other.** The face already carries a hairline (`--avatar-edge`)
+   * whose whole job is to stop a pale palette dissolving into the paper;
+   * a halo drawn flush against it would read as one thick two-tone
+   * border, and on the worst palettes it is the hairline that would
+   * disappear. The gap is genuinely clear, so the two marks stay two
+   * marks on solid paper and transparent desktop material alike. */
+  --halo-gap: 2px;
+  --halo-w: 2px;
+
+  /* How deep the box a reading turns over inside is. Shallower and the
+     turn skews hard enough to read as the card tipping; deeper and there
+     is no perspective left, so it reads as a cross-fade rather than as a
+     thing with two sides. */
+  --flip-depth: 600px;
+
+  /* How far a control gives under a press. Small on purpose: this is
+     feedback, not an animation to watch — at 0.9 the button reads as
+     rejecting the click, and anything above 0.98 cannot be seen at
+     control sizes. Kept here rather than in the utility so the whole
+     app presses by one number. */
+  --press: 0.97;
+
+  /* ── motion (mandala's tokens, verbatim) ──────────── */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.3, 0.9, 0.28, 1);
+  --dur-120: 120ms;
+  --dur-180: 180ms;
+  --dur-240: 240ms;
+  --dur-420: 420ms;
+  /* Session pill activity: docs/design-system/components/Tab. */
+  --pill-breathe: 2400ms;
+  --pill-upload: 1400ms;
+  --pill-glow-blur: 12px;
+  --pill-glow-spread: 2px;
+  --pill-arrow-lift: -2px;
+}
+
+/* **The one face that keeps a corner for the window's buttons.**
+ * `App.tsx` stamps `data-traffic` on the root when this is the app on
+ * macOS and the window is not full screen, the same arrangement
+ * `data-narrow` uses — a fact JavaScript owns, published once on the
+ * root, read from CSS by name instead of re-derived.
+ *
+ * **Why an attribute and not a media query.** Neither half of the
+ * condition is something CSS can ask. 「是不是 app」 is tauri's IPC
+ * global; 「全屏了没有」 is the *window's* full screen, which on macOS
+ * is not the Fullscreen API — `:fullscreen` matches an element the page
+ * asked to expand, and nothing here ever asks. The window's own answer
+ * comes from tauri, and it comes with the resize that carries it.
+ *
+ * Unlayered, beside `:root` itself: `@layer base` would lose to the
+ * declaration above however specific this selector is. */
+:root[data-traffic] {
+  /* A starting value only, and deliberately close: the app measures the
+     buttons and writes the real width onto this element at startup
+     (`api.ts` trafficRoom, docs/SHELL.md 第十一轮), because their size is
+     the SDK's rather than khor's. What this number buys is the first
+     frame, before that answer comes back (this Mac: 8 + 60 + 8). */
+  --traffic: 76px;
+}
+
+/* ── Dark, once, hung on an attribute rather than on a media query ──
+ *
+ * **Not one colour below is written twice, and that is the whole reason
+ * this block looks like this.** 「跟系统 / 浅 / 深」 needs an explicit
+ * 浅色 to beat a dark desktop, and CSS offers exactly two roads: copy
+ * these hundred and sixty lines under an attribute selector — which
+ * breaks docs/KHOR.md's 一个事实一个出处 and has nothing watching it —
+ * or move the block under the attribute and let the face resolve `auto`
+ * itself and stamp the answer. Moved.
+ *
+ * The stamp is `src/theme.ts`, set synchronously before `createRoot`
+ * (`main.tsx`), and it listens to `matchMedia`'s `change`. **That
+ * listener is the premise of four gates, not a nicety**: `check-day`,
+ * `check-palette`, `check-rail` and `smoke` all flip the theme with
+ * `emulateMedia({colorScheme})` and read colours back — what turns that
+ * into a repaint is the change event re-stamping this attribute.
+ *
+ * `:root[data-theme="dark"]` is (0,2,0) and the `:root` above is
+ * (0,1,0), so dark beating light does not depend on source order. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  /* (One ground since 2026-10-02, pure black: see the light block. What
+     follows is the rule it replaced.) */
+  /* **Grey frame, black paper** (2026-09-30, the owner: 「用灰色背景，黑色
+     内容怎么样」 — the open tab was the board's grey and the terminal under
+     it the ground's black, two pieces where there should be one). The
+     three grounds turned over: the paper (`--card`) takes the old
+     ground's #0f0f0e, the blackest this palette has and the one every
+     dark ink was tuned against (`--foreground` 15.17, `--read-ink`
+     12.23); the left block takes the old board's #191917; the frame
+     takes the old popover's #242422.
+
+     **The frame's step is macOS's too**: its dark chrome (#323232) sits
+     9.5 L* over its content (#1e1e1e); this frame sits 9.84 over this
+     paper, in OKLCH L .168 → .260 at the palette's own hue (106.7) and
+     C ≤ .004. Every word written on the frame (R0, a settings page's
+     group names, the window's foot) had already been measured on this
+     value as the popover: ink 12.39, secondary 5.72, 空闲 5.05,
+     destructive 5.53 with its new value. Lighter than this, the
+     popover above it runs out of room: see there. */
+  --canvas-solid: #000000;
+  --background: var(--canvas-solid);
+  --foreground: rgba(238, 238, 231, 0.96);
+  --card: var(--background);
+  /* A settings group on black: iOS's secondary grouped background,
+     warmed to the palette (UX-11). */
+  --grouped: #1c1c1a;
+  /* Between the paper and the frame, as on the light theme: 4.40 L* over
+     the paper, 5.44 under the frame. The rail's glyph measures 8.30 on
+     it (floor 5.5), its body 4.71 (floor 3.0). */
+  --side: var(--background);
+  --card-foreground: rgba(238, 238, 231, 0.96);
+  /* **A step lighter than the frame, because a shadow cannot lift
+     anything off the paper** (2026-09-28, re-derived 2026-09-30). Black
+     at .45 on a ground this dark is a darkening nobody sees, so what
+     floats has to be lighter than what it lands on — and it lands on
+     both the black paper and the grey frame. macOS answers the same
+     way: its dark menus, popovers and sheets are the lightest thing in
+     the window. **+4.74 L* over the frame, +14.58 over the paper** (OKLCH
+     L .300); `check-palette` asks 4 of both, `check-face` 4I reads it on
+     the real surfaces.
+     What it costs, measured on it: ink 10.89, secondary 5.26, 空闲 4.67
+     (the lowest word), `destructive` 4.84 only because that red came up
+     a step (it read 4.25 here at #d4756b), `tertiary` 3.37 — the lowest
+     it lands on, inside its written exception — and a picked row's
+     second line on `fill-strong` 4.11, which is why a picked row now
+     wears one ink like a selected one (`app.css`). The old value, #242422,
+     is the frame now. */
+  --popover: #2e2e2c;
+  --popover-foreground: rgba(238, 238, 231, 0.96);
+  /* Paper, the mirror of light's ink: an ink button cannot be seen on a
+     dark ground, so this is the one thing in the palette whose two
+     themes are opposites rather than shades. Measures 16.46. */
+  --primary: var(--brand-strong);
+  --primary-foreground: var(--on-brand);
+  --secondary: rgba(244, 244, 239, 0.07);
+  --secondary-foreground: rgba(238, 238, 231, 0.72);
+  --muted: rgba(244, 244, 239, 0.07);
+  /* .60, up from .55.
+     **Tombstone: the reason this number is .60 expired on 2026-08-30.**
+     It read「this move was forced by the six words, not chosen for
+     secondary text: 忙碌 *is* this token, so it sets the ceiling 空闲
+     has to sit under」— and that stopped being true the moment 忙碌
+     got a colour of its own (`--state-busy` above). This token no
+     longer sets any word's ceiling.
+     What holds it at .60 now is the second half of that old note,
+     which was true on its own: secondary text on this theme was
+     sitting on the floor at .55. **Whether .55 is available again is
+     an open question and was not asked here** — the words that used to
+     depend on it no longer do, but every piece of secondary text in
+     the app does, and that is a different measurement from the one
+     that set this. */
+  --muted-foreground: rgba(238, 238, 231, 0.62);
+  /* 12.23 against this theme's paper, against the light theme's 12.25
+     — the pair is the point, and the reasoning is on the light value
+     (this number was measured on #0f0f0e when that was the ground; it is
+     the paper since 2026-09-30, and prose is read on the paper). This
+     theme is the one that was out of band: `--foreground` measures 15.17
+     here, near the 18.4 ceiling paper-on-this-ground has, which is where
+     a dark page starts to glare. */
+  --read-ink: rgba(238, 238, 231, 0.86);
+  --brand-wash: rgba(180, 210, 87, 0.14);
+  --accent: var(--brand-wash);
+  --brand-halo: rgba(180, 210, 87, 0.09);
+  --tertiary: rgba(238, 238, 231, 0.42);
+  --accent-foreground: rgba(238, 238, 231, 0.96);
+  /* **#e07f75 since 2026-09-30, from #d4756b**: only OKLCH lightness
+     moved (.666 → .700; C .121 and h 27 held, so it is the same red).
+     The popover came up to #2e2e2c to float over the grey frame, and a
+     menu's 删除… on it read 4.25; one step of L puts it at 4.84 — the
+     4.85 it had on the old popover. On the paper 6.81, on the frame
+     5.53, and what stands on it (`--on-destructive`) 6.21, up from 5.46.
+     `--badge` is its own token and stayed. */
+  --destructive: #e07f75;
+  --on-destructive: #1a1a14;
+  --destructive-foreground: var(--on-destructive);
+  --border: rgba(238, 238, 231, 0.14);
+  --sheet-scrim: rgba(0, 0, 0, 0.5);
+  --notice-scrim: rgba(0, 0, 0, 0.4);
+  --input: rgba(238, 238, 231, 0.14);
+  --ring: var(--brand-strong);
+
+  --lq1: #f2f7c0;
+  --lq2: #dbeb93;
+  --lq3: #b4d257;
+  /* The dark half of the solid brand: `--lq3`'s hue and chroma step at
+   * L 0.74, with the dark ink on it rather than white — 8.29, where
+   * white would be 2.4 (the light block says why this pair exists). */
+  --brand-strong: #99bb36;
+  --on-brand: #151513;
+  --brand: var(--lq3);
+  --brand-ink: #dbeb93;
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --fill: rgba(244, 244, 239, 0.08);
+  --fill-strong: rgba(244, 244, 239, 0.15);
+  --segment: rgba(244, 244, 239, 0.16);
+  --knob: #ffffff;
+  --glass: rgba(120, 120, 114, 0.24);
+  --glass-rim: linear-gradient(155deg, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0.07) 30%, rgba(255, 255, 255, 0.02) 58%, rgba(255, 255, 255, 0.14) 100%);
+  --glass-in: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 20px 50px -16px rgba(0, 0, 0, 0.7);
+  --glass-sel: var(--background);
+  --glass-sel-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.24), inset 1px 0 0 rgba(90, 170, 255, 0.14), inset -1px 0 0 rgba(255, 205, 80, 0.12);
+  --glass-sel-rim: conic-gradient(rgba(255, 255, 255, 0.22) 0deg, rgba(255, 255, 255, 0.03) 70deg, rgba(255, 255, 255, 0.14) 140deg, rgba(255, 255, 255, 0.02) 210deg, rgba(255, 255, 255, 0.04) 270deg, rgba(255, 255, 255, 0.42) 320deg, rgba(255, 255, 255, 0.22) 360deg);
+  --glass-menu: rgba(40, 40, 38, 0.88);
+  --band: rgba(0, 0, 0, 0.72);
+
+  /* ── the same separation as light, arrived at from the other side ──
+   * The light theme pushed the four that call you *down* in lightness
+   * because its floor was the 4.5 a word answers to. Here the loud
+   * four go *up*, for the mirror reason — on a dark ground more
+   * contrast is lighter, not darker.
+   *
+   * **What was wrong here was not the range, it was the order.** These
+   * six spanned 4.55–9.11, which reads as plenty; but 忙碌 — a word
+   * that asks nothing — sat *brighter* than both 失败 and 待批, and
+   * the two groups were interleaved rather than separated (group gap
+   * −3.1). A wide range hid it.
+   *
+   * Same target as light, 8 in L*, and the same reason it is stated in
+   * L* rather than in contrast: L* is near enough perceptually uniform
+   * that one threshold means the same thing at both ends of the scale,
+   * which is exactly what a contrast ratio does not do. Measured: 8.4.
+   *
+   * **The four are packed tightly on purpose.** Two points of lightness
+   * between them is enough because they are not telling each other
+   * apart by lightness — that is the hue's job, and the hues are
+   * doctrine. Lightness here is doing one job only: separating the two
+   * that ask for nothing from the four that do.
+   *
+   * 失败 pays for this: at L* 81 sRGB cannot hold a saturated red, so
+   * its chroma drops about a fifth and it lands a lighter coral. That
+   * is a gamut fact rather than a choice — the alternative was leaving
+   * it dimmer than 忙碌, which is the bug. */
+  /* The same hue from the other side, at the same loudness: card /
+     paper / selected row **6.90 / 7.52 / 5.11**, against 空闲's 4.55
+     and the four loud ones' 6.62–7.89; ΔL* 8.4 — every one of those
+     is the number it was before this word had a hue at all.
+
+     **Chroma .14, and this theme is the one where that is a
+     judgment.** The light theme could climb to its own ceiling for
+     free (失败 is already .158 there); this theme's other words top
+     out at .120, so .14 makes 忙碌 the most saturated word on it by
+     .02. Held to .120 the dark theme would have gained almost nothing
+     from this pass — .116 to .120 — while the complaint that started
+     it was「it does not read apart from the grey」, and grey is .007.
+     Measured, the cost of .14 is zero: contrast and ΔL* are unmoved.
+     The cost starts at .15 (4.97 on a selected row) and by .158 it is
+     4.72, which is why it stops here rather than at the gamut's edge.
+
+     **What .02 of chroma is not**: a rank. Lightness carries whether
+     a word wants you, and this one's lightness did not move. */
+  --state-busy: #8a9cfb;
+  --state-selected-busy: var(--state-busy);
+  --state-selected-idle: var(--state-idle);
+  --state-blocked: #4fd4f0;
+  --state-done: #b6c671;
+  --state-errored: #d7b55f;
+  /* Lightened from #d4756b, which measured **4.07** on a selected
+     row — under the 4.5 a word answers to, and nobody had reported
+     it: the halo work only ever measured these against the card,
+     where it reads 5.50. Ten percent toward paper, which keeps it the
+     same red and clears the floor at 4.62. */
+  --state-failed: #ffb8ad;
+  /* .55 against 忙碌's .55 — see the light block; on this theme the
+     ceiling is 待批 at 4.70 rather than 忙碌, so this sits under it. */
+  --state-idle: rgba(238, 238, 231, 0.55);
+
+  /* The four git letters lifted for near-black, the same way the five
+     hues below are: each one raised on its own against this theme's
+     card rather than the light values put through a filter. VS Code's
+     own dark values are the starting point and two of them are it
+     exactly (修改 #e2c08d, 添加 #73c991); 删除 and 冲突 are its hues
+     lifted until they clear 4.5 here. */
+  --git-modified: #e2c08d;
+  --git-added: #73c991;
+  --git-deleted: #ef8a76;
+  --git-conflict: #ff8a8a;
+  /* UX-51's three, at the dark letters' lightness (OKLCH .78). */
+  --git-remote: #87bafd;
+  --git-untracked: #4fcdcd;
+  --git-stash: #cba1fa;
+
+  --strain: #d59ab8;
+
+  /* The same five hues lifted for near-black. **Not the light values
+     with a filter on them**: on this theme a band has to sit *above*
+     the card rather than below the paper, so each is lifted on its
+     own and the hue re-checked (closest pair here is fable/haiku at
+     44.4°, closest to 待批 is spare at 39.7°).
+
+     The older generations mix toward `--card`, which is this theme's
+     black paper — so an older model fades *down* here and *up* on the
+     light theme, and either way 「fainter」 means 「older」 against the
+     paper it is drawn on (`--background` until 2026-09-30, when the
+     ground became the frame). */
+  --model-opus: #7a7ea4;
+  --model-fable: #a8bd6f;
+  --model-sonnet: #a36979;
+  --model-haiku: #e0a15a;
+  --model-tail: #6d6d69;
+  /* Each family's oldest stops where it still reads 3:1 on the black
+     paper (UX-53; at the old 58% opus-4-8 read 1.74 — 「看不见」): opus
+     29%, fable 49%, sonnet 26%, haiku 48% toward black. */
+  --model-opus-old: #575974;
+  --model-fable-old: #566039;
+  --model-sonnet-old: #794e5a;
+  --model-haiku-old: #74542f;
+  /* The six slots stepped for #000: contrast 3.88–7.52; neighbours ≥
+     13.3 for a red or green deficiency, slots 1–4 all-pairs ≥ 12.6; full
+     colour vision all-pairs ≥ 17.2. */
+  --model-series-1: #0eb16a;
+  --model-series-2: #4761e4;
+  --model-series-3: #85700b;
+  --model-series-4: #be2b86;
+  --model-series-5: #f0503d;
+  --model-series-6: #b46df4;
+  --chart-median: var(--foreground);
+
+  --badge: #d4756b;
+  --on-badge: #1a1a14;
+  --badge-foreground: var(--on-badge);
+
+  --avatar-edge: rgba(238, 238, 231, 0.22);
+  /* The blank under a mark: the dark theme's grey takes the light ink. */
+  --mark-ink-blank: var(--mark-ink-light);
+
+  /* Only the ink flips; `--icon-body` is a ratio and stays one number
+     for both themes — see the light block for why that is the point. */
+  --rail-ink: rgba(238, 238, 231, 0.72);
+  /* Night has room for the brand green itself: this is `--lq3`'s dark
+   * value, the same green the faces are drawn from. */
+  --rail-on-ink: #c6f560;
+  /* (`--rail-on`'s dark half went with the light one on 2026-08-31 —
+     the rail has no block any more. The tombstone, with both
+     percentages and why they differed, is on the light theme's side.) */
+
+  /* Lower than the light theme's .25 on purpose — see the light
+     block: the same alpha reads louder against near-black, and what
+     is being held equal across the two themes is how far the thumb
+     sits from the card, not how much ink is in it. */
+  --scroll-thumb: rgba(238, 238, 231, 0.22);
+  /* Lower than the light theme's .5 for the same reason .22 is lower
+     than .25: the same alpha reads louder against near-black. */
+  --scroll-thumb-strong: rgba(238, 238, 231, 0.45);
+}
+
+@theme static {
+  /* ── six named radii (docs/design-system/guidelines/40-migration.md, 第十五轮) ──
+   * 4 a key hint · 6 a button, a search field · 8 a row's selection, a
+   * tab's top corners · 10 a settings group, a dialog, a menu · 12 the
+   * board · full a switch, an avatar. **Written, not derived**: it was
+   * one base (`--radius` 10) and `calc` steps off it, so 「what does a
+   * button use」 had no answer but arithmetic, and the board (`lg`, 10)
+   * was not the 12 it is. Nothing is square but a hairline.
+   *
+   * **`@theme static`, not the `inline` block**: these names are both
+   * Tailwind's (`rounded-xl`) and the variables a gate or a stylesheet
+   * reads (`var(--radius-xl)`), and `static` is what emits them on the
+   * root whether or not a utility uses them. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  /* A menu that opens from glass (更多), iOS's 20. */
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+  /* **A wide glass tab sheds as it shrinks** (UX-45, Chrome's strip):
+   * under `tab-x` a pill that is not in front keeps its × for the
+   * pointer only, under `tab-face` its name goes too — the face and the
+   * ×'s seat, down to `--tab-w-floor`. Container sizes (`@max-tab-x/tab:`),
+   * so literal: a container query cannot read a variable. 96 is the
+   * floor's 64 and about three characters; 120 about five more. */
+  --container-tab-face: 96px;
+  --container-tab-x: 120px;
+  /* **`mono`, the one monospace size** (its history is at `--text-read`
+   * in the `inline` block below). **Here and not there, because the file
+   * page sets it again under itself** (文件字号, `lib/file-size`): in the
+   * `inline` block `text-mono` was compiled to `var(--fs-mono)` /
+   * `var(--lh-mono)`, so the page's own `--text-mono` never reached the
+   * sheet or its editor — only the per-line `min-h-[var(--text-mono--
+   * line-height)]` read it. At any step above the base each painted line
+   * grew to the step's leading while the editor's rows stayed at the
+   * root's, and the caret climbed off its letter by the difference on
+   * every line (the owner, 2026-10-08: 「文件编辑的光标始终不能和文字对
+   * 齐」; 3 px a line at 115 %, a row and a half by line 10). `static`
+   * keeps the utility reading the variable, so a size set on a subtree
+   * is the size that subtree draws. */
+  --text-mono: var(--fs-mono);
+  --text-mono--line-height: var(--lh-mono);
+  --text-mono--font-weight: 400;
+}
+
+@theme inline {
+  /* **Tailwind's `transition-*` utilities move on khor's curve** (the
+     audit fix plan F1.8; SYS-11): a switch's knob, a chevron's turn and
+     the seam were Tailwind's 150ms material curve beside khor's own. */
+  --default-transition-duration: var(--dur-180);
+  --default-transition-timing-function: var(--ease-out);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-read-ink: var(--read-ink);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-strain: var(--strain);
+  --color-git-mark: var(--git-mark);
+  --color-git-modified: var(--git-modified);
+  --color-git-added: var(--git-added);
+  --color-git-deleted: var(--git-deleted);
+  --color-git-conflict: var(--git-conflict);
+  --color-git-remote: var(--git-remote);
+  --color-git-untracked: var(--git-untracked);
+  --color-git-stash: var(--git-stash);
+
+  --color-state-busy: var(--state-busy);
+  --color-state-blocked: var(--state-blocked);
+  --color-state-done: var(--state-done);
+  --color-state-errored: var(--state-errored);
+  --color-state-failed: var(--state-failed);
+  --color-state-idle: var(--state-idle);
+  --color-badge: var(--badge);
+  --color-badge-foreground: var(--badge-foreground);
+  --color-avatar-edge: var(--avatar-edge);
+  --color-mark-ink-light: var(--mark-ink-light);
+  --color-mark-ink-dark: var(--mark-ink-dark);
+  --color-mark-ink-blank: var(--mark-ink-blank);
+  --color-mark-veil-dark: var(--mark-veil-dark);
+  --color-mark-veil-light: var(--mark-veil-light);
+  --color-rail-ink: var(--rail-ink);
+  --color-side: var(--side);
+  --color-brand-strong: var(--brand-strong);
+  --color-on-brand: var(--on-brand);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+  --color-glass: var(--glass);
+  --color-glass-menu: var(--glass-menu);
+  --color-segment: var(--segment);
+  --color-knob: var(--knob);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-wash: var(--brand-wash);
+  --color-brand-halo: var(--brand-halo);
+  --color-on-destructive: var(--on-destructive);
+  --color-on-badge: var(--on-badge);
+  --color-tertiary: var(--tertiary);
+
+
+  /* named sizes → utilities (h-ctl-md, w-rail, size-avatar…) */
+  --spacing-ctl-sm: var(--ctl-sm);
+  --spacing-ctl-md: var(--ctl-md);
+  --spacing-ctl-lg: var(--ctl-lg);
+  --spacing-tab-close: var(--tab-close);
+  --spacing-dialog: var(--dialog-w);
+  --spacing-xxs: var(--gap-xxs);
+  --spacing-base: var(--gap-base);
+  --spacing-row-1: var(--row-1);
+  --spacing-row-2: var(--row-2);
+  --spacing-switch-w: var(--switch-w);
+  --spacing-switch-h: var(--switch-h);
+  --spacing-touch: var(--hit);
+  --spacing-rail: var(--rail-w);
+  --spacing-traffic: var(--traffic);
+  --spacing-side-inset: var(--side-inset);
+  --spacing-rail-item: var(--rail-item);
+  --spacing-list: var(--list-w);
+  --spacing-list-min: var(--list-w-min);
+  --spacing-tab: var(--tab-w);
+  --spacing-tab-on: var(--tab-w-on);
+  --spacing-tab-min: var(--tab-w-min);
+  --spacing-tab-even: var(--tab-w-even);
+  --spacing-tab-floor: var(--tab-w-floor);
+  --spacing-new-tile: var(--new-tile);
+  --spacing-chat-box: var(--chat-box);
+  --spacing-top-h: var(--top-h);
+  --spacing-drawer-row: var(--drawer-row);
+  --spacing-top-name: var(--top-name);
+  /* `max-w-measure`. Through the spacing namespace rather than a
+     `--container-*` of its own because `max-w` reads `--max-width`,
+     `--spacing` and `--container` in that order (tailwind's own
+     resolution list), and the spacing table is where this app's named
+     widths already live. */
+  --spacing-measure: var(--measure);
+  --spacing-detail: var(--detail-max);
+  --spacing-avatar: var(--avatar);
+  --spacing-avatar-lg: var(--avatar-lg);
+  --spacing-avatar-xl: var(--avatar-xl);
+  --spacing-icon-rail: var(--icon-rail);
+  --spacing-icon-mark: var(--icon-mark);
+  --spacing-affordance: var(--affordance);
+  --spacing-kind-mark: var(--kind-mark);
+  --spacing-kind-mark-glyph: var(--kind-mark-glyph);
+  --spacing-kind-mark-dial-me: var(--kind-mark-dial-me);
+  --spacing-kind-mark-tab: var(--kind-mark-tab);
+  --spacing-kind-mark-tab-glyph: var(--kind-mark-tab-glyph);
+  /* `min-h-pane-head` on a pane's top row, `h-pane-head` on the tab
+     band — 第 5 条's one token reaching both surfaces — and `mt-tab-lip`
+     / `pb-tab-lip` on a tab, the room over its label and the foot under
+     it (2026-09-29). */
+  --spacing-pane-head: var(--pane-head);
+  --spacing-glass-btn: var(--glass-btn);
+  --spacing-wide-lead-start: var(--wide-lead-start);
+  --spacing-strip-item: var(--strip-item);
+  --spacing-strip-h: var(--strip-h);
+  --spacing-strip-item-h: var(--strip-item-h);
+  --spacing-page: var(--page-inset);
+  --spacing-files-inset: var(--files-inset);
+  --spacing-rows-inset: var(--rows-inset);
+  --spacing-head-ctl: var(--head-ctl);
+  --spacing-head-item-h: var(--head-item-h);
+  --spacing-head-item-w: var(--head-item-w);
+  --spacing-ctl-glyph: var(--ctl-glyph);
+  --spacing-composer: var(--composer-h);
+  --spacing-composer-item: var(--composer-item);
+  --radius-composer: calc(var(--composer-h) / 2);
+  /* the deck pill's corner: a one-row capsule's, kept by a pill grown by
+     its strip (UX-31/33) */
+  --radius-glass-btn: calc(var(--glass-btn) / 2);
+  --radius-menu: var(--menu-r);
+  --radius-menu-item: calc(var(--menu-r) - var(--menu-inset));
+  --spacing-menu-item: var(--menu-item);
+  --spacing-menu-inset: var(--menu-inset);
+  --spacing-glass-item-h: var(--glass-item-h);
+  --spacing-glass-item-w: var(--glass-item-w);
+  --spacing-glass-pad: var(--glass-pad);
+  --spacing-nav-h: var(--nav-h);
+  --spacing-nav-item: var(--nav-item);
+  --spacing-nav-glyph: var(--nav-glyph);
+  --spacing-nav-gap: var(--nav-gap);
+  --spacing-nav-room: var(--nav-room);
+  --spacing-dock-safe-bottom: var(--dock-safe-bottom);
+  --spacing-nav-menu: var(--nav-menu);
+  --spacing-list-row: var(--list-row);
+  --spacing-list-face: var(--list-face);
+  --spacing-deck-strip: var(--deck-strip);
+  --spacing-dial-seat: var(--dial-seat);
+  --spacing-progress-h: var(--progress-h);
+  --spacing-dial-seat-me: var(--dial-seat-me);
+  --spacing-list-head: var(--list-head);
+  --spacing-glass-tabs: var(--glass-tabs);
+  --spacing-glass-tab: var(--glass-tab);
+  --spacing-tab-face: var(--tab-face);
+  --spacing-key-cap: var(--key-cap);
+  --spacing-slider-knob: var(--slider-knob);
+  --spacing-slider-half: var(--slider-half);
+  --spacing-key-cap-w: var(--key-cap-w);
+  --spacing-key-pad-w: var(--key-pad-w);
+  --spacing-key-pad-glyph: var(--key-pad-glyph);
+  --spacing-tab-lip: var(--tab-lip);
+  --spacing-tab-gap: var(--tab-gap);
+  /* The narrow session page's foot (2026-10-02): `h-key-row` on the
+     keys a soft keyboard lacks, `pt-safe-top` / `pb-safe-bottom` where
+     a phone's own edges are kept clear. */
+  --spacing-key-row: var(--key-row);
+  --spacing-safe-top: var(--safe-top);
+  --spacing-safe-bottom: var(--safe-bottom);
+
+  /* the four gaps → utilities (gap-in, mb-group, pt-pane…) */
+  --spacing-in: var(--gap-in);
+  --spacing-row: var(--gap-row);
+  --spacing-group: var(--gap-group);
+  --spacing-pane: var(--gap-pane);
+  --spacing-tree-step: var(--tree-step);
+
+  /* ── the type scale: macOS's text styles, by what a line is ─────
+   * (docs/SHELL.md 第十五轮 第 1 条, docs/DESIGN.md 第五节; the sizes are
+   * the frozen draft's, which this block supersedes.)
+   *
+   * **Named for what a line is, never for how big it is.** The scale
+   * this replaces had two sets side by side — `xs/sm/base/lg` said how
+   * big, `title/fact/aux` said what kind of line — and a screen picked
+   * from either by feel, so the same row title was `text-sm` in one
+   * list and `text-fact` in the next. One set now, the names macOS's own
+   * text styles use, and a component says which kind of line it is:
+   *
+   *   title-lg  22  an empty state's headline — rare
+   *   title-md  17  a dialog's title, a section title inside a page
+   *   title-sm  15  R0's page name (`PageHead`)
+   *   headline  13  a row title that must stand out — 600
+   *   body      13  everything, by default (D1: 14 → 13, macOS's size)
+   *   callout   12  a row's second line, a setting's one-line note
+   *   caption   11  meta: a time, a count, a key hint
+   *   group     11  a group's header in a list or in settings — 600
+   *
+   * `read` (16, below) stays: reading is where size buys comfort, and
+   * D1 moved the chrome, not the conversation. **Fourteen styles and no
+   * fifteenth** (docs/design-system/tokens.json `type`): these eight,
+   * `read` and a document's three heading rungs, `mono` and `term`.
+   * `check-boot` compares every one with that file; `check-type` refuses
+   * a size outside them.
+   *
+   * **Every leading is a whole pixel**, the draft's ratio rounded
+   * (1.38 × 13 = 17.9 → 18, 1.35 × 12 = 16.2 → 16, 1.3 × 11 → 14…):
+   * WebKit snaps some boxes' rows to whole pixels and leaves others
+   * alone, and a fractional leading is a caret walking off its letter
+   * (`--text-code`'s tombstone, `check-wk`). */
+  --text-title-lg: var(--fs-title-lg);
+  --text-title-lg--line-height: var(--lh-title-lg);
+  /* 600, the scale's heaviest (the audit fix plan F5.2; SYS-12): three
+     weights, 400 / 500 / 600, and size does a title's work. */
+  --text-title-lg--font-weight: 600;
+  --text-title-md: var(--fs-title-md);
+  --text-title-md--line-height: var(--lh-title-md);
+  --text-title-md--font-weight: 600;
+  --text-title-sm: var(--fs-title-sm);
+  --text-title-sm--line-height: var(--lh-title-sm);
+  --text-title-sm--font-weight: 600;
+  --text-headline: var(--fs-headline);
+  --text-headline--line-height: var(--lh-headline);
+  --text-headline--font-weight: 600;
+  /* The navigation's seat names, iOS's tab bar 10 at every pointer. */
+  /* A session tab's name in the glass strip: 13 in a window, 15 on a
+     phone (the canvas). */
+  --text-tab: var(--fs-tab);
+  --text-tab--line-height: var(--lh-tab);
+  --text-nav-label: 10px;
+  --text-nav-label--line-height: 12px;
+  --text-nav-label--font-weight: 500;
+  --text-body: var(--fs-body);
+  --text-body--line-height: var(--lh-body);
+  --text-body--font-weight: 400;
+  --text-callout: var(--fs-callout);
+  --text-callout--line-height: var(--lh-callout);
+  --text-callout--font-weight: 400;
+  --text-caption: var(--fs-caption);
+  --text-caption--line-height: var(--lh-caption);
+  --text-caption--font-weight: 400;
+  --text-group: var(--fs-group);
+  --text-group--line-height: var(--lh-group);
+  --text-group--font-weight: 600;
+  /* ⚠️ 墓碑 (第十五轮): `--text-hero` 26/32 stood here — 「the one display
+   * size, a number big enough to be read as a shape」 (a quota arc's
+   * centre, a spend figure). The design system has fourteen styles and
+   * no display size; those numbers wear `title-lg` (22) now. */
+
+  /* ── the reading size, and its code ──────────────────
+   * **A conversation is not a dashboard, and the scale above is a
+   * dashboard's.** Every size in it is tuned for a line that reports
+   * one fact and never wraps — which is why the tiers below are named
+   * title / fact / aux, and why a paragraph is none of the three. The
+   * conversation face borrowed `--text-sm` (the *aux* size) for the
+   * only text in this app that is read rather than scanned, and that
+   * borrowing is what this pair ends. `--text-hero` is the precedent:
+   * one size, one job, written down.
+   *
+   * **16/24, and both numbers are measured off claude.ai rather than
+   * reasoned to.** 2026-08-30, a real conversation in a 1580 window:
+   * paragraph column 736 wide, size 16, leading 24. The person reading
+   * this app asked for that face, so the three numbers that make it —
+   * this size, this leading and `--measure` — are transcriptions, and
+   * 46 × 16 = 736 lands on it to the pixel.
+   *
+   * **Tombstone: this was 15, and the leading was 26 (1.73).** The
+   * argument for the looser leading was not a guess and is not
+   * withdrawn — in prose leading has to carry the eye back to the
+   * *start* of the next line, and CJK gives it no help doing that: no
+   * x-height, no ascenders and descenders patterning the line's edge.
+   * Typesetting practice for CJK body text puts the leading around 1.7,
+   * which is where 1.73 came from and where it sat.
+   *
+   * **1.5 is tighter than that, it was raised as an objection, and it
+   * is still what shipped.** The objection reached the person reading
+   * the app; they chose to match the reference product whole rather
+   * than keep the one number where this app was arguably ahead of it.
+   * That is a decision, not an oversight, and it is written here so the
+   * next reader does not "fix" it back.
+   *
+   * 15 → 16 also ends the old note about 16 crowding `--text-title`
+   * (17): one pixel between the body of a conversation and the title
+   * above it is now the arrangement, and it holds because the title
+   * carries weight (600) as well as size.
+   *
+   * **The code size followed later, and it is a measurement now, not
+   * the ".875 of the body" rule it used to be.** That rule gave 13 at a
+   * body of 15 and would give 14 at 16; the reference product gives
+   * **.9**, so 14.4. Measured 2026-08-30 in a real conversation: every
+   * one of its 16 inline `code` runs came back at 14.4px against a
+   * 16px body, with no spread to average away.
+   *
+   * **The block half of this token is extrapolated, and the difference
+   * matters.** One token dresses three things here — a fenced block, an
+   * inline run, and the tool line in `ChatView` — and the conversation
+   * that was measured contained **no fenced block at all** (`pre code`
+   * came back empty). An empty result reads like "they have no separate
+   * block size", and it is not that reading: it is "this conversation
+   * had none". So the inline number is transcribed and the block number
+   * is the same number *assumed*, which is a weaker claim wearing the
+   * same digits.
+   *
+   * **What would settle it** is one reading of a reference conversation
+   * that actually contains a fenced block. Until then, a future reader
+   * who finds blocks want their own size should split this token rather
+   * than re-derive it — the two halves have different evidence behind
+   * them and only one of them is a transcription.
+   *
+   * The leading was 1.5 (21.6), the ratio prose runs at above (24/16),
+   * so that a code line and a prose line sit on the same rhythm when
+   * they alternate. **It is 22 now, and the reason is an engine's, not
+   * a designer's** (2026-09-18): WebKit snaps a <textarea>'s rows to
+   * whole pixels and leaves a <pre>'s alone, so 21.6 was 21 on the
+   * editor and 21.6 on the sheet under it — the caret walked off its
+   * letter one row in thirty, on the app and in Safari, and Chrome
+   * (where `check-face` measures) never showed it. `check-wk` lays the
+   * pair out on WebKit and goes red on any leading that is not a whole
+   * number of pixels; 22 over 14.4 is 1.53, the nearest whole one
+   * above 1.5. The prose rhythm loses 0.4px a row to it. */
+  --text-read: var(--fs-read);
+  --text-read--line-height: var(--lh-read);
+  --text-read--font-weight: 400;
+  /* **`mono`, 13, since 第十五轮** (docs/design-system/tokens.json: code,
+   * paths, ids). The paragraphs above are the history of `--text-code`
+   * — 14.4 transcribed off a reference conversation's inline code — and
+   * the design system set the one monospace size to macOS's 13 instead.
+   * The leading keeps the rule that made it 22: **a whole number of
+   * pixels** (WebKit snaps a textarea's rows and not a pre's; `check-wk`
+   * lays the pair out and goes red on a fraction), so 13 × 1.5 = 19.5 is
+   * written 20.
+   *
+   * **Its three lines are in the `@theme static` block above, not here**
+   * (fix-c, 2026-10-08). */
+
+  /* ── ink weights ─────────────────────────────────────
+   * Three pressures of the same pen, named for what a line *does* —
+   * the same move the tiers below make for size. 纸墨 carries the
+   * judgment: hierarchy should come from how hard the ink was
+   * pressed, not from how much it was greyed out — grey is spoken
+   * for (muted-foreground qualifies, state colours judge), so before
+   * these, every line weighed 400 and hierarchy leaned on grey alone.
+   *
+   *   body  — the text itself, and anything not claiming rank.
+   *   label — a heading over rows: a group's name, a section word,
+   *           a field's key. Louder than what it labels, quieter
+   *           than a name.
+   *   title — what a thing is called: a session's name, a machine's.
+   *           One per block (the tier rule), so 600 stays rare
+   *           enough to mean something.
+   *
+   * **What this blocks: rank said twice.** A line that is both title
+   * weight and a size above its neighbours is shouting; pick the
+   * axis the block needs. It cannot block a 400 line that should be
+   * a title — that is the face gate's half (`check-face.mjs`). */
+  --font-weight-body: 400;
+  --font-weight-label: 500;
+  --font-weight-title: 600;
+
+  /* ── tempo ───────────────────────────────────────────
+   * How long a pressed control wears its outcome word before
+   * yielding the offer back (the pin's rule family: 复制好了, 开不了,
+   * 收不下). The TS twin is `lib/tempo.ts` — setTimeout cannot read
+   * a custom property without a layout pass, so the number lives
+   * twice with one name, and `check-type.mjs` holds the two equal. */
+  --time-yield: 2s;
+
+  /* ⚠️ 墓碑 (第十五轮, 2026-09-25): `--text-title` 17 / `--text-fact` 14 /
+   * `--text-aux` 12.5 stood here — 「three tiers, named for what a line
+   * is」, a vocabulary laid beside the raw `xs/sm/base/lg` scale rather
+   * than instead of it (「a vocabulary, not a sweep」). Two sets is what
+   * let a screen keep choosing by feel. The sweep happened: title →
+   * `title-md`, fact → `body`, aux → `callout`, and the raw four went
+   * the same way (xs → caption, sm → callout, base → body, lg →
+   * title-md). What that block was guarding — a fact that has to be
+   * hunted for — is still the reason a row's second line is `callout`
+   * in `--muted-foreground` and its title is not. */
+  /* ── a document's own ladder (工作区批6) ─────────────────────────
+   *
+   * **The one surface in this app where somebody else chose the
+   * structure.** Everything khor draws has one title and one body, so
+   * `--text-title-md` at 17 over `--text-read` at 16 is all the step the
+   * chrome ever needs. A Word file or a README arrives with three or
+   * four levels of heading already in it, and a ladder that fine would
+   * render them as four sizes nobody can tell apart.
+   *
+   * So three rungs and then a floor: h4 and below sit at body size and
+   * are told apart by weight alone. A scale that kept shrinking would
+   * be smallest exactly where the nesting is deepest, which is where a
+   * reader most needs to see where they are.
+   *
+   * Read against `--text-read`, not against each other: 1.4×, 1.2×,
+   * 1.06× of 16. */
+  --text-doc-h1: 22.4px;
+  --text-doc-h1--line-height: 29px;
+  --text-doc-h1--font-weight: 600;
+  --text-doc-h2: 19.2px;
+  --text-doc-h2--line-height: 25px;
+  --text-doc-h2--font-weight: 600;
+  --text-doc-h3: 17px;
+  --text-doc-h3--line-height: 23px;
+  --text-doc-h3--font-weight: 600;
+
+  /* `khor-symbols` and `khor-symbols-text` (app.css) before the generic
+     family: a prompt's private-use glyphs (Nerd Fonts) and a program's
+     text symbols (`⏺ ● ✔`) reach the UI too — a terminal row's second
+     line is its last line, and drew the first as empty boxes on the
+     native app and the second as emoji on the phone (2026-10-03). System
+     fonts have no glyph there, so nothing else falls through to them. */
+  --font-sans: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "khor-symbols", "khor-symbols-text", sans-serif;
+
+  /* ── the terminal's own face ─────────────────────────
+   * A terminal is the one surface in this app whose type is not a
+   * reading choice: the emulator hands over a grid of cells, and the
+   * face's whole job is to put one glyph in each of them.
+   *
+   * **Named rather than borrowed from `font-mono`.** Tailwind's default
+   * mono stack leads with `ui-monospace`, which on macOS is the system
+   * UI mono — a fine face for a code span inside prose and not the one
+   * a terminal wants. `SF Mono` first is the face Terminal.app and
+   * iTerm use here; `Menlo` behind it is what every mac has had since
+   * 10.6, and the generic keeps a Linux build honest.
+   *
+   * **CJK is deliberately not in this stack.** No monospace face on
+   * this platform carries it, so it falls back whatever we write, and
+   * naming a face here would only hide that from the next reader —
+   * xterm measures the cell from this face and draws a wide glyph
+   * across two of them, whichever font ends up answering for it.
+   *
+   * 14/20 rather than the 14/17.5 it was: the grid was drawn at
+   * `leading-tight`, which packs rows closer than any terminal sets
+   * them and is a large part of what "低分辨率" was describing. */
+  /* **The symbols face is the last family before the generic one**
+   * (F7.6; `lib/term-font`): Nerd Fonts' "Symbols Only" mono face,
+   * bundled, so a prompt's powerline and Nerd glyphs draw on every face.
+   * A chosen font goes in front of this stack, at the root. */
+  --font-term: "SF Mono", SFMono-Regular, Menlo, Consolas, "khor-symbols", "khor-symbols-text", monospace;
+  --text-term: 14px;
+  --text-term--line-height: 20px;
+  --text-term--font-weight: 400;
+  /* How much of its own ink a faint (SGR 2) run keeps, the rest being
+   * its ground. iTerm's "dimming amount" sits near the middle; a share
+   * this side of it keeps a dim hint legible on both grounds while
+   * still reading as quieter than the plain text beside it. */
+  --term-dim: 55%;
+}
+
+
+/* **The type ramp, as two sizes and one scale** (the redesign,
+   2026-10-02). The fourteen styles keep their names; what they resolve
+   to is `--fs-*` / `--lh-*` here, so a stylesheet can move them — the
+   theme above inlines `var()`, not a number. A mouse gets macOS's sizes
+   (body 13); a finger gets iOS's (body 17), the sizes the phone boards
+   are drawn in. `--ui-scale` is 外观's 界面字号: 1 by default, the
+   system's own text size where the platform tells a page (iOS, through
+   `-apple-system-body`, `lib/ui-scale`), or the slider's value. */
+:root {
+  --ui-scale: 1;
+  --fs-tab: calc(13px * var(--ui-scale));
+  --lh-tab: calc(18px * var(--ui-scale));
+  --fs-title-lg: calc(22px * var(--ui-scale));
+  --lh-title-lg: calc(28px * var(--ui-scale));
+  --fs-title-md: calc(17px * var(--ui-scale));
+  --lh-title-md: calc(22px * var(--ui-scale));
+  --fs-title-sm: calc(15px * var(--ui-scale));
+  --lh-title-sm: calc(20px * var(--ui-scale));
+  --fs-headline: calc(13px * var(--ui-scale));
+  --lh-headline: calc(18px * var(--ui-scale));
+  --fs-body: calc(13px * var(--ui-scale));
+  --lh-body: calc(18px * var(--ui-scale));
+  --fs-callout: calc(12px * var(--ui-scale));
+  --lh-callout: calc(16px * var(--ui-scale));
+  --fs-caption: calc(11px * var(--ui-scale));
+  --lh-caption: calc(14px * var(--ui-scale));
+  --fs-group: calc(11px * var(--ui-scale));
+  --lh-group: calc(14px * var(--ui-scale));
+  --fs-read: calc(16px * var(--ui-scale));
+  --lh-read: calc(24px * var(--ui-scale));
+  /* **The gauge's number, a named step** (W-V13): the machine card's
+     dials print their reading at 34, the one size above title-lg, and
+     only there. `Face`'s `TYPE_STEPS` mirrors the ramp, this included. */
+  --fs-gauge: calc(34px * var(--ui-scale));
+  --fs-mono: calc(13px * var(--ui-scale));
+  /* **Whole pixels at every scale** (the owner's caret, 2026-10-04): the
+     editor is a <textarea> over a painted <pre>, and WebKit snaps a
+     textarea's rows to whole pixels but not a pre's — so a fractional
+     leading is two leadings and the caret walks off its row (the 22 and
+     20 above were chosen whole for that reason). 界面字号 multiplies it
+     by any scale (13/17 on every Mac until UX-9 made it 15.29), so the
+     product is rounded here, once, where it is made; `check-wk` lays the
+     pair out at every step of the scale. */
+  --lh-mono: round(calc(20px * var(--ui-scale)), 1px);
+  /* The step that rounding takes, for a leading made outside this file
+     (`lib/file-size`'s steps multiply `--lh-mono` again). */
+  --pixel: 1px;
+}
+@media (pointer: coarse) {
+  :root {
+    --fs-tab: calc(15px * var(--ui-scale));
+    --lh-tab: calc(20px * var(--ui-scale));
+    --fs-title-lg: calc(26px * var(--ui-scale));
+    --lh-title-lg: calc(32px * var(--ui-scale));
+    --fs-title-md: calc(20px * var(--ui-scale));
+    --lh-title-md: calc(25px * var(--ui-scale));
+    --fs-title-sm: calc(17px * var(--ui-scale));
+    --lh-title-sm: calc(22px * var(--ui-scale));
+    --fs-headline: calc(17px * var(--ui-scale));
+    --lh-headline: calc(22px * var(--ui-scale));
+    --fs-body: calc(17px * var(--ui-scale));
+    --lh-body: calc(22px * var(--ui-scale));
+    --fs-callout: calc(14px * var(--ui-scale));
+    --lh-callout: calc(19px * var(--ui-scale));
+    --fs-caption: calc(12px * var(--ui-scale));
+    --lh-caption: calc(16px * var(--ui-scale));
+    --fs-group: calc(13px * var(--ui-scale));
+    --lh-group: calc(18px * var(--ui-scale));
+    --fs-read: calc(16px * var(--ui-scale));
+    --lh-read: calc(24px * var(--ui-scale));
+    --fs-mono: calc(13px * var(--ui-scale));
+    --lh-mono: round(calc(20px * var(--ui-scale)), 1px);
+  }
+}
+
+/* **Floating glass and the list's rows** (the redesign, 2026-10-02). Two
+   sizes, chosen by the pointer like the type ramp: a mouse gets the
+   window boards' (a 36 button, a 52 navigation capsule, 56 rows with a 32
+   face), a finger the phone boards' (44, 64, 68 with 40). Width decides
+   where they are; the pointer decides how big.
+
+   **Two control sizes, no more** (the audit fix plan F1.4; SYS-07, W13):
+   every glass head control is `--glass-btn` — 36 under a mouse, 44 under
+   a finger — the landings strip, a list's title row, a detail head's
+   verbs, the tab capsule, the browser's steps and address field; and the
+   controls inside a page's content (forms, settings buttons) are
+   `--ctl-md`, 28. The composer is its own (`--composer-h`). ⚠️ 墓碑: a 32
+   under a mouse outside the list column, which the list column patched
+   back to 36 for itself and nobody else. */
+:root {
+  --glass-btn: 36px;
+  /* **One glyph size for every glass control** (2026-10-02, the owner:
+     「icon在不同的地方大小要一样」 — the landings strip drew 22, the
+     machine head 18, VS Code beside it 16). The strip and its 更多, a
+     list's title row (筛选 / ＋, search), a detail head's verbs capsule,
+     VS Code and back circles, the folded 「…」: one number, set here and
+     read by one rule (`app.css`, 「a glass control's glyph」), never by a
+     call site. 22 in the 36 control a mouse gets (the owner chose the
+     larger of two, 2026-10-02) — every glyph fills 0.90 of its box
+     (icons.tsx `LIVE`), so about 20 of ink with 5 of air in the 30 inner
+     pill — and 26 in the 44 a finger gets, the same fill. The floating
+     bottom bar's seats (64 high, a word under the glyph) keep
+     `--nav-glyph`. ⚠️ 墓碑: `--ctl-glyph-tight`, one step down for a 32
+     capsule's 24 buttons — there is no 32 capsule any more. */
+  --ctl-glyph: 22px;
+  /* **One inner geometry for every capsule** (F1.4): an item is the
+     capsule's height less its padding above and below, and 6 wider than
+     it is tall — 30 × 36 in a 36, 38 × 44 in a 44. */
+  --glass-pad: 3px;
+  --glass-item-h: calc(var(--glass-btn) - 2 * var(--glass-pad));
+  --glass-item-w: calc(var(--glass-item-h) + 6px);
+  /* **A detail head's control size** (the redesign, 2026-10-02, the
+     owner: the verbs capsule reads as big as the avatar): the avatar,
+     the verbs capsule and the back circle are all this tall, so they
+     cannot drift. 36 under a mouse (the two title lines), 44 under a
+     finger: the glass control size, and the capsule rule inside it. */
+  --head-ctl: var(--glass-btn);
+  --head-item-h: var(--glass-item-h);
+  --head-item-w: var(--glass-item-w);
+  /* The least a detail head's name keeps beside its buttons; under it,
+     the narrow head folds its verbs into one 「…」 (`MachineVerbs`). */
+  --head-name-floor: 96px;
+  /* A listing whose rows pad their own 16 (the machine's files): set in
+     by the rest, so its words stand on the page's left line. */
+  --files-inset: calc(var(--page-inset) - var(--gap-base));
+  /* A list whose rows set their face 20 in (`SideList`: 8 + 12 wide, 20
+     narrow), laid on a page: set in by the rest, so the faces stand on
+     the page's left line (the machine's sessions). */
+  --rows-inset: calc(var(--page-inset) - var(--gap-group));
+  /* A workspace's tree, set in so its first level's disclosure mark
+     stands on the page's left line. The mark is a `>` centred in the
+     `--tree-slot` in an `--affordance` box; its ink's left edge is 0.113
+     of that box left of the slot's centre (a bare chevron, half as wide
+     as it is tall, leaning 0.09 toward its point: icons.tsx). */
+  --tree-inset: calc(var(--page-inset) - var(--tree-slot) / 2 + var(--affordance) * 0.113);
+  --nav-h: 52px;
+  --nav-item: 64px;
+  --nav-glyph: 20px;
+  /* Horizontal gutters never determine the dock's vertical anchor. */
+  --nav-gap: 16px;
+  --nav-bottom: calc(var(--safe-bottom) + var(--gap-base));
+  /* Only floating controls can enter the generous iOS home-indicator
+     band. Content, sheets and system navigation retain --safe-bottom. */
+  --dock-safe-bottom: var(--safe-bottom);
+  --dock-home-overlap: 8px;
+  /* 更多's menu, as wide as the canvas draws it. */
+  --nav-menu: 236px;
+  --list-row: 56px;
+  --list-face: 32px;
+  /* ⚠️ 墓碑 (UX-23): `--blame-col`, 22ch, the blame column beside the
+   * line numbers. Blame is the caret's line's end now (`InlineBlame`). */
+  /* **The folded deck is Safari's capsule** (UX-29, the owner 2026-10-06:
+   * after a scroll only one small capsule remains, centred at the foot,
+   * holding the title alone): its height, and the two inks it wears over
+   * what is behind it — white over a dark ground, black over a light one,
+   * as Safari's; the one place the app's ink is not a theme's. ⚠️ 墓碑
+   * (round UX-3 §3 → UX-13): a 24-pt strip across the width. */
+  --deck-strip: 28px;
+  /* **The folded capsule's room is the home indicator's band** (item 62,
+   * the owner 2026-10-07: lower, and off the terminal's content):
+   * the band where the phone has one, never shorter than the capsule;
+   * where it has none (an SE, a Mac window) the finger's floor, `--touch`.
+   * The last term is `--touch` with no band and below nothing once there
+   * is one (a band of 1 px already takes it under zero). */
+  --deck-fold: max(var(--safe-bottom), var(--deck-strip), calc(var(--touch) - 100 * var(--safe-bottom)));
+  --ink-on-dark: #ffffff;
+  --ink-on-light: #000000;
+  /* **The 我的 khor dial's seats** (UX-26, agreed on the prototype): a
+   * machine's face on the dial, this machine's in the middle, and the
+   * halo's reach past the middle face — the page's one olive. The narrow
+   * face takes a step down (36 / 60). Read by the dial in JS, so a seat's
+   * face and the road clipped to its edge agree on one number. */
+  --dial-seat: 40px;
+  --dial-seat-me: 72px;
+  --dial-halo: 22px;
+  /* The progress line along a tab pill's bottom edge while the tab
+     reloads (UX-31 §3, UX-33 §2): Safari's run, two points. */
+  --progress-h: 2px;
+  /* **The session's 附栏** (UX-30 → sb-a, 2026-10-09, the owner: 「按你
+     建议的宽度来」): 640 is 80 columns of code at the editor's size, the
+     first width before anything is dragged; 360 the least it takes
+     before the window moves left to make room (`room.rs`), and the
+     narrowest it shrinks to as the window narrows or is dragged. ⚠️ 墓碑
+     (UX-30): 390, a phone's width, and 320 the narrowest phone. */
+  --session-side-w: 640px;
+  --session-side-min: 360px;
+  /* The session beside the 附栏 narrows only after the column is at its
+     floor, and not under this: a terminal 40-odd columns wide. */
+  --session-main-min: 360px;
+  /* **The phone's 附栏 sheet stands at two detents** (UX-37 §3): half
+     the screen when the pill opens it — the terminal keeps its upper
+     half — and nearly all of it when dragged up, the system sheet's
+     large detent. Fractions of the screen's height, read by the drag
+     (`SessionPlaceSheet`) as well as by the sheet's own height. */
+  --place-sheet-half: 0.5;
+  --place-sheet-full: 0.92;
+  /* The session tabs' glass capsule and the pills in it, and a tab's
+     face (the canvas: 34 / 28 / 16 in a window, 40 / 34 / 22 on a phone). */
+  /* **The conversation's input, one glass capsule** (the redesign,
+     2026-10-02, the owner after Gemini's): 44 under a mouse, 48 under a
+     finger, its ends round at its one-line height and kept at that radius
+     as lines are added (a rounded rectangle, not a growing pill). The
+     things inside it — ＋, the mode word, send or interrupt — are 12
+     shorter, 6 in from the rim. */
+  --composer-h: 44px;
+  --composer-item: calc(var(--composer-h) - 12px);
+  /* **One menu** (the audit fix plan F1.6; SYS-10, W10): the dense
+     glass (`--glass-menu` with its rim, grey by day with a white chosen
+     row), 12 round with 28 items under a mouse, 20 round with 44 items
+     under a finger, inset 6, and the item's radius concentric with the
+     menu's. Every menu: 更多, 筛选, ＋, a row's menu, the mode, the
+     machine picker, the folded 「…」. */
+  --menu-r: 12px;
+  --menu-inset: 6px;
+  --menu-item: 28px;
+  /* The tab capsule is a glass head control too (F1.4): 36 / 44, its
+     pills the capsule rule's height. */
+  --glass-tabs: var(--glass-btn);
+  --glass-tab: var(--glass-item-h);
+  /* A tab's face: 18 under a mouse (the owner, 2026-10-02), its ring
+     1.5 outside a 1.5 gap (`app.css` `[data-tab-bar]`). */
+  --tab-face: 18px;
+  /* The session bar's row at the foot of a session (52 on the canvas)
+     and the accessory keys under it: a key cap and its floor width. */
+  --key-cap: 36px;
+  --key-cap-w: 40px;
+  /* The cursor pad, pinned second from the row's right end: wider than
+     a cap so it reads as a pad (the owner, 2026-10-03). */
+  --key-pad-w: 56px;
+  /* Its mark, the four-way arrows and the one arrow a locked drag shows
+     (item 72, the owner 2026-10-07: 「按钮很大，但摇杆的icon有点小」).
+     Sized by ink, not by box: the arrows are a bare glyph, 0.72 of their
+     box (icons.tsx `LIVE`), so at the caps' `size-5` they painted 14.4
+     beside 📎's 18.4 and 「…」's 18.0. At 26 they paint 18.7 — the
+     neighbours' ink, with the same 8–9 of air above and below in the 36
+     cap. ⚠️ 墓碑: `size-5`, the caps' box, 20. */
+  --key-pad-glyph: 26px;
+  /* Compact pointer thumb; coarse pointers retain the mobile thumb below.
+     Hit area stays independent of the visible knob. */
+  --slider-knob: 16px;
+  --slider-half: calc(var(--slider-knob) / 2);
+  --list-head: var(--pane-head);
+  /* What a scroller under the floating navigation keeps clear at its
+     foot, so its last row can be scrolled out from under the glass. */
+  --nav-room: calc(var(--nav-h) + var(--nav-bottom) + var(--gap-base));
+}
+@media (pointer: coarse) {
+  :root {
+    --slider-knob: 28px;
+    --glass-btn: 44px;
+    --ctl-glyph: 26px;
+    --nav-h: 64px;
+    --nav-item: 76px;
+    --nav-glyph: 24px;
+    --nav-gap: 24px;
+    --nav-bottom: calc(var(--dock-safe-bottom) + var(--gap-in));
+    --list-row: 68px;
+    --list-face: 40px;
+    --dial-seat: 36px;
+    --dial-seat-me: 60px;
+    --tab-face: 22px;
+    --composer-h: 48px;
+    --menu-r: 20px;
+    --menu-item: 44px;
+    /* A tab's × under a finger: 44 wide, its own cell, so a thumb on
+       the label does not close it (the audit fix plan F1.5). */
+    --tab-close: 44px;
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* ── the shell is nailed down ─────────────────────────────────
+   *
+   * 「整个app的拖动逻辑没有统一. 我在工作区的文件树拖动, 整个app都会
+   * 下移, 正确的应该是整个app是不允许随滑轮变化的」 — the user,
+   * 2026-09-20 (docs/SHELL.md 第 1 条).
+   *
+   * The height was already here and was never the problem: the app
+   * fits its window exactly. What it did not say is what happens to a
+   * wheel that arrives **after a pane has reached its end** — and the
+   * default is that the scroll chains outward until something takes
+   * it, which on WebKit is the viewport's elastic band. So the whole
+   * document, the rail and the window's three buttons with it, slid
+   * down under a flick in the file tree and sprang back.
+   *
+   * Two declarations, and each answers a different half:
+   *
+   *   `overflow: hidden` — this document has nothing to scroll.
+   *     ⚠️ It does **not** hide a layout that overflows: `scrollWidth`
+   *     and `scrollHeight` still report it, which is what every gate
+   *     that ever caught a sideways-scrolling face measures
+   *     (`check-tabs`, `check-face` 4m). Nothing became unmeasurable.
+   *   `overscroll-behavior: none` — and no elastic band either. This
+   *     is the half that only WebKit has (Chrome's desktop viewport
+   *     does not bounce), so it is `npm run wk` that measures it and
+   *     not `npm run face`.
+   *
+   * The other half of the rule — every scrolling pane keeping its
+   * scroll to itself — is one selector in `app.css`. */
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}
+
+/* **A finger puts the floor back.** Not the narrow face — the width of
+   the window says nothing about what is pressing it (an iPad is wide
+   and has no mouse; a narrow desktop window has one) — but the pointer
+   itself, which is what `check-face` section 3 emulates when it walks
+   the face with a finger. */
+@media (pointer: coarse) {
+  :root {
+    --hit: var(--touch);
+    --tree-row: var(--touch);
+    /* **…and the first row with it** (2026-09-29). The row went to
+       macOS's compact 38 for a mouse; a finger's target is 44 and a
+       row of 38 cannot hold it — a tab would stand out of its band and
+       be clipped by the strip's scroller. The row is 52 at every
+       pointer since the redesign, and a tab's lip is what centres a 44
+       label in it: (52 − 44) / 2. `check-boot` holds both halves of
+       that sum. */
+    --tab-lip: 4px;
+  }
+}
+
+/* iOS decks clear the home gesture area: with a 34-point safe area,
+   controls end at 34 - 8 + 8 = 34. Without a safe area, including above
+   the keyboard, only the normal 8-point inner gap remains. */
+:root[data-ios] {
+  --dock-safe-bottom: max(0px, min(var(--safe-bottom), var(--gap-in)), calc(var(--safe-bottom) - var(--dock-home-overlap)));
+}
+
+/* **The soft keyboard covers the home indicator** (2026-10-02). While it
+   is up (`lib/viewport` stamps the root from the visual viewport), the
+   session bar sits straight on top of the keys, so the room kept for the
+   indicator under it goes. */
+:root[data-keyboard] {
+  --safe-bottom: 0px;
+}
+
+/* **Glass** (the redesign, 2026-10-02; the values are `--glass*` above).
+   One utility so every floating control is the same material: the
+   navigation capsule, a list's buttons, a page's verbs, the session bar's
+   pieces. The corner is the caller's (a capsule is `rounded-full`). */
+@utility glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-in), var(--glass-shadow);
+  /* The rim: a one-pixel ring of `--glass-rim`, cut out of a full box by
+     a mask. Positioned against the glass (`app.css` makes the glass a
+     containing block without unseating one that is already placed). */
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: var(--hair);
+    background: var(--glass-rim);
+    pointer-events: none;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+}
+
+/* The chosen thing inside a piece of glass: the ground showing through
+   (`--glass-sel`), with the lens's edge and ring. Every one it is worn
+   by is already a containing block (`relative`), and none of them draws
+   a `::before` of its own. */
+@utility glass-sel {
+  position: relative;
+  background: var(--glass-sel);
+  box-shadow: var(--glass-sel-shadow);
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: var(--hair);
+    background: var(--glass-sel-rim);
+    pointer-events: none;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+}
+
+/* **预览背景: the one scoped exception to a root-only palette** (round
+ * UX-4; docs/design-system, 颜色). A rendered document can be read on the
+ * ground it was written for — a light page in the dark theme, or the
+ * other way — without the app around it changing. Only the preview's
+ * root wears `data-ground`, and only the ground tokens are said again
+ * under it: the paper, the inks on it, the hairline and the code block's
+ * fill. The values are each theme's own, repeated here because a custom
+ * property cannot read another theme's value; a change to either theme's
+ * ground changes these too. Everything else (the accent, the state
+ * colours, the glass) stays the app's.
+ *
+ * **At the foot of the file, after both themes**: `check-boot` reads a
+ * token's first two declarations as the light and the dark theme, and
+ * these blocks restate the ground. */
+[data-ground="light"] {
+  color-scheme: light;
+  --background: #f4f4ef;
+  --card: var(--background);
+  --foreground: rgba(26, 26, 20, 0.94);
+  --card-foreground: rgba(26, 26, 20, 0.94);
+  --read-ink: rgba(26, 26, 20, 0.88);
+  --muted-foreground: rgba(26, 26, 20, 0.7);
+  --muted: rgba(26, 26, 20, 0.06);
+  --fill: rgba(26, 26, 20, 0.06);
+  --fill-strong: rgba(26, 26, 20, 0.1);
+  --border: rgba(26, 26, 20, 0.12);
+  background: var(--card);
+  color: var(--foreground);
+}
+[data-ground="dark"] {
+  color-scheme: dark;
+  --background: #000000;
+  --card: var(--background);
+  --foreground: rgba(238, 238, 231, 0.96);
+  --card-foreground: rgba(238, 238, 231, 0.96);
+  --read-ink: rgba(238, 238, 231, 0.86);
+  --muted-foreground: rgba(238, 238, 231, 0.62);
+  --muted: rgba(244, 244, 239, 0.07);
+  --fill: rgba(244, 244, 239, 0.08);
+  --fill-strong: rgba(244, 244, 239, 0.15);
+  --border: rgba(238, 238, 231, 0.14);
+  background: var(--card);
+  color: var(--foreground);
+}
+
+/* Desktop surface preferences change the background plane, never foreground opacity. */
+:root { --window-opacity: 100%; --term-bg: var(--term-palette-bg, var(--canvas-solid)); --term-fg: var(--term-palette-fg, var(--card-foreground)); --theme-editor-w: 44rem; --theme-well: 24px; --theme-hex-w: 11ch; --theme-preview-h: 7rem; }
+:root[data-window-transparent] { --background: transparent; }
+
+/* Session heads below the active face+close floor shed their labels.
+ * The selected session keeps that floor and its close; others may shrink
+ * to the avatar and replace it with close on hover/focus. */
+@custom-variant session-tab-floor {
+  @container tab (width <= 64px) { @slot; }
+}
