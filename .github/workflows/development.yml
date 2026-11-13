@@ -355,6 +355,24 @@ jobs:
           export CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
           export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
           mkdir -p "$REPORT_DIR"
+          python3 - <<'NETWORK_CACHE_SPACE'
+          import hashlib,json,os,subprocess,sys
+          from pathlib import Path
+          root=Path('/Users/z13/khor-builder');report=Path(os.environ['REPORT_DIR'])
+          guard=root/'bin/build_guard.py';before=hashlib.sha256(guard.read_bytes()).hexdigest()
+          assert before=='998f5723eb447a1634411397c18a524e5ed0d50bd6dbd81001a16626219f64eb', 'Inspect changed admission policy before maintenance'
+          def free():
+              v=os.statvfs(root);return v.f_bavail*v.f_frsize
+          initial=free();pruned=False
+          if initial<50*2**30:
+              script=Path(os.environ['NETWORK_CONTROL_DIR'])/'scripts/worker-storage.py'
+              env=dict(os.environ,REPORT_DIR=str(report/'cache-maintenance'))
+              subprocess.run([sys.executable,str(script),'prune-test-programs'],env=env,check=True)
+              pruned=True
+          after=hashlib.sha256(guard.read_bytes()).hexdigest()
+          assert after==before, 'Cache maintenance must not change the installed guard'
+          (report/'space-preflight.json').write_text(json.dumps({'free_before':initial,'free_after':free(),'prune_test_programs':pruned,'guard_before_sha256':before,'guard_after_sha256':after,'admission_start_gib':50,'admission_stop_gib':40},indent=2)+'\n')
+          NETWORK_CACHE_SPACE
           if [[ "$DEV_TASK" == netlab-vz-probe ]]; then
             /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a python3 "$NETWORK_CONTROL_DIR/scripts/netlab-vz.py" 2>&1 | tee "$REPORT_DIR/task.log"
           else
