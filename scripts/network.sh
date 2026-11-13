@@ -118,19 +118,28 @@ PYTHON
     fi
     exit "$routes_status"
   elif [[ "$DEV_TASK" == net-vendor ]]; then
-    # Excluded dependencies cannot run their dev-dependencies from the root
-    # workspace. Use each committed package lock, and make iroh test our noq
-    # patch rather than the registry copy. Keep the exact resolution as evidence.
+    printf '{"suite":"tuple_exit_iroh_mac_full_lib_v1","slo":false,"runtime_performance":false,"no_filter":true,"test_threads":1,"noq_algorithm_unchanged":true}\n' > "$REPORT_DIR/measurement-mode.json"
+    cargo fmt --manifest-path vendor/iroh/Cargo.toml -- --check 2>&1 | tee "$REPORT_DIR/iroh-format.log"
     cp vendor/noq-proto/Cargo.lock "$REPORT_DIR/noq-proto-Cargo.lock"
     cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log"
+    python3 - <<'TUPLE_EXIT_METADATA'
+import json,os,pathlib,subprocess
+root=pathlib.Path.cwd();report=pathlib.Path(os.environ['REPORT_DIR'])
+source=json.loads((report/'source.json').read_text())
+assert source['tree'] in {'cf9d172bb92778ccfd97899ddea27bdf0e6d2f6e','2d702718ff8f664cc1e2fa5db2352e2d8e91ee8d'}
+verbose=subprocess.check_output(['rustc','-vV'],text=True)
+host=next(line.removeprefix('host: ') for line in verbose.splitlines() if line.startswith('host: '))
+metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--format-version','1','--filter-platform',host,'--manifest-path','vendor/iroh/Cargo.toml','--config','patch.crates-io.noq-proto.path="'+str(root/'vendor/noq-proto')+'"']))
+for name,version in [('iroh','1.4.1'),('noq','1.4.0'),('noq-proto','1.4.0')]:
+ rows=[p for p in metadata['packages'] if p['name']==name]
+ assert len(rows)==1 and rows[0]['version']==version
+ if name in {'iroh','noq-proto'}:assert pathlib.Path(rows[0]['manifest_path'])==root/'vendor'/name/'Cargo.toml'
+(report/'iroh-metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
+(report/'iroh-toolchain.json').write_text(json.dumps({'rustc_verbose':verbose,'host':host,'source':source,'root':str(root)},indent=2)+'\n')
+TUPLE_EXIT_METADATA
     cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
       --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
-    # The path filter omits our relay-home, QAD and interface regressions.
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib khor_ 2>&1 | tee "$REPORT_DIR/iroh-home-unit.log"
+      --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/iroh-full-unit.log"
   elif [[ "$DEV_TASK" == net-congestion ]]; then
     # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
     # and repeat sequentially, without another timed case sharing the runtime.
