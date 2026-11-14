@@ -1,3 +1,6 @@
+import contextlib
+import io
+import sys
 import importlib.util
 import os
 from pathlib import Path
@@ -13,6 +16,39 @@ spec.loader.exec_module(storage)
 
 
 class IncrementalRetentionTest(unittest.TestCase):
+    def _reclamation_was_considered(self, free_gib):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root = base / "builder/cache/target"
+            (root / "debug/deps").mkdir(parents=True)
+            incremental = root / "debug/incremental"
+            incremental.mkdir()
+            now = time.time()
+            for index in range(12):
+                variant = incremental / ("khor_node-" + str(index).zfill(13))
+                variant.mkdir()
+                modified = now - 3 * 3600 - index * 60
+                os.utime(variant, (modified, modified))
+            with patch.object(storage, "ROOT", root), \
+                 patch.object(storage, "allocated", return_value=84 * 2**30), \
+                 patch.object(storage, "free", return_value=int(free_gib * 2**30)), \
+                 patch.object(storage, "configure_guard", return_value={"changed": False}), \
+                 patch.object(storage, "collect_incremental", return_value=[]) as collect, \
+                 patch.dict(os.environ, {"REPORT_DIR": str(base / "report")}), \
+                 patch.object(sys, "argv", ["worker-storage", "ensure-budget"]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    storage.main()
+                except SystemExit as error:
+                    self.assertEqual(error.code, 0)
+                return collect.called
+
+    def test_low_start_reserve_does_not_skip_reclamation(self):
+        self.assertTrue(self._reclamation_was_considered(49.5))
+
+    def test_sufficient_start_reserve_preserves_cache(self):
+        self.assertFalse(self._reclamation_was_considered(50))
+
     def test_admission_policy_change_is_atomic_idempotent_and_preserves_unknown_edits(self):
         original = '\n'.join(['START_RESERVE = 35 * 2**30', 'STOP_RESERVE = 20 * 2**30',
                               'TARGET_LIMIT = 60 * 2**30', 'message = "less than 35 GiB free; target cache reached 60 GiB; free space dropped below 20 GiB"'])

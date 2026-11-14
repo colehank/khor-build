@@ -122,7 +122,7 @@ def main():
     summary = {'mode':args.mode,'root':str(ROOT),'target_allocated_before':before,'free_before':free(), 'directories':{}}
     summary['policy'] = {'cache_budget_gib': CACHE_BUDGET_GIB, 'maintenance_gib': CACHE_MAINTENANCE_GIB, 'minimum_free_gib': MINIMUM_FREE_GIB}
     summary['admission'] = admission
-    if args.mode == 'ensure-budget' and before < CACHE_MAINTENANCE_GIB * 1024**3 and free() >= MINIMUM_FREE_GIB * 1024**3:
+    if args.mode == 'ensure-budget' and before < CACHE_MAINTENANCE_GIB * 1024**3 and free() >= (MINIMUM_FREE_GIB + 10) * 1024**3:
         summary.update(target_allocated_after=before, free_after=summary['free_before'], removed=[], reason='below maintenance threshold')
         (report/'storage.json').write_text(json.dumps(summary,indent=2)+'\n')
         print('Cache below maintenance threshold; preserving all build artifacts')
