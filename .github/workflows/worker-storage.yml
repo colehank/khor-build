@@ -7,7 +7,7 @@ on:
         type: choice
         required: true
         default: inventory
-        options: [inventory, prune-test-programs]
+        options: [inventory, prune-test-programs, ensure-budget]
 permissions:
   contents: read
 concurrency:
@@ -20,6 +20,42 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 3
+      - name: Verify reserve regression and existing cache protections
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/storage-unit-evidence"
+          mkdir -p "$evidence"
+          cp scripts/worker-storage.py "$evidence/candidate.py"
+          git show 9b671817e34846df9e14c213a562ab88309cb45a:scripts/worker-storage.py > scripts/worker-storage.py
+          original_status=0
+          python3 -m unittest discover -s scripts/tests -p test_worker_storage.py -v > "$evidence/original.log" 2>&1 || original_status=$?
+          cp "$evidence/candidate.py" scripts/worker-storage.py
+          [[ "$original_status" == 1 ]]
+          python3 - "$evidence/original.log" <<'PYTHON'
+          from pathlib import Path
+          import sys
+          text = Path(sys.argv[1]).read_text()
+          assert 'Ran 6 tests' in text and 'FAILED (failures=1)' in text
+          assert 'FAIL: test_low_start_reserve_does_not_skip_reclamation' in text
+          PYTHON
+          python3 -m unittest discover -s scripts/tests -p test_worker_storage.py -v > "$evidence/candidate.log" 2>&1
+          git diff --exit-code -- scripts/worker-storage.py
+          python3 - "$evidence" <<'PYTHON'
+          from pathlib import Path
+          import hashlib, json, os, sys
+          root = Path(sys.argv[1])
+          digest = hashlib.sha256(Path('scripts/worker-storage.py').read_bytes()).hexdigest()
+          assert digest == '322899ec2722aa159d64ac1162e57fff0e354aaea65e5d159655cbd1392ed269'
+          (root/'verification.json').write_text(json.dumps(dict(control=os.environ['GITHUB_SHA'], original_failed=1, candidate_passed=6, original_protections_unchanged=True, script_sha256=digest), indent=2)+'\n')
+          PYTHON
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: storage-unit-evidence
+          path: ${{ runner.temp }}/storage-unit-evidence
+          retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: storage-script
