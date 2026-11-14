@@ -1,0 +1,256 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/a2a",
+    "crates/acp",
+    "crates/core",
+    "crates/catalog",
+    "crates/detect",
+    "crates/net",
+    "crates/sync",
+    "crates/node",
+    "crates/runtime",
+    "crates/update",
+    "crates/web",
+    "crates/cli",
+    "crates/commands",
+    "apps/gui/core",
+    "apps/gui/native-files",
+    "apps/gui/src-tauri",
+]
+# A patched copy of a dependency is not a member: its tests are
+# upstream's and want upstream's dev-dependencies (vendor/iroh/KHOR.md).
+exclude = ["vendor"]
+
+[workspace.package]
+# Kept equal to the release tag — the CI gate in `.github/workflows`
+# refuses a tag that disagrees. Before that gate this number sat at
+# 0.1.0 through five releases, which is the failure it exists to stop:
+# a version that never moves cannot answer "which machine is behind",
+# and that is the only question anybody asks a version for.
+version = "0.2.0"
+edition = "2024"
+
+[workspace.dependencies]
+khor-a2a = { path = "crates/a2a" }
+khor-core = { path = "crates/core" }
+khor-catalog = { path = "crates/catalog" }
+khor-detect = { path = "crates/detect" }
+khor-net = { path = "crates/net" }
+khor-sync = { path = "crates/sync" }
+khor-node = { path = "crates/node" }
+khor-runtime = { path = "crates/runtime" }
+khor-update = { path = "crates/update" }
+semver = { version = "1", features = ["serde"] }
+gethostname = "1"
+getrandom = "0.3"
+# How wide a string is **on a screen**, which is not how long it is.
+# `状态` is two chars and four columns, and a table padded by `.len()`
+# comes apart on exactly the rows that carry Chinese — while an
+# English-only fixture stays green (`khor top`'s table, crates/cli).
+#
+# **Not a new package**: `vt100` already brings it (Cargo.lock, checked
+# before adding rather than after — the count stayed at 797).
+unicode-width = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+blake3 = "1"
+# `preserve_order` because khor edits a file it does not own: claude's
+# settings.json. Without it a `Value` round trip is a BTreeMap, and
+# adding one hook would silently re-alphabetise fourteen top-level keys
+# of somebody's configuration — a diff that is all khor's and says
+# nothing khor meant.
+serde_json = { version = "1", features = ["preserve_order"] }
+rmp-serde = "1"
+# Document CRDT, not a live protocol: increments are bytes that can land as
+# files, so dumb nodes (ssh-only, no process) can carry them.
+loro = "1.16"
+base64 = "0.22"
+sha2 = "0.10"
+iroh = "1.4.1"
+# Local-network address lookup, **added alongside the N0 preset and not
+# in place of it**. The preset's lookup is n0's DNS/pkarr: two machines
+# on one router ask a server across the internet where the other one is,
+# and if the hole punch does not land the bytes go the same way out and
+# back. mDNS answers that question on the wire both machines are already
+# on, with no server of anybody's in the path.
+#
+# It does not make a LAN reachable — same-segment machines could always
+# reach each other; it removes the server from *finding out where*. And
+# it goes silent, not wrong, where multicast does not pass (AP isolation,
+# client isolation, separate VLANs) — which is why it joins the preset
+# rather than replacing it.
+iroh-mdns-address-lookup = "0.5"
+# The only outbound HTTP khor makes: Anthropic's usage endpoint, read
+# with the credential Claude Code already stored (crates/node/src/quota.rs).
+# rustls rather than the platform stack because iroh already brings
+# rustls in — a second TLS implementation for one GET would be paid for
+# on every build and every platform.
+# `system-proxy` **after being wrong about it once.** The first version
+# left it off, reasoning that a credential should not be silently routed
+# through somebody's proxy. That reasoning does not survive contact with
+# a real machine: on this one `https_proxy` is not an interception, it is
+# *how the machine reaches the internet* — DNS hands back a fake address
+# from the tunnel's own range and only the tunnel knows what to do with
+# it, so a client that ignores the setting does not go direct, it goes
+# nowhere (measured: 35s to a timeout against example.com, while `curl`
+# on the same box answered in 1.2s).
+#
+# And the premise was wrong too: `claude` itself honours these variables,
+# so the credential's own tool already travels that path. khor refusing
+# it protected nothing and only made khor the one client that could not
+# work here.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "system-proxy"] }
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
+# The live kind's wrapper needs real job control (tcsetpgrp): the child
+# must own the terminal so Ctrl-C reaches it and not the record-keeper.
+libc = "0.2"
+# PTY allocation for the persistent host, one API on every desktop OS
+# (openpty on POSIX, ConPTY on Windows). Compiled in — the product
+# expects no user-installed dependency, tmux included (docs/SESSION.md).
+portable-pty = "0.9"
+# The process table, one API on every desktop OS. Discovery needs it for
+# two things a vendor's files cannot answer: whether the process behind a
+# session is still running, and — for vendors that write no pid anywhere
+# — which sessions exist at all (crates/node/src/adaptor).
+#
+# `disk` on top of `system` because vitals report how full a machine is
+# (crates/node/src/vitals.rs). Still not `default`: `network`, `user` and
+# `component` are three more platform surfaces khor never asks about, and
+# `component` alone drags in the whole objc2 IOKit stack on macOS.
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "user"] }
+# GPU use on macOS, read out of IOKit's registry in-process.
+# `ioreg -r -d 1 -c IOAccelerator` is these two calls with a printer on
+# the end, and khor makes the calls instead: a gauge refreshed every few
+# seconds does not justify spawning a process to read it, and the other
+# route — `powermetrics` — wants root. Between them they carry
+# core-foundation-sys, mach2 and libc, all of which were already here.
+io-kit-sys = "0.5"
+core-foundation = "0.10"
+# The macOS Keychain, for the one password khor keeps: an ssh host the
+# person chose to log in to with one (crates/node/src/secret.rs). MIT or
+# Apache-2.0; already in the tree through rustls-native-certs.
+security-framework = "3"
+# GPU use on Linux with NVIDIA hardware. NVML is loaded at run time with
+# `libloading`, so khor links against nothing: on a machine with no
+# driver the load fails and the field stays absent, which is the same
+# answer khor gives for a machine with no GPU at all. **A vendor's own
+# shared library is not an external command** — the thing khor promises
+# not to need is something the user had to install.
+nvml-wrapper = "0.12"
+# Civil dates in the machine's own time zone, for `khor_node::usage`: a
+# vendor stamps its files in UTC and a person's "today" is local, so the
+# bucket a token lands in is a function of the instant *and* the zone —
+# daylight saving means one fixed offset would misfile a night's work
+# twice a year.
+#
+# **It costs no new package**: `serde_with` already pulled jiff into this
+# tree, so naming it here added exactly one line to Cargo.lock. Measured
+# on its own it is two crates (jiff + jiff-core) with `tz-system`; chrono,
+# the other candidate, is three and reads the zone through `localtime_r`,
+# whose documented race with `setenv` khor would then own.
+# License: Unlicense OR MIT (checked before use, not after).
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
+# A terminal screen, in memory, for the PTY fallback (crates/detect).
+# **A prerequisite, not a refinement**: the patterns this family matches
+# describe what is on a screen *now*, and the host's replay ring is a
+# byte log with no "now" in it — "esc to interrupt" that scrolled past an
+# hour ago still matches a substring search forever. Cursor-addressed
+# redraws rule out reading the tail instead, and the proof is upstream's
+# own: ccmanager reads xterm's rendered buffer and *still* needs a pass
+# to drop redraw fragments.
+#
+# vt100 rather than alacritty_terminal, which is the candidate already
+# named for the GUI's terminal-drawing batch: picking it here would
+# settle that batch's choice on its behalf, and this one wants strictly
+# less — a grid to feed bytes into and read lines back out of.
+#
+# Measured cost of naming it: **three packages** (vt100, vte,
+# unicode-width) — counted off the Cargo.lock diff, not estimated.
+# License: MIT (checked before use, not after).
+vt100 = "0.16"
+# Patterns for that same table. Several rules are genuinely regular
+# expressions upstream — a spinner glyph followed by a "…ing" label, a
+# numbered "deny (esc)" option — and rewriting them as hand-rolled
+# scanning would fork the one thing this table exists to copy verbatim.
+# **Already in the lock file** by way of the iroh/tracing side of the
+# tree, so naming it here costs no new package.
+# License: MIT OR Apache-2.0 (checked before use, not after).
+regex = "1"
+# Reads the pattern table at build time only, never at run time — same
+# arrangement as khor-catalog's zh.toml, and for the same reason: a
+# table that cannot be parsed should stop a build, not a user's session.
+# Already in the lock file (khor-catalog build-depends on it), so this
+# costs no new package either.
+# License: MIT OR Apache-2.0 (checked before use, not after).
+toml = "0.8"
+
+# The release profile exists for one measured reason: **the install
+# path is a download over a slow link.** From the machines this ships
+# to, the asset came down at ~95 KB/s — a 29.7 MB binary is five
+# minutes of somebody watching a progress bar, and the first thing a
+# new machine does is watch it.
+#
+# `strip` is the big one (debug symbols are most of that number), `lto`
+# and one codegen unit buy the rest and cost only CI time, which is
+# nobody's afternoon.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
+# **What we install on our own machines is not what ships** (2026-09-22).
+# The size argument above is about a download; an install from a local
+# build never crosses the slow link, and one codegen unit left the last
+# two crates compiling on one core for most of a five-minute build.
+# Everything else stays release's, so a bug seen here is a bug there.
+[profile.local]
+inherits = "release"
+codegen-units = 16
+# **Local installs keep their symbols** (the owner's rule, 2026-10-10:
+# only the shipped release is stripped and size-capped). The resident's
+# spin on 10-10 was sampled from a stripped binary and could not be read;
+# with the symbol table kept (no debug info, the release has none) a
+# `sample` names the functions directly. 96 MB against 78 MB stripped.
+strip = false
+
+# Debug builds keep line tables, not full debug info (2026-09-22): the
+# target reached 250 GB, most of it ~70 test binaries each carrying full
+# DWARF for iroh, tauri and aws-lc. Backtraces still name file and line;
+# what goes is a debugger's view of locals.
+[profile.dev]
+debug = "line-tables-only"
+
+# Runtime and update verification hash complete executables. Keep development
+# hashing optimized so debug binaries fit the same bounded probes as releases.
+[profile.dev.package.blake3]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+# iroh 1.4.1 with the remaining Khor integration patches. Why, which change,
+# and when this block and the directory can go: vendor/iroh/KHOR.md.
+[patch.crates-io]
+# SDK 3.5.0 with bounded ingress ownership; vendor/agent-client-protocol/KHOR.md.
+agent-client-protocol = { path = "vendor/agent-client-protocol" }
+# tiny_http 0.12.0 with bounded unread-body cleanup: vendor/tiny_http/KHOR.md.
+tiny_http = { path = "vendor/tiny_http" }
+iroh = { path = "vendor/iroh" }
+# noq-proto 1.4.0 with remaining recovery and measurement patches; originally from
+# moq-dev/noq#5: vendor/noq-proto/KHOR.md.
+noq-proto = { path = "vendor/noq-proto" }
+# iroh-mdns-address-lookup 0.5.0, matching a received id against the
+# known ones before decoding it: vendor/iroh-mdns-address-lookup/KHOR.md.
+iroh-mdns-address-lookup = { path = "vendor/iroh-mdns-address-lookup" }
+# swarm-discovery 0.6.3 with upstream's unreleased fix for a stopped
+# service's timer that never stops: vendor/swarm-discovery/KHOR.md.
+swarm-discovery = { path = "vendor/swarm-discovery" }
+# patchbay 0.7.0 (MIT OR Apache-2.0), the network lab under
+# `crates/cli/tests/netlab.rs`, made to run on turing's Linux 5.4:
+# vendor/patchbay/KHOR.md.
+patchbay = { path = "vendor/patchbay" }
+# loro-internal 1.16.2 without the deep copy of the version vector per
+# merged change: vendor/loro-internal/KHOR.md.
+loro-internal = { path = "vendor/loro-internal" }
