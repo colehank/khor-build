@@ -1,0 +1,166 @@
+[package]
+name = "khor-node"
+version.workspace = true
+edition.workspace = true
+
+[build-dependencies]
+blake3.workspace = true
+
+[dependencies]
+khor-a2a.workspace = true
+# Official A2A v1 HTTP client (Apache-2.0), sharing the pinned core types.
+a2a-client = { package = "a2a-client-lf", version = "=0.2.9" }
+khor-acp = { path = "../acp" }
+agent-client-protocol = { version = "3.5", features = ["process", "stdio"] }
+futures = "0.3"
+khor-core.workspace = true
+vt100.workspace = true
+khor-catalog.workspace = true
+khor-detect.workspace = true
+khor-net.workspace = true
+khor-sync.workspace = true
+khor-runtime.workspace = true
+khor-update.workspace = true
+tempfile = "3"
+serde.workspace = true
+serde_json.workspace = true
+toml_edit = "0.22.27"
+rmp-serde.workspace = true
+base64.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+# `unstable-net-report` (vendored, so its stability is ours): the
+# connection journal writes what iroh learnt of this machine's public
+# address and from which relays (NET-DIRECT).
+iroh = { workspace = true, features = ["unstable-net-report"] }
+# Reading iroh's path events (`roads::follow`); already in the tree
+# through iroh and khor-net (MIT OR Apache-2.0).
+n0-future = "0.3"
+# `process` for the carrier's ssh session (round ROAD-2, `carry`): its
+# stdin and stdout are a link iroh reads without a thread per pipe.
+tokio = { workspace = true, features = ["process"] }
+gethostname.workspace = true
+serde_bytes.workspace = true
+blake3.workspace = true
+portable-pty.workspace = true
+sysinfo.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+gix = { version = "0.87.1", default-features = false, features = ["status", "blob-diff", "revision", "sha1", "max-performance-safe", "merge", "blame"] }
+# The walk behind `khor search` (工作区第六轮 第 47 条). It is ripgrep's
+# own directory walker, and what khor is buying is one thing it will not
+# write twice: **`.gitignore` read the way git reads it** — nested
+# files, negations, the global one, `.git/info/exclude`. A search that
+# returned `target/` and `node_modules/` would answer every query with
+# somebody else's code, and a hand-rolled ignore reader is the kind of
+# almost-right that goes wrong on the one project that needs it.
+# License: MIT OR Unlicense.
+ignore = "0.4"
+# The app lock's PIN, hashed rather than kept (`crates/node/src/lock.rs`).
+# Argon2id at the crate's own defaults, which are the OWASP ones — the
+# parameters are a judgment this repo has no business re-deriving, and a
+# hand-rolled KDF for a screen lock would be the worst kind of homework.
+# License: MIT OR Apache-2.0 (checked before use, not after).
+argon2 = "0.5"
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+office_oxide = "0.1.11"
+pdfboss-output = "2.4.0"
+pdfboss-core = "2.4.0"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# Its own `main`: the attach it tests re-execs this binary as the host
+# (`host::main_if_host`), which the default harness cannot answer.
+[[test]]
+name = "tmux_mouse"
+harness = false
+
+# Shift+Enter across tmux (item 39): the same real attach, so the same
+# re-exec'd host and the same plain `main`.
+[[test]]
+name = "tmux_extkeys"
+harness = false
+
+# A shell opened from a phone on a computer: the desk's open re-execs
+# this binary as the session's host, so the same plain `main`.
+[[test]]
+name = "open_from_phone"
+harness = false
+
+# The one road to a recycle bin, on the three platforms that have one
+# (`crates/node/src/files.rs` — the three candidates and what each cost).
+# Not on iOS/Android, which have no such place: there `files::remove`
+# answers that it cannot, and the face says 直接删 instead of guessing a
+# platform (`TRASH_HERE`).
+#
+# `default-features = false` drops `chrono`, which only dates the items
+# in a listing — khor never lists a recycle bin, only puts things in
+# one. It costs nothing either way (chrono is already in the tree), so
+# this is about compiling less, not about the count.
+# `coinit_apartmentthreaded` is the Windows COM mode the crate asks
+# callers to pick; with none chosen it does not build there.
+# License: MIT, and `urlencoding`'s (its one new neighbour) is MIT too —
+# checked before use, not after.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+trash = { version = "5.2.9", default-features = false, features = ["coinit_apartmentthreaded"] }
+# The far side of a pushed directory tree (round NET-4, `crate::watch`):
+# FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows,
+# one API. The machines that answer a tree are desktops; a phone answers
+# none, so it does not carry this. The de-facto crate for it (rust-analyzer,
+# cargo-watch, deno, zed use it).
+# License: CC0-1.0. Its new neighbours in the lock: notify-types (MIT OR
+# Apache-2.0), fsevent-sys (MIT) on macOS, inotify and inotify-sys (ISC)
+# on Linux, kqueue and kqueue-sys (MIT) listed for the BSDs and built for
+# none of khor's targets — checked before use.
+notify = "8.2"
+
+# The GPU reading is the one part of vitals with no cross-platform API
+# behind it, so each platform brings its own and no other platform pays
+# for it (crates/node/src/vitals/gpu.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+io-kit-sys.workspace = true
+core-foundation.workspace = true
+security-framework.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nvml-wrapper.workspace = true
+
+# A phone's two identity facts (docs/IOS.md 第二步): the machine
+# fingerprint is `UIDevice.identifierForVendor` (`hardware.rs`), asked on
+# the main thread through `dispatch2::run_on_main`, and the store is kept
+# out of iCloud / computer backups with `NSURLIsExcludedFromBackupKey`
+# (`backup.rs`). **All four are already in the tree** under tauri's wry
+# on iOS — no new package; only the features named here are compiled.
+# License: MIT (the objc2 family).
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSValue", "NSError", "NSUUID"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIDevice"] }
+dispatch2 = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tiny_http = "0.12"
+# Independent official HTTP server for native-agent interoperability tests.
+# Apache-2.0; axum is MIT.
+a2a-server = { package = "a2a-server-lf", version = "=0.5.3", default-features = false }
+axum = "0.8"
+# The tests' own relay (`tests/util`'s `hermetic`): iroh-relay's server
+# in plain HTTP on loopback, the one `khor relay --dev` embeds — already
+# in the tree under the CLI, so no new package. Every scratch home binds
+# with it and nothing else, so a test touches no real relay.
+iroh-relay = { version = "1.4.1", features = ["server"] }
+
+# Opt-in real native GUI/TUI round trip, re-executing this test as its hosts.
+[[test]]
+name = "native_handoff"
+harness = false
+
+# Re-executes itself as detached ACP hosts for real delegation round trips.
+[[test]]
+name = "delegation_wire"
+harness = false
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }

@@ -1,0 +1,462 @@
+name: Release candidates
+on:
+  push:
+    tags: ['v*-rc.*']
+  workflow_dispatch:
+    inputs:
+      signed:
+        description: Build Apple distribution artifacts (apple-signing environment required)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      rc: ${{ steps.intent.outputs.rc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/distribute_candidate.py check-build
+  frontend:
+    needs: prepare
+    uses: ./.github/workflows/frontend.yml
+  quality:
+    needs: frontend
+    uses: ./.github/workflows/quality.yml
+    with:
+      reuse_frontend: true
+  agent-runtime:
+    needs: frontend
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-26
+            target: aarch64-apple-darwin
+          - runner: macos-26
+            target: x86_64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/restore-frontend
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: apps/agent/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Build and record the target Pi runtime once
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          npm ci --prefix apps/agent
+          node apps/agent/build.mjs "$TARGET" agent-runtime/khor-agent
+          python3 scripts/release_manifest.py create --root agent-runtime --kind "agent-runtime-$TARGET" --frontend frontend --agent agent-runtime/khor-agent
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: agent-runtime-${{ matrix.target }}
+          path: agent-runtime/
+          if-no-files-found: error
+          retention-days: 14
+  native:
+    needs: [frontend, agent-runtime]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            zig: x86_64-unknown-linux-gnu.2.31
+            asset: khor-linux-x86_64
+          - runner: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+            zig: aarch64-unknown-linux-gnu.2.31
+            asset: khor-linux-aarch64
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            zig: ''
+            asset: khor-macos-arm64
+          - runner: macos-26
+            target: x86_64-apple-darwin
+            zig: ''
+            asset: khor-macos-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/restore-frontend
+      - uses: ./.github/actions/restore-agent
+        with:
+          target: ${{ matrix.target }}
+      - uses: ./.github/actions/native-tools
+        with:
+          target: ${{ matrix.target }}
+      - if: runner.os == 'macOS'
+        run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - if: matrix.target == 'x86_64-apple-darwin'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+      - if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y qemu-user libc6-arm64-cross libgcc-s1-arm64-cross
+      - if: matrix.zig != ''
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install ziglang==0.13.0
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+          cargo install cargo-zigbuild --version 0.20.1 --locked
+      - name: Build CLI from the shared frontend and runtime
+        env:
+          KHOR_AGENT_BUNDLE: ${{ github.workspace }}/apps/agent/dist/khor-agent
+          TARGET: ${{ matrix.target }}
+          ZIG_TARGET: ${{ matrix.zig }}
+        run: |
+          if [ -n "$ZIG_TARGET" ]; then
+            cargo zigbuild --locked -p khor-cli --bin khor --target "$ZIG_TARGET" --release
+          else
+            cargo build --locked -p khor-cli --bin khor --target "$TARGET" --release
+          fi
+      - name: Package CLI
+        env:
+          TARGET: ${{ matrix.target }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          mkdir -p product
+          gzip -n -9 -c "target/$TARGET/release/khor" > "product/$ASSET.gz"
+          (cd product && shasum -a 256 "$ASSET.gz" > "$ASSET.gz.sha256")
+          if [ "$TARGET" = aarch64-unknown-linux-gnu ]; then
+            qemu-aarch64 -L /usr/aarch64-linux-gnu "target/$TARGET/release/khor" _release_info > "$RUNNER_TEMP/program.json"
+          else
+            "target/$TARGET/release/khor" _release_info > "$RUNNER_TEMP/program.json"
+          fi
+          python3 scripts/release_manifest.py create --root product --kind "$ASSET" --frontend frontend --executable "target/$TARGET/release/khor" --agent apps/agent/dist/khor-agent --program-info "$RUNNER_TEMP/program.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.asset }}
+          path: product/
+          if-no-files-found: error
+          retention-days: 14
+  mac-app:
+    needs: [prepare, frontend, agent-runtime]
+    timeout-minutes: 150
+    environment: ${{ (inputs.signed || needs.prepare.outputs.rc == 'true') && 'apple-signing' || 'candidate' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            asset: khor-macos-arm64
+          - runner: macos-26
+            target: x86_64-apple-darwin
+            asset: khor-macos-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/restore-frontend
+      - uses: ./.github/actions/restore-agent
+        with:
+          target: ${{ matrix.target }}
+      - uses: ./.github/actions/native-tools
+        with:
+          target: ${{ matrix.target }}
+      - run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - if: matrix.target == 'x86_64-apple-darwin'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Stage the matching CLI inside the desktop app
+        env:
+          TARGET: ${{ matrix.target }}
+          KHOR_AGENT_BUNDLE: ${{ github.workspace }}/apps/agent/dist/khor-agent
+        run: |
+          cargo build --locked -p khor-cli --bin khor --target "$TARGET" --release
+          mkdir -p apps/gui/src-tauri/binaries
+          cp "target/$TARGET/release/khor" "apps/gui/src-tauri/binaries/khor-$TARGET"
+      - name: Build Mac App from the same frontend and runtime
+        env:
+          TARGET: ${{ matrix.target }}
+          SIGNED: ${{ inputs.signed || needs.prepare.outputs.rc == 'true' }}
+          KHOR_AGENT_BUNDLE: ${{ github.workspace }}/apps/agent/dist/khor-agent
+          APPLE_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.MAC_SIGNING_IDENTITY }}
+        run: |
+          npm ci --prefix apps/gui
+          python3 scripts/apple_release.py mac-build --target "$TARGET" --signed "$SIGNED"
+      - name: Preserve the signed installer before contacting Apple
+        env:
+          TARGET: ${{ matrix.target }}
+          SIGNED: ${{ inputs.signed || needs.prepare.outputs.rc == 'true' }}
+          MAC_INSTALLER_CERTIFICATE_P12: ${{ secrets.MAC_INSTALLER_CERTIFICATE_P12 }}
+          MAC_INSTALLER_CERTIFICATE_PASSWORD: ${{ secrets.MAC_INSTALLER_CERTIFICATE_PASSWORD }}
+          MAC_INSTALLER_SIGNING_IDENTITY: ${{ secrets.MAC_INSTALLER_SIGNING_IDENTITY }}
+        run: python3 scripts/mac_notarization.py package-build --target "$TARGET" --signed "$SIGNED"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-build-${{ matrix.asset }}
+          path: mac-build/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Install and launch the actual Mac package on this isolated runner
+        run: |
+          packages=(mac-build/*.pkg)
+          test "${#packages[@]}" -eq 1
+          python3 scripts/check-desktop-installer.py --package "${packages[0]}" --output "$RUNNER_TEMP/mac-installation-proof.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-installation-${{ matrix.asset }}
+          path: ${{ runner.temp }}/mac-installation-proof.json
+          if-no-files-found: error
+          retention-days: 14
+  mac-submit:
+    needs: [prepare, mac-app]
+    runs-on: macos-26
+    timeout-minutes: 15
+    environment: ${{ (inputs.signed || needs.prepare.outputs.rc == 'true') && 'apple-signing' || 'candidate' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        asset: [khor-macos-arm64, khor-macos-x86_64]
+    env:
+      ASSET: ${{ matrix.asset }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mac-build-${{ matrix.asset }}
+          path: mac-build
+      - id: intent
+        name: Restore any previous submission intent
+        run: python3 scripts/mac_notarization.py restore --name "notary-intent-$ASSET" --output notary
+      - id: request
+        name: Restore any saved Apple request
+        run: python3 scripts/mac_notarization.py restore --name "notary-request-$ASSET" --output notary
+      - run: python3 scripts/mac_notarization.py prepare --asset "$ASSET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.intent.outputs.found != 'true'
+        with:
+          name: notary-intent-${{ matrix.asset }}
+          path: notary/intent.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Submit once or recover the original request
+        env:
+          ALLOW_SUBMIT: ${{ steps.intent.outputs.found != 'true' }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: python3 scripts/mac_notarization.py submit --asset "$ASSET" --allow-submit "$ALLOW_SUBMIT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.request.outputs.found != 'true' && hashFiles('notary/request.json') != ''
+        with:
+          name: notary-request-${{ matrix.asset }}
+          path: notary/request.json
+          if-no-files-found: error
+          retention-days: 14
+  mac-notarize:
+    needs: [prepare, mac-submit]
+    runs-on: macos-26
+    timeout-minutes: 40
+    environment: ${{ (inputs.signed || needs.prepare.outputs.rc == 'true') && 'apple-signing' || 'candidate' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        asset: [khor-macos-arm64, khor-macos-x86_64]
+    env:
+      ASSET: ${{ matrix.asset }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mac-build-${{ matrix.asset }}
+          path: mac-build
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notary-request-${{ matrix.asset }}
+          path: notary
+      - id: final
+        name: Restore an already completed Mac App
+        run: python3 scripts/mac_notarization.py restore --name "$ASSET-app" --output desktop
+      - name: Wait for the saved request, staple and verify
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: python3 scripts/mac_notarization.py finish --asset "$ASSET" --timeout 1800
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.final.outputs.found != 'true'
+        with:
+          name: ${{ matrix.asset }}-app
+          path: desktop/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Keep notarization status and rejection details
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: notary-status-${{ matrix.asset }}-${{ github.run_attempt }}
+          path: notary/
+          overwrite: true
+          if-no-files-found: ignore
+          retention-days: 14
+  ios:
+    needs: [prepare, frontend]
+    runs-on: macos-26
+    timeout-minutes: 90
+    environment: ${{ (inputs.signed || needs.prepare.outputs.rc == 'true') && 'apple-signing' || 'candidate' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/restore-frontend
+      - uses: ./.github/actions/native-tools
+        with:
+          target: aarch64-apple-ios
+      - run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - run: npm ci --prefix apps/gui
+      - name: Archive iOS without uploading
+        env:
+          SIGNED: ${{ inputs.signed || needs.prepare.outputs.rc == 'true' }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE_P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROFILE: ${{ secrets.IOS_PROFILE }}
+        run: python3 scripts/apple_release.py ios-build --signed "$SIGNED"
+      - name: Package iOS archive
+        run: |
+          python3 scripts/apple_release.py package-ios
+          python3 scripts/release_manifest.py create --root ios --kind ios-archive --frontend frontend --executable apps/gui/src-tauri/gen/apple/build/khor-gui_iOS.xcarchive/Products/Applications/Khor.app/Khor
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-archive
+          path: ios/
+          if-no-files-found: error
+          retention-days: 14
+  distribute:
+    needs: [prepare, candidate]
+    if: needs.prepare.outputs.rc == 'true'
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/distribute.yml
+    secrets: inherit
+    with:
+      tag: ${{ github.ref_name }}
+      run_id: ${{ github.run_id }}
+  desktop:
+    needs: [frontend, agent-runtime]
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: khor-linux-x86_64
+            bundle: deb
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: khor-linux-aarch64
+            bundle: deb
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset: khor-windows-x86_64
+            bundle: msi
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+      KHOR_AGENT_BUNDLE: ${{ github.workspace }}/apps/agent/dist/khor-agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/restore-frontend
+      - uses: ./.github/actions/restore-agent
+        with:
+          target: ${{ matrix.target }}
+      - uses: ./.github/actions/native-tools
+        with:
+          target: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev xvfb dbus-x11
+      - shell: bash
+        run: npm ci --prefix apps/gui
+      - name: Build the application and its bundled CLI
+        shell: bash
+        run: python3 scripts/desktop_installer.py --target "$TARGET" --output desktop-product --frontend frontend
+      - if: runner.os == 'Linux'
+        name: Verify the installed application and command entry
+        run: xvfb-run -a dbus-run-session -- python3 scripts/check-desktop-installer.py --package desktop-product/${{ matrix.asset }}.deb --output "${{ runner.temp }}/installation.json"
+      - if: runner.os == 'Windows'
+        name: Verify the installed application and command entry
+        run: python scripts/check-desktop-installer.py --package desktop-product/${{ matrix.asset }}.msi --output "${{ runner.temp }}/installation.json"
+      - name: Verify the complete artifact is unchanged after installation tests
+        shell: bash
+        run: python3 scripts/release_manifest.py verify --root desktop-product
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ matrix.asset }}-app
+          path: desktop-product/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: desktop-installation-${{ matrix.target }}
+          path: ${{ runner.temp }}/installation.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always() && runner.os == 'Windows'
+        with:
+          name: desktop-installer-logs-${{ matrix.target }}
+          path: ${{ runner.temp }}/khor-installer-logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+  candidate:
+    needs: [quality, native, ios, mac-notarize, desktop]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: khor-*
+          path: candidate
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ios-archive
+          path: candidate/ios-archive
+      - name: Verify and summarize (does not publish)
+        run: |
+          for artifact in candidate/*; do
+            python3 scripts/release_manifest.py verify --root "$artifact"
+          done
+          cp scripts/install.sh candidate/install.sh
+          python3 scripts/release_candidate.py candidate
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-manifest
+          path: |
+            candidate/manifest.json
+            candidate/install.sh
+          retention-days: 14
+          if-no-files-found: error
