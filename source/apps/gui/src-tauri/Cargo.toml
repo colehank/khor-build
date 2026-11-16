@@ -1,0 +1,183 @@
+[package]
+name = "khor-gui"
+version.workspace = true
+edition.workspace = true
+
+# Mobile targets later need staticlib/cdylib; rlib keeps the bin linking.
+[lib]
+name = "khor_gui"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+khor-gui-core = { path = "../core" }
+# `say_signals`: one line on stderr naming a terminating signal and its
+# sender. **Already in the tree** (the workspace's own).
+libc = "0.2"
+# The time on those lines and on the exit lines (`run`). **Already in the
+# tree** (the workspace's own).
+jiff.workspace = true
+khor-node.workspace = true
+# The browser face, started beside the embedded serve. The app is the
+# resident on a desktop that has one, and a face that only `khor serve`
+# could raise would be absent on exactly the machines somebody sits at.
+# Compiled on a phone too and never started there (`run`).
+khor-web = { path = "../../../crates/web" }
+# Used only by the mobile halves of the page and window commands, which refuse in
+# words. Not target-gated: `desktop`/`mobile` are cfgs tauri-build sets,
+# and cargo's `[target.'cfg(..)']` only understands real target cfgs — so
+# gating the dependency the way the code is gated is not expressible.
+khor-catalog.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tempfile = "3"
+# `unstable` is for `Window::add_child`: a browsing tab's page is a second
+# webview parented to this window, because khor's own interface is already
+# a webview and a site cannot be put inside it (docs/NET.md 借网).
+#
+# `macos-private-api` is the transparent window the sidebar material needs
+# (docs/SHELL.md 第十五轮 第 7 条, D4; `tauri.conf.json`'s
+# `macOSPrivateApi`, which tauri-build holds equal to this line). It is a
+# no-op off macOS. **Its cost: an app that uses it cannot go on the Mac
+# App Store** — khor ships outside it.
+tauri = { version = "2", features = ["unstable", "macos-private-api"] }
+# The native file picker behind 发文件 (GUI 发文件批). The official v2
+# plugin and nothing homegrown, because the one thing the desktop form
+# needs is a REAL local path to hand `Node::send` — a webview's
+# <input type=file> deliberately never reveals one. Rust-side API only
+# (`DialogExt` inside the command): the frontend never invokes the
+# plugin directly, so no JS package and no capability grant is added.
+tauri-plugin-dialog = "2"
+# **A finished command, said by the system** (roadmap 2.4): the official v2
+# notification plugin (notify-rust and mac-notification-sys underneath on
+# a desktop, UNUserNotificationCenter on a phone) — Apache-2.0 OR MIT.
+# Rust-side API only, like the dialog (`notify_finished`): the face never
+# invokes the plugin, so no JS package and no capability grant is added.
+# A phone says it when the app comes back (its page sleeps in the
+# background); a notification pushed to a sleeping phone is a later net
+# item.
+tauri-plugin-notification = "2"
+
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
+tauri-plugin-updater = "~2.12.0"
+khor-update.workspace = true
+khor-runtime.workspace = true
+
+# macos-proxy is Apple-only (it compiles for macOS 14+ alone), so the
+# feature is enabled only there — enabling it everywhere would break the
+# Linux and Windows builds of this same app. A borrow opens a browsing
+# webview whose traffic leaves through another machine via proxy_url
+# (docs/NET.md 借网).
+#
+# **The feature is target-gated; the function is not.** Only Apple needs
+# a feature for it: `tauri-runtime-wry` applies proxy_url with no target
+# gate, handing it to WebKitGTK on Linux and to WebView2's launch
+# arguments on Windows. Reading this gate as "borrowing is macOS-only"
+# is what kept two platforms refusing a thing they could already do.
+[target.'cfg(target_os = "macos")'.dependencies]
+# `macos-private-api` repeated here is the tauri CLI's doing: `tauri ios`
+# holds every `tauri` line equal to `macOSPrivateApi` and rewrites this one
+# if it lacks it (2026-10-02). Cargo unions features, so the desktop build
+# is the same either way; written out, the CLI leaves the file alone.
+tauri = { version = "2", features = ["macos-private-api", "macos-proxy"] }
+# Already in the tree under tao/wry; used to read and set one window's
+# NSAppearance (`open_code_window`), which tauri's own `theme` cannot do
+# per window on macOS (it sets NSApp's).
+objc2 = "0.6"
+# Its NSString, for the sentence the Touch ID sheet shows
+# (`system_unlock`) and for the appearance name one window wears.
+# ⚠️ Its NSPoint / NSRect were the frames of the three window buttons
+# until 2026-09-23; nothing moves those now (docs/SHELL.md 第十轮 — the
+# window's own row, `trafficLightPosition`).
+objc2-foundation = "0.3"
+# `LAContext`'s check calls back, so the reply is an ObjC block
+# (`system_unlock`). **Already in the tree under tao/wry** — naming it
+# here costs no package, and `objc2-local-authentication` would have
+# added one for a single class and two selectors.
+block2 = "0.6"
+# Puts `Info.plist` into the bare binary's `__TEXT,__info_plist` section
+# (`src/main.rs`: the app menu's name, AppKit's languages). **Already in
+# the tree under tauri**, which uses it for dev builds — no new package.
+embed_plist = "1"
+# `NSWorkspaceDidWakeNotification` (`watch_for_wake`): the Mac woke, and
+# the resident is told. **Already in the tree under tao and muda** — no
+# new package; only the one class is compiled here. MIT OR Apache-2.0
+# OR Zlib.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
+
+# The phone's opener (docs/IOS.md 第二步): a link is handed to the system
+# with `UIApplication.openURL`, which opens it in the person's browser —
+# there is no `open` or `xdg-open` to start in an app's sandbox, and the
+# desktop road answered a raw OS error there. **Already in the tree**
+# under wry on iOS; only the features named here are compiled.
+#
+# **加入网络's 扫码** (docs/IOS.md 第三步): the official v2 barcode
+# scanner, on the phone builds only (it compiles to nothing elsewhere,
+# `#![cfg(mobile)]`, and supports Android and iOS alone). MIT OR
+# Apache-2.0. **Held to 2.4**: 2.5 asks for tauri 2.12, and this tree is
+# on 2.11 — the scanner is not worth moving the whole shell for. The
+# face reaches it through the plugin's own JS (`@tauri-apps/plugin-
+# barcode-scanner`, same version line), under the narrow grant in
+# `capabilities/scan.json`.
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+tauri-plugin-barcode-scanner = "~2.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-khor-files = { path = "../native-files" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+# `NSNotification` / `NSOperation` / `block2`: the default centre's
+# observer block (`watch_the_front` — UIKit's background, foreground and
+# active notifications). Features of a package already here, no new one.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSDictionary", "NSGeometry", "NSNotification", "NSOperation", "block2", "objc2-core-foundation"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "block2", "UIView", "UIApplication", "UIResponder", "UIFeedbackGenerator", "UIImpactFeedbackGenerator", "UISelectionFeedbackGenerator", "UINotificationFeedbackGenerator"] }
+# The handler `nw_path_monitor` calls on a path change (`watch_the_path`)
+# is a block. **Already in the tree** under objc2-ui-kit's `block2`.
+block2 = "0.6"
+
+[features]
+# **On by default, and that is the whole fix for the white window.**
+# tauri decides at *compile time* whether the app loads `build.devUrl`
+# (a vite dev server) or the embedded `frontendDist`: its build script
+# sets `dev = !custom_protocol`. The tauri CLI passes this feature on
+# `tauri build`; khor has no tauri CLI (zero deps — the desktop app is
+# a plain `cargo build -p khor-gui`), so without it *every* build, release
+# included, shipped as a dev build that dials http://localhost:1430,
+# found nobody, and showed a white window that collapsed
+# (2026-09-03, measured: the release binary's page was
+# `/src/main.tsx?t=…` served by vite once vite happened to be up).
+# Dev mode — vite with hot reload — is the explicit opt-out:
+#   cargo build -p khor-gui --no-default-features
+#
+# **`devtools` is on by default too, and that is a deliberate trade.**
+# Without it a `release` webview has no inspector, and every question
+# about what the interface is actually doing — a figure that came back
+# the wrong height, a pane that redraws too often — costs an edit, a
+# three-minute build and a restart, with nothing measured at the end of
+# it. 2026-09-10: a chart drew itself upside down on a real account and
+# could not be reproduced in Chrome; there was no way to read a single
+# number off the running app.
+#
+# It costs a little binary size and it lets anyone open the inspector on
+# their own copy. **Turn it off for a public release** — one word here —
+# and say so in the same commit, because from that moment this kind of
+# question needs a special build again.
+default = ["custom-protocol", "devtools"]
+custom-protocol = ["tauri/custom-protocol"]
+devtools = ["tauri/devtools"]
+
+[dev-dependencies]
+# Tauri's own mock runtime (the `test` feature of the crate already
+# above, MIT OR Apache-2.0 — no new crate): a command driven through it
+# is decoded exactly as the app decodes what the face sends (round NET-6,
+# the set_relays argument names).
+tauri = { version = "2", features = ["test"] }
+
+# Native history availability uses WebKitGTK's engine-owned back/forward
+# state. This version is already in the graph through Tauri/Wry.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "=2.0.2"
