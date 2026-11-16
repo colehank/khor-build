@@ -1,0 +1,3873 @@
+import {ScrollToBottom} from '@/components/ScrollToBottom';
+import {linkIntent,canActivateTerminalLink,type LinkIntent} from "@/lib/content-link-intent";
+import {claimTerminalLinkClicks} from "@/lib/term-link-gesture";
+import {assertPageUrl,openSystemUrl,openSystemPath,openSystemFileUri} from "@/lib/client-opener";
+import { useReadingSession, type SessionReading } from "@/hooks/use-session-attention";
+// A live terminal for a session khor hosts (docs/handoff 终端画屏) —
+// drawn by xterm.js, fed bytes.
+//
+// # The pivot (2026-09-03), and what each side keeps
+//
+// This pane used to paint a cell grid: gui-core's vt100 parser consumed
+// the pty bytes and answered `term_poll` with `TermScreen` runs, and
+// ~700 lines here re-implemented what a terminal renderer does — cell
+// metrics, a measured CJK width ratio, an IME textarea hack, a key→byte
+// table, a three-way wheel judgment. Every one of those was a scar with
+// a comment on it, and the user's verdict on the result was a screenshot
+// beside iTerm2 (「这是你渲染的终端…这是iterm渲染的」) and 「我们是
+// 全功能的终端」. Re-implementing a terminal is the wrong place to
+// spend scars: xterm.js is the renderer VS Code ships, and it does all
+// of it — grid metrics, wide chars (unicode), IME composition, every
+// key/modifier encoding, mouse protocols, alt-screen wheel, selection.
+//
+// So the split is now:
+//   - **node stays the authority.** The pty host is untouched; gui-core
+//     keeps its vt100 parser (resize, the authoritative screen, and the
+//     attach snapshot come from it) and *tees* the same bytes into a
+//     feed (`term_attach` hands over everything so far — which began
+//     with the host's ring, so history comes along; `term_stream` hands
+//     over what arrived since). Remote sessions change nothing: the
+//     host socket was already tunneled, the feed fills the same way.
+//   - **this pane is a byte pipe.** Decode base64, `term.write()`. Keys
+//     travel the other way whole: xterm's `onData` already speaks every
+//     sequence a terminal sends (the `keyBytes` table this replaces had
+//     them one at a time — shift+Tab arrived the day before the table
+//     died), and `termKey` carries the bytes as before.
+//
+// What this file still owns, because xterm cannot: the open/attach
+// lifecycle and its three faces (`why` — never opened; `gone` — the
+// host ended; `missed` — a drop that failed, on the pill), the poll pacing (nobody
+// looking, nobody paying), the tauri file-drop (paths land as a
+// shell-quoted paste via `term_drop`, cross-machine aware), and the
+// theme — xterm takes concrete colours, so the app's tokens are
+// resolved to values here and re-resolved when the theme flips.
+//
+// And the four things a terminal *emulator* leaves to the window
+// around it, each set to what iTerm2 does out of the box (the app's
+// rule: defaults over settings, aligned to iTerm):
+//   - **links** open internally on click, or in the client system with
+//     a modifier; xterm owns selection and application mouse protocols;
+//   - **a selection is a copy** (`onSelectionChange` → clipboard), so
+//     there is no ⌘C to remember and nothing to lose by clicking away;
+//     where the program has the mouse (a tmux khor attached), the
+//     selection is ⌥-drag (⇧-drag off a Mac) — `macOptionClickForcesSelection`;
+//   - **⌘F is the terminal's own search** (`SearchAddon` + the bar in
+//     this file), not the page's — a page find would search the DOM of
+//     a webgl canvas and find nothing;
+//   - **a bell is a flash** on the frame. ⚠️ 墓碑 (2026-10-02, the owner:
+//     「不要显示水印」): the title a program sets (OSC 0/2) was shown in
+//     the top right corner, muted on a wash — 「zgh@Mac-mini:/Volumes/…」
+//     over the output. It is not drawn any more, and not kept.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { ImageAddon } from "@xterm/addon-image";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import "@xterm/xterm/css/xterm.css";
+
+import { TerminalUnavailable, terminalAttachment, bellHaptic, faceNote, inApp, said, termDropForget, termEnded, type Miss } from "@/api";
+import { addAttachments, deviceAttachments, droppedAttachments, prepareAttachments, type Attachment, type PreparedDrop } from "@/lib/term-attachments";
+import { GlassCircle, GlassItem } from "@/components/Glass";
+import { usePinch } from "@/hooks/use-pinch";
+import { offerTabAct } from "@/lib/tab-acts";
+import { failedNotice, offerNotice, rejoinNotice, type PillNotice } from "@/lib/pill-notices";
+import { carriesPath, droppedPath } from "@/lib/path-drag";
+import { onWindowDrop } from "@/lib/window-drop";
+import { peekOf, type Peek } from "@/lib/term-peek";
+import { predictEcho, type Predict } from "@/lib/term-predict";
+import { termPredict } from "@/lib/term-predict-setting";
+import { rememberTermSize } from "@/lib/term-size-hint";
+import { TermHistory } from "@/views/TermHistory";
+import { TermPeek } from "@/views/TermPeek";
+import { IconChevronDown, IconChevronUp, IconClose, IconReload } from "@/components/icons";
+import { RegionState, Waiting } from "@/components/RegionState";
+import { gui, menu, msg } from "@/gen/catalog";
+import { baseName } from "@/lib/paths";
+import { levelOf, treeChanged } from "@/lib/tree-changed";
+import { cn } from "@/lib/utils";
+import { HIDDEN_MS, useHidden } from "@/hooks/use-hidden";
+import { useKeysTo } from "@/hooks/use-keys-to";
+import { useCoarse } from "@/hooks/use-coarse";
+import { BarSeat, PillProgress, useInBar } from "@/components/SessionBar";
+import { onTermSize } from "@/lib/type-size";
+import { onTermFont } from "@/lib/term-font";
+import { onTermCursor, termCursor, type CursorShape } from "@/lib/term-cursor";
+import { onTermOptionMeta, termOptionMeta } from "@/lib/term-option-meta";
+import { keepWebgl } from "@/lib/term-atlas";
+import { protectTerminal } from "@/lib/term-legibility";
+import { keepTerminalGlass } from "@/lib/term-glass";
+import { keepTerminalIme } from "@/lib/term-ime";
+import {drawBlocks} from "@/lib/term-block-decoration";
+import { onTermBlockLines, termBlockLines } from "@/lib/term-block-lines";
+import { onTermHistory, termHistory } from "@/lib/term-history";
+import { inInput, trackMarks, type Block, type Cursor, type Marks } from "@/lib/term-marks";
+import { askNewSession, askOpenPath, askOpenUrl, askStepTab, handOff } from "@/lib/composer-handoff";
+import { setTypeSize, TERM_MAX, TERM_MIN, terminalSize, typeSize } from "@/lib/type-size";
+import { termBell, TERM_BELL_MS as BELL_MS } from "@/lib/term-bell";
+import { searchable, useFindHow, type FindHow } from "@/lib/term-find";
+import { covers, pathLinks, pathsOn, urlAt } from "@/lib/term-links";
+import { endedWord, programOf, QUIET_EXITS, shortDir } from "@/components/DoingLine";
+import type { EndedCommand } from "@/gen/bindings/EndedCommand";
+import type { EndedPage } from "@/gen/bindings/EndedPage";
+import type { EndedScreen } from "@/gen/bindings/EndedScreen";
+import { ago } from "@/words";
+import type { Doing } from "@/gen/bindings/Doing";
+import { tapAsks, termWake, useTermWake, watchesCursor } from "@/lib/term-tap";
+import { holdFocus, keyboardUp, lowerKeyboard, onKeyboardChange, raiseKeyboard, terminalShown } from "@/lib/soft-keyboard";
+import { dropsComposition } from "@/lib/term-compose-drop";
+import { KeyboardSwitch, KeyRowSwitch, TermKeys } from "@/views/TermKeys";
+import { useKeyRowOpen } from "@/lib/key-row-open";
+import { iipSizes } from "@/lib/term-iip";
+import { promptMarks } from "@/lib/term-prompt-sp";
+import { kittyFlags, kittyKey, kittyNamed, kittyProtocol, kittyTyped } from "@/lib/term-kitty";
+import { isEncodedKeyInput } from "@/lib/term-key-codec";
+import { afterKey, typed, type Mods } from "@/lib/term-keys";
+import { isFocusReport, isReply } from "@/lib/term-replies";
+import { programScrolls, scrollsNatively } from "@/lib/term-scroller";
+import { notesScrollHealth } from "@/lib/term-scroll-health";
+import { wheelsToPages } from "@/lib/term-scroll-target";
+import { holdsTmuxHistory } from "@/lib/term-tmux-history";
+import { followsShellTmux, wheelsToShellTmux } from "@/lib/term-shell-tmux";
+import { countsGain } from "@/lib/term-gain";
+import { notesFirstTouch } from "@/lib/term-first-touch";
+import { swipeFolds, swipeLowers } from "@/lib/term-swipe";
+import { KHOR_ANSI, terminalTheme, terminalAppearance, onTermTheme } from "@/lib/term-theme";
+import { windowOpacity, onWindowSurface } from "@/lib/window-surface";
+import { keyPanelUp, lowerKeyPanel } from "@/lib/key-panel";
+import { keyboardShown, viewportMoving } from "@/lib/viewport";
+import { softDeletes } from "@/lib/term-soft-delete";
+import { nativeSelects, selectionHolds, selectionUp, type MenuBox, type Picked, type Selects } from "@/lib/term-select";
+import { hideEditMenuAt, offerEditMenu, showEditMenuAt, type EditItem } from "@/lib/edit-menu";
+import { pastedFrom, pastedImage, pasteInto } from "@/lib/term-paste";
+
+/** The 16 ANSI colours, the one palette a terminal owns regardless of
+    the app's theme. 0–7 normal, 8–15 bright. Handed to xterm whole —
+    the cube (16–231) and the grey ramp it computes itself. */
+const ANSI16 = KHOR_ANSI;
+
+/** How often a visible terminal asks for new bytes. Fast: this is the
+    one surface where a person is watching characters appear — and a
+    keystroke asks again immediately (`pollNow`), so echo latency is
+    the round trip, not this number. */
+const LIVE_MS = 50;
+/** How often a drop under way is asked how far it got (item 60): the
+    node asks the far machine at 250 ms, so faster would only re-read. */
+const DROP_LOOK_MS = 250;
+/** The largest file a drop takes (`khor_node::drops::CAP`): a picked
+    file over it is refused before its bytes are read into the page. */
+const DROP_CAP = 200 * 2 ** 20;
+
+/** The pill's words for a drop `share` of the way through `names`: the
+    file going in now and how many are done of all. */
+export function dropOf(names: string[], share: number): { name: string; done: number; total: number } {
+  const total = names.length;
+  const done = Math.max(0, Math.min(total, Math.floor(share * total + 1e-6)));
+  return { name: names[Math.min(done, total - 1)] ?? "", done, total };
+}
+/** How long one pushed wait is held open with nothing new (`termWait`).
+    Short enough that a pane torn down mid-wait frees its question soon,
+    and well under `CATCH_UP_MS`: a wait that ran its whole length is a
+    quiet screen, not a catch-up. */
+const WAIT_MS = 1000;
+/** The longest wait between beats that came back with no answer (item 36). */
+const FAILED_MS_MOST = 5000;
+/** A host that did not answer is asked again after this, doubling… */
+const SILENT_RETRY_FIRST = 2000;
+/** …up to this. */
+const SILENT_RETRY_MOST = 30_000;
+
+/** A beat this long after the last one is a catch-up: what it carries
+    was asked while nobody was looking, and is replayed (`replay`). */
+const CATCH_UP_MS = 2_000;
+/** The most characters one `term_key` carries: 64 KiB once UTF-8 encoded
+    (T-16). */
+const CHUNK_CHARS = 16 * 1024;
+
+
+/** A pane's picture store (MB, oldest out first) and the largest picture
+    it decodes (pixels). The addon's defaults are 128 MB and 4096²; a pane
+    takes half the store on a Mac, and a quarter of each on a phone. */
+const PICTURES_MB = 64;
+const PICTURES_MB_FINGER = 32;
+const PICTURE_PX = 4096 * 4096;
+const PICTURE_PX_FINGER = 2048 * 2048;
+
+/** Where the search paints what it found: **the accent's tint**, thin
+    for every match and strong under the one the search stands on (the
+    audit fix plan F4.8; W18) — read off the theme when the search runs,
+    since xterm takes colours, not variables. ⚠️ 墓碑: the terminal's own
+    yellow, a third accent beside the olive and the pink. */
+function found() {
+  const brand = getComputedStyle(document.documentElement).getPropertyValue("--brand-strong").trim() || "#99bb36";
+  const hex = /^#[0-9a-f]{6}$/i.test(brand) ? brand : "#99bb36";
+  return {
+    matchBackground: `${hex}44`,
+    matchOverviewRuler: hex,
+    activeMatchBackground: `${hex}aa`,
+    activeMatchColorOverviewRuler: hex,
+  };
+}
+
+/** The key that opens the search: ⌘F on a Mac. Elsewhere ⌃⇧F, because
+    ⌃F is a byte a shell wants (readline's forward-char) and stealing
+    it would be the app taking a key the program had. */
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
+/**
+ * **A Mac's editing keys say what a Mac terminal says** (T-17, the
+ * terminal audit: ⌥←/→ went out as `ESC [ 1 ; 3 D`/`C`, which zsh does not
+ * bind; ⌘←/→ and ⌘⌫ sent nothing; ⌥⌫ a bare ESC). The bytes are iTerm2's
+ * "Natural Text Editing" key preset (iterm2.com, Profiles › Keys): word
+ * left and right are the meta forms `ESC b`/`ESC f` every readline and
+ * zsh binds, ⌥⌫ is ^W (delete the word before), ⌘← ⌘→ are ^A/^E (line
+ * start and end), ⌘⌫ is ^U (delete to line start).
+ * `null` for any other key.
+ */
+function macEditing(ev: KeyboardEvent): string | null {
+  if (!IS_MAC || ev.type !== "keydown" || ev.shiftKey || ev.ctrlKey) return null;
+  if (ev.altKey && !ev.metaKey) {
+    if (ev.key === "ArrowLeft") return "\x1bb";
+    if (ev.key === "ArrowRight") return "\x1bf";
+    if (ev.key === "Backspace") return "\x17";
+  }
+  if (ev.metaKey && !ev.altKey) {
+    if (ev.key === "ArrowLeft") return "\x01";
+    if (ev.key === "ArrowRight") return "\x05";
+    if (ev.key === "Backspace") return "\x15";
+  }
+  return null;
+}
+
+/** How long a character an input method typed waits for an Option key
+    behind it, with Option as Meta on (ms). The key came within the same
+    turn of the event loop in the scratch app. */
+const META_ECHO_MS = 30;
+
+/** The keys Option as Meta reads by their place, unshifted and shifted. */
+const META_KEYS: Record<string, [string, string]> = {
+  Backquote: ["`", "~"], Minus: ["-", "_"], Equal: ["=", "+"], BracketLeft: ["[", "{"], BracketRight: ["]", "}"],
+  Backslash: ["\\", "|"], Semicolon: [";", ":"], Quote: ["'", '"'], Comma: [",", "<"], Period: [".", ">"], Slash: ["/", "?"],
+  Digit1: ["1", "!"], Digit2: ["2", "@"], Digit3: ["3", "#"], Digit4: ["4", "$"], Digit5: ["5", "%"],
+  Digit6: ["6", "^"], Digit7: ["7", "&"], Digit8: ["8", "*"], Digit9: ["9", "("], Digit0: ["0", ")"],
+};
+
+/**
+ * **Option as Meta, read off the key's place** (item 22): ESC and the key
+ * ⌥ was pressed with, when the setting is on. xterm's own
+ * `macOptionIsMeta` reads the key's character, and under an input method
+ * (the owner's desktop types pinyin) WebKit hands the page ⌥B as "∫" with
+ * keyCode 229, so xterm sent ∫ (measured in the scratch app). iTerm2 and
+ * Terminal.app decide from the key, not from what the input source made
+ * of it. `null` when the setting is off or this is no such key.
+ */
+function optionMeta(ev: KeyboardEvent, on: boolean): string | null {
+  if (!IS_MAC || !on || ev.type !== "keydown" || !ev.altKey || ev.metaKey || ev.ctrlKey) return null;
+  const letter = /^Key([A-Z])$/.exec(ev.code)?.[1];
+  if (letter) return `\x1b${ev.shiftKey ? letter : letter.toLowerCase()}`;
+  const k = META_KEYS[ev.code];
+  return k ? `\x1b${k[ev.shiftKey ? 1 : 0]}` : null;
+}
+
+/** ⌘K, which clears a Mac terminal (iTerm2, Terminal: Clear Buffer). */
+function asksToClear(ev: KeyboardEvent): boolean {
+  return IS_MAC && ev.type === "keydown" && ev.metaKey && !ev.ctrlKey && !ev.altKey && ev.key.toLowerCase() === "k";
+}
+
+/**
+ * **What a copy takes: the text, no colours, no trailing blanks** (item
+ * 22). iTerm2 trims trailing whitespace on copy by default (Advanced ›
+ * "Trim whitespace when copying to pasteboard"); a program that pads its
+ * lines with spaces (a table, a prompt's right side) otherwise leaves
+ * them on every line pasted. The clipboard gets plain text only.
+ */
+function copyable(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/[ \t]+$/, ""))
+    .join("\n");
+}
+
+/** ⌘G and ⇧⌘G, the next and previous match of the last find (Terminal's
+    and iTerm2's Find Next / Find Previous): `1`, `-1`, else `0`. */
+function asksToFindAgain(ev: KeyboardEvent): 1 | -1 | 0 {
+  if (ev.type !== "keydown" || ev.key.toLowerCase() !== "g" || ev.altKey) return 0;
+  if (!(IS_MAC ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey)) return 0;
+  return ev.shiftKey ? -1 : 1;
+}
+
+function asksToFind(ev: KeyboardEvent): boolean {
+  if (ev.key.toLowerCase() !== "f" || ev.altKey) return false;
+  return IS_MAC ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && ev.shiftKey;
+}
+
+/** Internal URLs use the same session content route on app and web. */
+async function follow(uri: string, machine: string | null | undefined, intent:LinkIntent='internal', session?:string) {
+  assertPageUrl(uri);
+  if(intent==='system')await openSystemUrl(uri);
+  else askOpenUrl(machine??'',uri,session);
+}
+
+/** Base64 → bytes, the shape `term.write` takes. The api boundary is
+    JSON strings (gui-core `to_json`), so the feed crosses encoded. */
+function b64bytes(b64: string): Uint8Array {
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+/** The pane's font, resolved the same way for the same reason — xterm
+    measures its own cells from these, which is the whole of what
+    replaced the hand-measured `wideFit` ratio.
+
+    **No leading** (2026-10-03, the owner's option A): xterm's
+    `lineHeight` multiplies the font's own cell height, which already
+    carries the face's ascent and descent (about 1.2 × the size), not the
+    size. Handing it the token's 20 / 14 made rows 24 at 14 on a phone,
+    some 40% taller than Terminal.app's. The terminal takes 1 — a row is the font's
+    height and follows the size by itself; `--text-term--line-height`
+    is left to the pane's own text and 外观's sample line. */
+function fontOf(el: HTMLElement): { family: string; size: number } {
+  const cs = getComputedStyle(el);
+  return { family: cs.fontFamily, size: Number.parseFloat(cs.fontSize) || 13 };
+}
+
+/** Keys that are only modifiers — their keydown is not a character. */
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph"]);
+
+/**
+ * A character an input method commits **without composing** while a
+ * modifier is held — 「(」「"」「!」 under 拼音 with Shift — reaches the
+ * pty, once.
+ *
+ * The owner, 2026-10-01: 「(」「"」 这类符号要按两次才上屏. Traced in a
+ * bare WKWebView with the real 拼音 input source (scratch `ime/`
+ * harness), WebKit's order for Shift+9 is
+ *
+ *     keydown Shift · beforeinput/input insertText "(" · keydown 229 · keyup · keyup Shift
+ *
+ * — the text lands **before** the key's own keydown. xterm 6.0 then
+ * drops it on both of its roads: `_inputEvent` takes an `insertText`
+ * only when no keydown is outstanding, and the Shift keydown is one;
+ * the 229 keydown's textarea diff snapshots the value *after* the input
+ * already landed and finds nothing new. With Shift still held the second
+ * press goes through (the first one's keyup cleared the flag) — the
+ * "press twice". Chrome fires the 229 keydown first, so the diff works
+ * there and no chromium run ever showed it. Same family upstream:
+ * xtermjs/xterm.js#5887.
+ *
+ * So this takes exactly the case xterm skips: an `insertText` that is
+ * not composing, arriving while the last keydown was a modifier alone
+ * and its keyup has not come (xterm's `_keyDownSeen`, mirrored). Every
+ * other `insertText` xterm already sends — through `_inputEvent`, or a
+ * keypress it marked handled — and sending it here too would double it.
+ * Answers the undo.
+ */
+function keepShiftedCommits(term: Terminal): () => void {
+  const field = term.textarea;
+  if (!field) return () => {};
+  let held = false;
+  let modifierOnly = false;
+  const down = (e: KeyboardEvent) => {
+    held = true;
+    modifierOnly = MODIFIER_KEYS.has(e.key);
+  };
+  const up = () => {
+    held = false;
+  };
+  const input = (e: Event) => {
+    const ev = e as InputEvent;
+    if (ev.inputType !== "insertText" || !ev.data || ev.isComposing) return;
+    if (held && modifierOnly) term.input(ev.data, true);
+  };
+  field.addEventListener("keydown", down, true);
+  field.addEventListener("keyup", up, true);
+  field.addEventListener("input", input, true);
+  return () => {
+    field.removeEventListener("keydown", down, true);
+    field.removeEventListener("keyup", up, true);
+    field.removeEventListener("input", input, true);
+  };
+}
+
+/**
+ * **What an iOS keyboard commits outside a composition reaches the pty**
+ * (2026-10-03, the owner with 拼音: 「。」 and 「，」 vanished, space did
+ * nothing; English letters and pinyin words arrived).
+ *
+ * Traced in the simulator with the 简体拼音 keyboard: every key of an
+ * input method's keyboard comes as `keydown` with keyCode 229, and a
+ * character it commits without composing — space, 「。」, 「，」 — lands
+ * as `insertText` **in a later task**:
+ *
+ *     keydown " " (229) · …next task… · beforeinput/input insertText " " · keyup
+ *
+ * xterm 6 drops it on both of its roads. Its 229 road diffs the textarea
+ * one `setTimeout(0)` after the keydown, finds nothing yet, and sends
+ * nothing; its `input` road takes an `insertText` only when no keydown is
+ * outstanding, and the keyup comes after. A pinyin word is fine: it
+ * arrives through `compositionend`, which xterm reads. A desktop input
+ * method lands the text before the diff runs, so this never showed off a
+ * phone.
+ *
+ * So this takes exactly that case: a 229 keydown outside a composition
+ * whose diff found the field unchanged (this timer is queued after
+ * xterm's own, so it runs after it), followed by an `insertText` before
+ * the keyup. Every other commit xterm already sends, and sending it here
+ * too would double it. Answers the undo.
+ */
+function keepLateCommits(term: Terminal): () => void {
+  const field = term.textarea;
+  if (!field) return () => {};
+  let missed = false;
+  let lifted = false;
+  let timer = 0;
+  const down = (e: KeyboardEvent) => {
+    missed = false;
+    lifted = false;
+    window.clearTimeout(timer);
+    if (e.keyCode !== 229 || e.isComposing) return;
+    const before = field.value;
+    timer = window.setTimeout(() => {
+      missed = field.value === before;
+    }, 0);
+  };
+  const up = () => {
+    lifted = true;
+  };
+  const input = (e: Event) => {
+    const ev = e as InputEvent;
+    if (!missed || lifted || ev.inputType !== "insertText" || !ev.data || ev.isComposing) return;
+    missed = false;
+    term.input(ev.data, true);
+  };
+  field.addEventListener("keydown", down, true);
+  field.addEventListener("keyup", up, true);
+  field.addEventListener("input", input, true);
+  return () => {
+    window.clearTimeout(timer);
+    field.removeEventListener("keydown", down, true);
+    field.removeEventListener("keyup", up, true);
+    field.removeEventListener("input", input, true);
+  };
+}
+
+/**
+ * **What is being composed stays on the screen** (2026-10-03). xterm draws
+ * the pinyin being typed at the cursor (`.composition-view`, one line, no
+ * wrap); near the right edge it ran past it, under the pane's clip, and
+ * the letters being chosen from could not be read. It is moved left just
+ * enough to end at the screen's edge — never past its left.
+ */
+function keepCompositionInView(term: Terminal): () => void {
+  const view = term.element?.querySelector<HTMLElement>(".composition-view");
+  const screen = term.element?.querySelector<HTMLElement>(".xterm-screen");
+  if (!view || !screen) return () => {};
+  const clamp = () => {
+    if (!view.classList.contains("active")) return;
+    const room = screen.clientWidth - view.offsetWidth;
+    const left = Number.parseFloat(view.style.left) || 0;
+    if (left > room) view.style.left = `${Math.max(0, room)}px`;
+  };
+  const watch = new MutationObserver(clamp);
+  watch.observe(view, { attributes: true, attributeFilter: ["style", "class"], childList: true, characterData: true, subtree: true });
+  return () => watch.disconnect();
+}
+
+/** A report xterm writes for the mouse (SGR `ESC [ <`, X10 `ESC [ M`) —
+    not a key, so a latched Ctrl lets it through and keeps waiting. */
+const MOUSE_REPORT = /^\x1b\[(<|M)/;
+
+/** The buffer cell under a point, clamped to the screen. */
+function cellAt(term: Terminal, x: number, y: number): { col: number; row: number } | null {
+  const screen = term.element?.querySelector(".xterm-screen");
+  if (!screen) return null;
+  const r = screen.getBoundingClientRect();
+  const col = Math.max(0, Math.min(term.cols - 1, Math.floor(((x - r.left) / r.width) * term.cols)));
+  const inView = Math.max(0, Math.min(term.rows - 1, Math.floor(((y - r.top) / r.height) * term.rows)));
+  return { col, row: term.buffer.active.viewportY + inView };
+}
+
+
+/** Travel past which a touch is a drag, not a tap — and the dead zone
+    past which a downward one lowers the keyboard (`lib/term-swipe`'s
+    `SLOP`, item 49). */
+const TAP_SLOP = 10;
+
+/** Output quiet this long, the cursor is where the program left it. */
+const CURSOR_QUIET_MS = 50;
+
+/**
+ * **The cursor of the last whole frame** (item 28; the owner: a tap in
+ * Claude Code's input box 「点半天也弹不出来」). A TUI moves the cursor
+ * up through its output while it redraws and parks it back in its input
+ * box at the end; a tap that lands mid-paint, judged against the cursor
+ * then, missed the box. The place is taken when a frame closes
+ * (`framesWhole`: DEC 2026 ended, the cursor shown again) or after
+ * `CURSOR_QUIET_MS` of quiet with no redraw open — a paint that stalls
+ * keeps the frame before it — and kept as a screen row, which a
+ * program's frame does not move as the history grows.
+ */
+function settledCursor(
+  term: Terminal,
+  /** A redraw is open (`framesWhole`). */
+  painting: () => boolean,
+): { at: () => Cursor; whole: () => void; stop: () => void } {
+  const read = (): Cursor => ({ x: term.buffer.active.cursorX, y: term.buffer.active.cursorY });
+  let at = read();
+  let timer = 0;
+  const parsed = term.onWriteParsed(() => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      if (!painting()) at = read();
+    }, CURSOR_QUIET_MS);
+  });
+  return {
+    at: () => at,
+    whole: () => {
+      at = read();
+    },
+    stop: () => {
+      window.clearTimeout(timer);
+      parsed.dispose();
+    },
+  };
+}
+
+/**
+ * **The terminal holds the focus; a tap raises the keyboard only where
+ * the person asked for that** (2026-10-03; roadmap 2.2, `lib/term-tap`'s
+ * three modes; the focus model, `lib/soft-keyboard`).
+ *
+ * The field is focused whenever the page is open (`holdFocus`), with no
+ * keyboard under a finger. A tap — a touch that ends where it began — is
+ * judged at its end, which is a gesture iOS will show a keyboard for:
+ * `screen` raises it anywhere; `auto` raises it on the input area
+ * (`inInput`, judged against the cursor of the last whole frame) and
+ * lowers it — or the key panel — anywhere else on the screen (item 49,
+ * `lib/term-tap`'s `tapAsks`), and with no cursor shown (`?25l`, `top`)
+ * a tap anywhere raises what is down and lowers what is up (item 74);
+ * `button` leaves it to the bar's switch.
+ * Only a touch on the screen itself counts: the floats over it (回到底部,
+ * a question's buttons) are their own presses. xterm's own mousedown focuses a
+ * field that is already focused, and a program that took the mouse still
+ * gets the click as before. **If the focus leaves for nowhere** — the system put
+ * the keyboard away, or a tap blurred the field — it comes back without a
+ * keyboard, so a hardware keyboard keeps typing; a focus that went to
+ * another field (the find bar, a sheet) is left there.
+ */
+function tapsAskFirst(
+  term: Terminal,
+  box: HTMLElement,
+  marks: Marks,
+  /** A tap on a cell, first: a picture or a link there opens (roadmap
+      3.2, 3.3); true when it took the tap, and the keyboard is left be. */
+  tapped: (row: number, col: number) => boolean,
+  /** The cursor where the last whole frame left it (`settledCursor`). */
+  cursor: () => Cursor,
+  /** A tap the selection takes first (`lib/term-select`, item 54): one
+      that ended a selection, or made one by a double or triple tap. */
+  taken: (x: number, y: number) => boolean,
+): () => void {
+  const field = term.textarea;
+  if (!field) return () => {};
+  const cursor0 = watchesCursor(term);
+  let startX = 0;
+  let startY = 0;
+  let still = false;
+  let downAt = 0;
+  const began = (e: TouchEvent) => {
+    still = e.touches.length === 1 && !!(e.target as Element | null)?.closest?.("[data-term-scroller]");
+    downAt = performance.now();
+    startX = e.touches[0]?.clientX ?? 0;
+    startY = e.touches[0]?.clientY ?? 0;
+  };
+  const moved = (e: TouchEvent) => {
+    const t = e.touches[0];
+    if (!t) return;
+    if (Math.hypot(t.clientX - startX, t.clientY - startY) > TAP_SLOP) still = false;
+  };
+  const lifted = () => {
+    // A long press is a selection (`pressSelects`), not a tap.
+    if (performance.now() - downAt >= LONG_PRESS_MS) still = false;
+    if (still && taken(startX, startY)) still = false;
+    if (still) {
+      const wake = termWake();
+      const at = cellAt(term, startX, startY);
+      if (at && tapped(at.row, at.col)) {
+        still = false;
+        return;
+      }
+      // ⚠️ Tombstone (item 28 → item 49): 「点别处不动」, a tap never lowered.
+      const asks = tapAsks(wake, wake === "auto" && !!at && inInput(term, marks, at.row, at.col, cursor()), !cursor0.shown());
+      const up = keyboardUp(field) || keyPanelUp();
+      if ((asks === "raise" || (asks === "toggle" && !up)) && !keyboardUp(field)) raiseKeyboard(field);
+      if (asks === "lower" || (asks === "toggle" && up)) {
+        if (keyboardUp(field)) lowerKeyboard(field);
+        lowerKeyPanel();
+      }
+    }
+    still = false;
+  };
+  const left = (e: FocusEvent) => {
+    // A mouse's page keeps its own focus rules (`useKeysTo`); a selection
+    // up in the terminal has the focus let go on purpose (item 54).
+    if (e.relatedTarget || !window.matchMedia("(pointer: coarse)").matches || selectionHolds()) return;
+    window.setTimeout(() => {
+      if (selectionHolds()) return;
+      const at = document.activeElement;
+      if (!field.isConnected || (at && at !== document.body)) return;
+      lowerKeyboard(field);
+    }, 0);
+  };
+  box.addEventListener("touchstart", began, { passive: true });
+  box.addEventListener("touchmove", moved, { passive: true });
+  box.addEventListener("touchend", lifted);
+  field.addEventListener("focusout", left);
+  return () => {
+    cursor0.dispose();
+    box.removeEventListener("touchstart", began);
+    box.removeEventListener("touchmove", moved);
+    box.removeEventListener("touchend", lifted);
+    field.removeEventListener("focusout", left);
+  };
+}
+
+/** A finger held this long without moving is a press, not a tap. */
+const LONG_PRESS_MS = 450;
+
+// ⚠️ 墓碑 (item 54): `pressSelects` — a 450 ms press drew a word in xterm's
+// own selection, a drag extended it, and the lift copied it silently (T-20).
+// Under a finger the selection is iOS's own now (`lib/term-select`), and
+// copying is the menu's 拷贝.
+
+/** Touches a drag sent on to the program as its wheel (`fingerWheels`). */
+export const wheeled = new WeakSet<Event>();
+
+/**
+ * **A finger's drag is the wheel when the program scrolls** (2026-10-02,
+ * iOS 第三步 A). xterm 6 has no touch code of its own (xterm.js #5489,
+ * fixed for 7.0 by #5563), so on a full-screen program or under tmux's
+ * mouse a drag becomes the wheel events a trackpad would have sent, at the
+ * point under the finger, and xterm encodes them as it encodes every
+ * wheel. A plain shell's history is not scrolled here: that is the native
+ * scroller's (`scrollsNatively`). A drag that starts sideways is left
+ * alone (the page's edge swipe).
+ */
+function fingerWheels(
+  term: Terminal,
+  box: HTMLElement,
+  /** The drag scrolls a tmux pane's history instead (item 31). */
+  yields: () => boolean,
+): () => void {
+  let lastY: number | null = null;
+  let startX = 0;
+  let startY = 0;
+  let mine = false;
+  let target: EventTarget | null = null;
+  const start = (e: TouchEvent) => {
+    lastY = e.touches.length === 1 ? e.touches[0].clientY : null;
+    startX = e.touches.length === 1 ? e.touches[0].clientX : 0;
+    startY = lastY ?? 0;
+    mine = false;
+    target = e.target;
+  };
+  const move = (e: TouchEvent) => {
+    if (lastY === null || e.touches.length !== 1 || !programScrolls(term) || yields()) return;
+    const t = e.touches[0];
+    if (!mine) {
+      // Whose drag this is, once it has gone anywhere: up or down is the
+      // terminal's, sideways is the page's.
+      const ax = Math.abs(t.clientX - startX);
+      const ay = Math.abs(t.clientY - startY);
+      if (ax < 4 && ay < 4) return;
+      if (ax > ay) {
+        lastY = null;
+        return;
+      }
+      mine = true;
+    }
+    const dy = t.clientY - lastY;
+    lastY = t.clientY;
+    // Not stopped (item 28): the page's own gestures above the pane (the
+    // edge swipe, a sheet) still hear the touch, and so does the swipe
+    // that lowers the keyboard. Only the native scroll it would start is
+    // prevented, and the touch is marked as the program's wheel.
+    e.preventDefault();
+    wheeled.add(e);
+    if (dy === 0) return;
+    // Natural scrolling: a finger moving up brings later lines, which
+    // is a wheel turned down.
+    (target ?? box).dispatchEvent(
+      new WheelEvent("wheel", {
+        deltaY: -dy,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+        clientX: t.clientX,
+        clientY: t.clientY,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  };
+  const end = () => {
+    lastY = null;
+    target = null;
+    mine = false;
+  };
+  box.addEventListener("touchstart", start, { passive: true });
+  box.addEventListener("touchmove", move, { passive: false });
+  box.addEventListener("touchend", end, { passive: true });
+  box.addEventListener("touchcancel", end, { passive: true });
+  return () => {
+    box.removeEventListener("touchstart", start);
+    box.removeEventListener("touchmove", move);
+    box.removeEventListener("touchend", end);
+    box.removeEventListener("touchcancel", end);
+  };
+}
+
+/** What each cursor shape looks like when the terminal does not have the
+    keys: the block hollow, the bar and the underline as they are. */
+const RESTING: Record<CursorShape, "outline" | "bar" | "underline"> = {
+  block: "outline",
+  bar: "bar",
+  underline: "underline",
+};
+
+/**
+ * **The cursor is the person's until a program asks for its own** (item
+ * 16 B). The setting (`lib/term-cursor`) is applied live. A program's
+ * DECSCUSR (`CSI n q`: 1–2 block, 3–4 underline, 5–6 bar, odd blinking)
+ * sets the shape while it runs, and the blink only if the person's
+ * setting lets the cursor blink (item 18). The setting comes back on
+ * `CSI 0 q` — as in iTerm2, kitty and WezTerm, where 0 means "the user's
+ * default" (xterm.js reads it as a blinking block) — or when a full-screen
+ * program leaves the
+ * alternate screen (vim's insert-mode bar does not outlive vim). A
+ * program's `CSI ? 12 h` / `l`, which xterm.js turns into its
+ * `cursorBlink` option for good, is counted as the same kind of request.
+ *
+ * Handled here rather than by xterm because xterm.js keeps DECSCUSR in its
+ * own private modes, which its WebGL renderer reads only when an option
+ * changes, so a program's blinking cursor appeared at some later moment
+ * (the next theme or font change, the next WebGL reload) rather than when
+ * asked.
+ */
+function cursorFollows(term: Terminal): () => void {
+  let mine = termCursor();
+  let theirs: { shape?: CursorShape; blink?: boolean } = {};
+  let blinkSet = term.options.cursorBlink;
+  const apply = () => {
+    const shape = theirs.shape ?? mine.shape;
+    // **The person's blink setting wins** (item 18, the owner's rule): a
+    // program may change the shape; it may make the cursor blink only
+    // when the person lets it blink at all.
+    const blink = mine.blink && (theirs.blink ?? true);
+    if (term.options.cursorStyle !== shape) term.options.cursorStyle = shape;
+    if (term.options.cursorInactiveStyle !== RESTING[shape]) term.options.cursorInactiveStyle = RESTING[shape];
+    if (term.options.cursorBlink !== blink) term.options.cursorBlink = blink;
+    blinkSet = blink;
+  };
+  const decscusr = term.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+    const n = typeof params[0] === "number" ? params[0] : 0;
+    if (n === 0) theirs = {};
+    else if (n <= 6) theirs = { shape: n <= 2 ? "block" : n <= 4 ? "underline" : "bar", blink: n % 2 === 1 };
+    apply();
+    return true;
+  });
+  const parsed = term.onWriteParsed(() => {
+    if (term.options.cursorBlink === blinkSet) return;
+    // `CSI ? 12 h` / `l`: a program asking for blinking, honoured only
+    // when the setting allows it (`apply`).
+    theirs = { ...theirs, blink: term.options.cursorBlink };
+    apply();
+  });
+  const swapped = term.buffer.onBufferChange((b) => {
+    if (b.type !== "normal" || (theirs.shape === undefined && theirs.blink === undefined)) return;
+    theirs = {};
+    apply();
+  });
+  const chosen = onTermCursor((c) => {
+    mine = c;
+    apply();
+  });
+  return () => {
+    decscusr.dispose();
+    parsed.dispose();
+    swapped.dispose();
+    chosen();
+  };
+}
+
+/** Prototypes of xterm renderers already taught `blinksOnInput`'s rule. */
+const quieted = new WeakSet<object>();
+
+/**
+ * **The blink restarts on a key, not on output** (item 16 A). xterm.js's
+ * WebGL renderer restarts its blink phase on every cursor move
+ * (`WebglRenderer.handleCursorMove` → `CursorBlinkStateManager.
+ * restartBlinkAnimation`): a progress line rewritten every 300 ms gave
+ * phases of 16 to 1885 ms instead of 600 (measured, item 16). Terminal.app
+ * and iTerm2 hold the cursor up while one types and otherwise keep the
+ * beat. So the renderer's cursor-move path is run without its restart, and
+ * the pane restarts the phase itself when a key goes out (`typed`).
+ * Focus still restarts it (xterm's `resume`), as it does in those
+ * terminals. xterm's DOM renderer, the fallback after a lost WebGL context
+ * (T-23), blinks by a CSS animation of its own and is not changed.
+ */
+function blinksOnInput(term: Terminal): { quiet: () => void; typed: () => void } {
+  type Manager = { restartBlinkAnimation?: () => void };
+  type Renderer = { handleCursorMove?: () => void; _cursorBlinkStateManager?: { value?: Manager } };
+  const renderer = () =>
+    (term as unknown as { _core?: { _renderService?: { _renderer?: { value?: Renderer } } } })._core?._renderService
+      ?._renderer?.value;
+  return {
+    quiet: () => {
+      const r = renderer();
+      if (!r || !("_cursorBlinkStateManager" in r) || typeof r.handleCursorMove !== "function") return;
+      const proto = Object.getPrototypeOf(r) as Renderer;
+      if (quieted.has(proto) || typeof proto.handleCursorMove !== "function") return;
+      const moved = proto.handleCursorMove;
+      proto.handleCursorMove = function (this: Renderer) {
+        const m = this._cursorBlinkStateManager?.value;
+        if (!m) return moved.call(this);
+        m.restartBlinkAnimation = () => {};
+        try {
+          moved.call(this);
+        } finally {
+          delete m.restartBlinkAnimation;
+        }
+      };
+      quieted.add(proto);
+    },
+    typed: () => renderer()?._cursorBlinkStateManager?.value?.restartBlinkAnimation?.(),
+  };
+}
+
+/** The block a buffer line belongs to: from its prompt to the next one. */
+function blockAt(marks: Marks, line: number): Block | null {
+  const all = marks.blocks();
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (all[i].prompt.line <= line) return all[i];
+  }
+  return null;
+}
+
+/** Whether a line is a block's prompt or its typed command (not output). */
+function onPromptOf(b: Block, line: number): boolean {
+  const last = b.output ? b.output.line - 1 : b.prompt.line;
+  return line >= b.prompt.line && line <= Math.max(last, b.prompt.line);
+}
+
+/** Buffer lines as text, a wrapped line joined to the one it continues. */
+function linesText(term: Terminal, from: number, to: number): string {
+  const buf = term.buffer.active;
+  let out = "";
+  for (let i = from; i < to; i++) {
+    const line = buf.getLine(i);
+    if (!line) continue;
+    if (i > from && !line.isWrapped) out += "\n";
+    out += line.translateToString(!buf.getLine(i + 1)?.isWrapped);
+  }
+  return out.replace(/\s+$/, "");
+}
+
+/** A block's output, from where it ran to where the next prompt began. */
+function outputOf(term: Terminal, b: Block): string {
+  if (!b.output) return "";
+  const end = b.end ? b.end.line : term.buffer.active.length;
+  return linesText(term, b.output.line, end);
+}
+
+/** A block's command: as the shell named it, else as typed. */
+function commandOf(term: Terminal, b: Block): string {
+  if (b.command) return b.command;
+  if (!b.input) return "";
+  const end = b.output ? b.output.line : b.input.marker.line + 1;
+  return linesText(term, b.input.marker.line, end).slice(b.input.col).trim();
+}
+
+/** A tmux row's id (`adaptor::tmux::is_tmux_leaf`): the session's
+    creation time and its number. */
+const TMUX_ROW = /^shell\/\d+-\d+$/;
+
+/** A khor shell's row (not a tmux session's): one the person may type
+    `tmux` in (item 58). */
+const SHELL_ROW = (id: string) => id.startsWith("shell/") && !TMUX_ROW.test(id);
+
+/** Scrolls to the previous (`-1`) or next (`1`) prompt from the screen's
+    top; past the last one, to the bottom. */
+function jumpToPrompt(term: Terminal, marks: Marks, dir: -1 | 1) {
+  const top = term.buffer.active.viewportY;
+  const lines = marks.blocks().map((b) => b.prompt.line);
+  const to = dir < 0 ? lines.filter((l) => l < top).pop() : lines.find((l) => l > top);
+  if (to === undefined) {
+    if (dir > 0) term.scrollToBottom();
+    return;
+  }
+  term.scrollToLine(to);
+}
+
+/** The composition strip's gap above the pane's foot (Tailwind's 2). */
+const STRIP_GAP = 8;
+
+/** A face that has been quiet this long says its size again with its
+    next key (ms). */
+const SIZE_AGAIN_MS = 2000;
+
+/** The most entries the pane's first-entry trace keeps. */
+const TRACE_MAX = 300;
+
+/** Output quiet this long ends a frame (ms). */
+const FRAME_QUIET_MS = 8;
+/** The longest a frame is held before it is painted anyway (ms). */
+const FRAME_MAX_MS = 60;
+
+/** `CSI ? 25 l` / `h` and `CSI ? 2026 h` / `l`: where a redraw opens and
+    closes. */
+const OPENS = /\x1b\[\?(25l|2026h)/g;
+const CLOSES = /\x1b\[\?(25h|2026l)/g;
+
+/**
+ * **Paint whole frames** (item 18 B; the owner: the cursor "blinks" only in
+ * Claude Code, and the pinyin preview jumps between the status line, the
+ * input and the output). A TUI redraws by hiding the cursor, moving up,
+ * repainting and parking the cursor back in its input box; a real terminal
+ * shows only the finished frame. Here bytes reached xterm as they arrived —
+ * `term_wait` answers the moment any byte lands, so one redraw came as
+ * several writes — and xterm painted whatever it had at its next animation
+ * frame: the cursor's places mid-redraw were frames on screen, and the
+ * composition preview, drawn at the cursor, went with them.
+ *
+ * So output is held until the frame is whole: until the stream has been
+ * quiet `FRAME_QUIET_MS`, and while a redraw is open — a cursor hidden
+ * (`?25l`) and not yet shown again, or DEC synchronized output (`?2026h`,
+ * which xterm honours by itself once it has the bytes) not yet ended — until
+ * it closes, never past `FRAME_MAX_MS`. kitty and WezTerm coalesce output
+ * the same way (kitty's `input_delay`/`repaint_delay`, a few ms) and treat
+ * mode 2026 as the program's own frame marks.
+ */
+function framesWhole(
+  term: Terminal,
+  /** What the bytes become on their way in, and what runs once xterm has
+      parsed them (`lib/term-predict`). */
+  shape: (bytes: Uint8Array) => { bytes: Uint8Array; parsed?: () => void },
+  /** Runs once xterm has parsed a frame that closed (`settledCursor`). */
+  whole?: () => void,
+): { paint: (bytes: Uint8Array) => void; flush: () => void; drop: () => void; painting: () => boolean } {
+  let held: Uint8Array[] = [];
+  let since = 0;
+  let timer = 0;
+  /** A redraw opened and not closed, across the held chunks. */
+  let open = false;
+  const text = new TextDecoder("latin1");
+  const flush = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (held.length === 0) return;
+    const n = held.reduce((a, c) => a + c.length, 0);
+    const all = new Uint8Array(n);
+    let at = 0;
+    for (const c of held) {
+      all.set(c, at);
+      at += c.length;
+    }
+    held = [];
+    since = 0;
+    const shaped = shape(all);
+    const closed = !open;
+    term.write(shaped.bytes, () => {
+      shaped.parsed?.();
+      if (closed) whole?.();
+    });
+  };
+  const paint = (bytes: Uint8Array) => {
+    // The gates' before-and-after switch: written as it arrives.
+    if ((window as unknown as { __framesOff?: boolean }).__framesOff) {
+      const shaped = shape(bytes);
+      return term.write(shaped.bytes, shaped.parsed);
+    }
+    held.push(bytes);
+    const now = performance.now();
+    if (!since) since = now;
+    // Which comes last in this chunk, an opening or a closing mark.
+    const s = text.decode(bytes);
+    let lastOpen = -1;
+    let lastClose = -1;
+    for (const m of s.matchAll(OPENS)) lastOpen = m.index;
+    for (const m of s.matchAll(CLOSES)) lastClose = m.index;
+    if (lastOpen > lastClose) open = true;
+    else if (lastClose > lastOpen) open = false;
+    const left = FRAME_MAX_MS - (now - since);
+    if (left <= 0) return flush();
+    window.clearTimeout(timer);
+    timer = window.setTimeout(flush, open ? left : Math.min(FRAME_QUIET_MS, left));
+  };
+  const drop = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    held = [];
+    since = 0;
+    open = false;
+  };
+  return { paint, flush, drop, painting: () => open };
+}
+
+/** A two-finger tap: both fingers down this briefly, barely moving. */
+const TWO_TAP_MS = 300;
+/** A sideways swipe that steps tabs: this far, mostly sideways, this
+    briefly, and not from the screen's left edge, which is the page's own
+    edge swipe back (iOS reserves it the same way). */
+const SWIPE_PT = 80;
+const SWIPE_MS = 400;
+const EDGE_PT = 24;
+
+/**
+ * **The phone's gestures on a terminal** (roadmap 4.4), the set Blink Shell
+ * and Termius use: a two-finger tap is Esc; a pinch sizes the terminal's
+ * text, landing on the setting's own steps (`lib/type-size`, every 2 pt
+ * from 10 to 22) when the fingers lift; a quick sideways swipe goes to the
+ * next or previous session tab.
+ */
+function phoneGestures(term: Terminal, box: HTMLElement): () => void {
+  let fingers = 0;
+  let downAt = 0;
+  let d0 = 0;
+  let scale = 1;
+  let travel = 0;
+  let x0 = 0;
+  let y0 = 0;
+  let x1 = 0;
+  let y1 = 0;
+  const gap = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const start = (e: TouchEvent) => {
+    if (e.touches.length === 1) {
+      fingers = 1;
+      downAt = performance.now();
+      x0 = x1 = e.touches[0].clientX;
+      y0 = y1 = e.touches[0].clientY;
+      travel = 0;
+    } else if (e.touches.length === 2) {
+      fingers = 2;
+      d0 = gap(e.touches);
+      scale = 1;
+    }
+  };
+  const move = (e: TouchEvent) => {
+    if (e.touches.length === 2 && fingers === 2) {
+      scale = gap(e.touches) / d0;
+      travel = Math.max(travel, Math.abs(gap(e.touches) - d0));
+    } else if (e.touches.length === 1 && fingers === 1) {
+      x1 = e.touches[0].clientX;
+      y1 = e.touches[0].clientY;
+    }
+  };
+  const end = (e: TouchEvent) => {
+    if (e.touches.length > 0) return;
+    const took = performance.now() - downAt;
+    if (fingers === 2) {
+      if (travel > 12) {
+        const t = typeSize();
+        const currentSize = terminalSize(t);
+        const want = Math.round((currentSize * scale) / 2) * 2;
+        const term_ = Math.max(TERM_MIN, Math.min(TERM_MAX, want));
+        if (term_ !== currentSize) setTypeSize({ ...t, term: term_, termFollowSystem: false });
+      } else if (took < TWO_TAP_MS) {
+        term.input("\x1b", true);
+      }
+    } else if (fingers === 1) {
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      if (Math.abs(dx) > SWIPE_PT && Math.abs(dx) > 2 * Math.abs(dy) && took < SWIPE_MS && x0 > EDGE_PT) {
+        askStepTab(dx < 0 ? 1 : -1);
+      }
+    }
+    fingers = 0;
+  };
+  box.addEventListener("touchstart", start, { passive: true });
+  box.addEventListener("touchmove", move, { passive: true });
+  box.addEventListener("touchend", end, { passive: true });
+  box.addEventListener("touchcancel", end, { passive: true });
+  return () => {
+    box.removeEventListener("touchstart", start);
+    box.removeEventListener("touchmove", move);
+    box.removeEventListener("touchend", end);
+    box.removeEventListener("touchcancel", end);
+  };
+}
+
+/** Whether a box has a size a terminal can be measured in. */
+const hasSize = (el: HTMLElement) => el.clientWidth > 0 && el.clientHeight > 0;
+
+/**
+ * **Resolves once `box` can be measured for good** (item 15 A): it has a
+ * size (xterm's `open` and the fit addon both measure the DOM, and xterm
+ * says the element "must be visible (have dimensions)"), and no ancestor
+ * is still running a finite animation or transition — the screen's
+ * entrance (`screen-in-from-right`), the edge swipe's settle. An endless
+ * one (a spinner) is not waited for.
+ */
+async function settled(box: HTMLElement, signal: AbortSignal): Promise<void> {
+  if (!hasSize(box)) {
+    await new Promise<void>((done) => {
+      const observer = new ResizeObserver(() => {
+        if (!hasSize(box)) return;
+        observer.disconnect();
+        done();
+      });
+      observer.observe(box);
+      signal.addEventListener("abort", () => observer.disconnect());
+    });
+  }
+  const moving: Promise<unknown>[] = [];
+  for (let el: Element | null = box; el; el = el.parentElement) {
+    for (const a of el.getAnimations?.() ?? []) {
+      const end = a.effect?.getComputedTiming().endTime;
+      if (a.playState === "running" && typeof end === "number" && Number.isFinite(end)) {
+        moving.push(a.finished.catch(() => {}));
+      }
+    }
+  }
+  // **Never longer than an entrance** (item 18 A): whatever else runs, the
+  // first fit happens `SETTLE_CAP_MS` after the box has a size.
+  await Promise.race([Promise.all(moving), new Promise((r) => window.setTimeout(r, SETTLE_CAP_MS))]);
+}
+
+/** The longest the first fit waits for an entrance to finish (ms). */
+const SETTLE_CAP_MS = 300;
+
+/** A box resized this soon after the visual viewport moved is the
+    keyboard animating (ms). */
+const KEYBOARD_MOVING_MS = 400;
+/** …and is refitted once it has held still this long (ms). */
+const KEYBOARD_STILL_MS = 50;
+
+/** The longest the opening cover waits for a tmux row's first history
+    read after the attach has landed (ms): a far machine slower than this
+    shows the screen anyway (item 51). */
+const DECIDE_MAX_MS = 1500;
+
+/** The open terminals' re-joins, by session (`reopenTerminal`). */
+const reopeners = new Map<string, () => Promise<void>>();
+
+/**
+ * **Join an open terminal again from scratch** — the reload circle's act
+ * (2026-10-03), for anything else that knows a terminal is stuck (the
+ * network lane's reconnect strip). Answers false when no pane has that
+ * session open; otherwise resolves once the join has answered, joined or
+ * not (a failed join says why in the pane).
+ */
+export async function reopenTerminal(id: string): Promise<boolean> {
+  const reopen = reopeners.get(id);
+  if (!reopen) return false;
+  await reopen();
+  return true;
+}
+
+/** This mounted seat's capability; no global tab ID can prove its home. */
+export type TerminalRecoveryOwner = {
+  idle: () => boolean;
+  rejoin: () => boolean;
+  retire: () => void;
+};
+
+export function TerminalPane({
+  id,
+  machine,
+  active = true,
+  doing,
+  mux = false,
+  onReading,
+  onRecoveryRejoin,
+}: {
+  id: string;
+  onRecoveryRejoin?: (owner: TerminalRecoveryOwner | null) => void;
+  onReading?: SessionReading;
+  /** The row's process sits in a tmux pane (`SessionRow.mux`): Claude
+      Code in the person's own tmux, reached through khor's grouped
+      client like a tmux row (item 33). */
+  mux?: boolean;
+  /** The row's ledger reading, for the tab on screen: through tmux it
+      is the pane in front's (item 21), which the face's own marks cannot
+      see. */
+  doing?: Doing | null;
+  /** Whether this is the tab on screen. A kept tab that is not
+      (`DetailPane`, T-11) stays attached at the hidden pace and draws
+      nothing in the bar. */
+  active?: boolean;
+  /** The far machine this terminal lives on, by the name people read —
+      `null` for one hosted here. What a wait and a reconnect name. */
+  machine?: string | null;
+}) {
+  const attachmentRef = useRef<ReturnType<typeof terminalAttachment> | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  // A tmux row's history on a phone (item 31): held only while the pane
+  // is on screen, and why it is not there when it cannot be read.
+  const tmuxHistoryRef = useRef<ReturnType<typeof holdsTmuxHistory> | null>(null);
+  const firstTouchRef = useRef<ReturnType<typeof notesFirstTouch> | null>(null);
+  // Read when the pane is set up; a row's seat does not change under it.
+  const muxRef = useRef(mux);
+  muxRef.current = mux;
+  const shownRef = useRef(false);
+  const doingRef = useRef(doing);
+  doingRef.current = doing;
+  // The native scroller around the terminal, and the room after it that
+  // gives it the history's height (`scrollsNatively`).
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const roomRef = useRef<HTMLDivElement>(null);
+  const syncScroller = useRef<() => void>(() => {});
+  const termRef = useRef<Terminal | null>(null);
+  const [gone, setGone] = useState(false);
+  // The reload circle's join in flight (`reopen`): its glyph turns.
+  const [joining, setJoining] = useState(false);
+  const reopenRef = useRef<(() => Promise<void>) | null>(null);
+  const recoveryRetired = useRef(false);
+  const recoveryJoining = useRef(0);
+  const recoverySending = useRef(0);
+  const recoveryOwner = useRef<TerminalRecoveryOwner | null>(null);
+  const recoverySink = useRef(onRecoveryRejoin);
+  recoverySink.current = onRecoveryRejoin;
+  const notifyRecovery = () => recoverySink.current?.(recoveryOwner.current);
+  // **The tab pill's third seat is this terminal's re-attach** (UX-33):
+  // offered by id while the pane is mounted, with whether it is joining
+  // (the pill's line runs then).
+  // **A drop under way runs it too, filled to how far it got** (item
+  // 60): `null` when nothing is being dropped.
+  const [dropShare, setDropShare] = useState<number | null>(null);
+  const [dropStopping, setDropStopping] = useState(false);
+  // **What goes in, by name** (the owner 2026-10-07 12:50): the pill
+  // says which file and how many are done, and its third seat cancels
+  // (`dropCancel`) while they go.
+  const [dropNames, setDropNames] = useState<string[] | null>(null);
+  const dropCancel = useRef<() => void>(() => {});
+  useEffect(
+    () =>
+      offerTabAct(
+        id,
+        dropShare !== null && dropNames
+          ? { kind: "stop", busy: joining, share: dropShare, drop: dropOf(dropNames, dropShare), run: () => dropCancel.current() }
+          : { kind: "reload", busy: joining, run: () => void reopenRef.current?.() },
+      ),
+    [id, joining, dropShare, dropNames],
+  );
+  // Why the terminal never opened, in khor's own words. **Not the same
+  // fact as `gone`**: `gone` means the host this pane was watching
+  // ended, and 这个终端结束了 is true of it; a failed open means there
+  // never was a host to watch, and saying 结束了 about a tmux session
+  // sitting right there sends a person looking for a session that
+  // ended. Every refusal khor makes here is already a sentence written
+  // for a person, and throwing it away is what once flattened all of
+  // them into one wrong word.
+  const [why, setWhy] = useState<string | null>(null);
+  const [linkFailure,setLinkFailure]=useState<string|null>(null);
+  const linkAction=useRef(0);
+  useLayoutEffect(()=>{
+    linkAction.current++;setLinkFailure(null);
+    return()=>{linkAction.current++;};
+  },[id,machine]);
+  const activateLink=async(open:()=>void|Promise<void>)=>{
+    const action=++linkAction.current;
+    setLinkFailure(null);
+    try{await open();}
+    catch(error){if(action===linkAction.current)setLinkFailure(said(error));}
+  };
+
+  // **Until the attachment is made, the pane says it is coming**
+  // (2026-10-02, the phone: a far machine that had dropped off left the
+  // board blank for the reach's whole wait). A never-seen region shows
+  // its skeleton, never a blank board (guidelines/20-states); the
+  // sentence replaces it if the open fails.
+  const [opening, setOpening] = useState(true);
+  // **When the open began, and which try this is** (round NET-FIX): a
+  // wait past a second gets a spinner, past eight the machine's name,
+  // the time and 停止等待 / 重试 (`Waiting`). A retry is a new try — the
+  // effect below runs again from scratch.
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // The far pipe ended and is being asked for again (`TermChunk::
+  // stall`): the screen is the last one that arrived, held back in ink,
+  // and the pill says 「重新连接 Mac-mini」 (NOTICE-BRIEF, `rejoinNotice`)
+  // with why in parts — since when (`stallSince`), for its seconds.
+  const [stall, setStall] = useState<Miss | null>(null);
+  const [stallSince, setStallSince] = useState(0);
+  const rejoining = stall !== null;
+  const inBar = useInBar();
+  // **The drops that did not get there** (NOTICE-BRIEF): each stays on
+  // the session's pill until 重试 or 取消, its failure in parts
+  // (`failedNotice`). ⚠️ 墓碑: `dropWhy`, the backend's whole sentence in
+  // red in this pane's corner until the next drop worked (IMG_5413).
+  const [missed, setMissed] = useState<PillNotice[]>([]);
+  useEffect(() => {
+    const off = missed.map((n) => offerNotice(id, n));
+    return () => off.forEach((f) => f());
+  }, [id, missed]);
+  useEffect(() => {
+    if (!stall || gone || why) return;
+    return offerNotice(
+      id,
+      rejoinNotice({
+        stall,
+        machine: machine ?? null,
+        since: stallSince || Date.now(),
+      }),
+    );
+  }, [id, stall, stallSince, gone, why, machine]);
+  const hidden = useHidden();
+  const pace = useRef(LIVE_MS);
+  const pollNow = useRef<() => void>(() => {});
+  // xterm's own textarea, once the terminal is open — the element an
+  // input method composes in, and where `useKeysTo` sends focus and
+  // stray first keystrokes. xterm owns the composition and commit;
+  // term-ime keeps preedit keys/edits away from terminal encoders and
+  // the non-composition input workarounds until that commit is ready.
+  const keysRef = useRef<HTMLTextAreaElement | null>(null);
+  useKeysTo(keysRef, active);
+  // Whether the reader is up in history, and whether output arrived
+  // while they were — the two sentences the way-back-down control
+  // carries. Survived the pivot on purpose: xterm holds the reader's
+  // place when output scrolls past, but says nothing about it, and an
+  // arrival with no sign is an arrival missed. Same pair of words the
+  // conversation uses.
+  const [back, setBack] = useState(false);
+  const [freshBelow, setFreshBelow] = useState(false);
+  useReadingSession(id, active && !hidden && !opening && !joining && !why && !stall && !back, onReading);
+  // The search: whether the bar is up, what is in it, and where the
+  // addon says the matches are (`of` is -1 past the highlight limit).
+  const searchRef = useRef<SearchAddon | null>(null);
+  /** The search is selecting its match (`onSelectionChange` copies only
+      what the person selects). */
+  const searchSelects = useRef(false);
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  // The last word looked for, for ⌘G after the bar was put away.
+  const lastQuery = useRef("");
+  const findAgain = useRef<(dir: 1 | -1) => void>(() => {});
+  const [hits, setHits] = useState<{ at: number; of: number } | null>(null);
+  /** Regex and case (item 70, `lib/term-find`), this device's. */
+  const [how, setHow] = useFindHow();
+  // The bell's flash, and the timer that ends it.
+  const [rang, setRang] = useState(false);
+  // **What is being composed, under a finger** (item 18 B): shown in a
+  // strip of its own at the screen's foot, not at the cursor, which a
+  // redrawing program moves under it.
+  const [composingText, setComposingText] = useState<string | null>(null);
+  /** How far the composition strip stands above the pane's foot. */
+  const [composeLift, setComposeLift] = useState(0);
+  // A picture the program drew, opened whole (roadmap 3.3).
+  const [peek, setPeek] = useState<string | null>(null);
+  // A block's output read as data, opened (roadmap 3.4).
+  const [data, setData] = useState<{ command: string; peek: Peek } | null>(null);
+  // The machine's commands, searched (roadmap 2.6), and where the shell
+  // stands when it opened.
+  const [history, setHistory] = useState<{ cwd: string | undefined; atPrompt: boolean; unmarked?: boolean } | null>(null);
+  const peekRef = useRef(false);
+  peekRef.current = !!peek || !!data;
+  const pinch = usePinch();
+  // **A question the pane asks before acting** (roadmap 4.3): a paste of
+  // several lines, or a program wanting to read the clipboard.
+  const [asking, setAsking] = useState<{ text: string; detail?: string; yes: string; no: string; go: () => void; stop: () => void } | null>(null);
+  // A command block's actions (roadmap 2.3), where it was pressed: from a
+  // right-click, or a long press on its prompt.
+  /** The pane's `dropFiles`, for its paste handlers (set below). */
+  const dropFilesRef = useRef<(files: File[]) => void>(() => {});
+  const [blockMenu, setBlockMenu] = useState<{ x: number; y: number; acts: { name: string; label: string; run: () => void }[] } | null>(null);
+  const bellTimer = useRef(0);
+  // **Ctrl and Alt, latched from the key row** (`TermKeys`, 2026-10-02;
+  // Alt 2026-10-03): each waits for the next key from the row, its sheet
+  // or the soft keyboard. A ref as well as state because the `onData`
+  // handler below reads them, and that handler is wired once per terminal.
+  const coarse = useCoarse();
+  /** The keyboard's wake mode (`lib/term-tap`, the terminal lane's 2.2):
+      the deck's keyboard circle is drawn in 点击按钮 alone (round UX-3 3a). */
+  const wake = useTermWake();
+  const [mods, setModsShown] = useState<Mods>({ ctrl: false, alt: false });
+  const modsRef = useRef<Mods>({ ctrl: false, alt: false });
+  const latch = (m: Mods) => {
+    modsRef.current = m;
+    setModsShown(m);
+  };
+
+  // The block menu goes away on a press anywhere else, Esc, or a scroll.
+  useEffect(() => {
+    if (!blockMenu) return;
+    const away = () => setBlockMenu(null);
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") away();
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", esc, true);
+    const scroller = scrollerRef.current;
+    scroller?.addEventListener("scroll", away, { passive: true });
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", esc, true);
+      scroller?.removeEventListener("scroll", away);
+    };
+  }, [blockMenu]);
+
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const mount = mountRef.current;
+    if (!box || !mount) return;
+    let attachment = terminalAttachment(id);
+    attachmentRef.current = attachment;
+    const font = fontOf(box);
+    /** Opens an OSC 8 `file://` link; set once the session's machine
+        and the path opener are known (below). */
+    let fileLink = (_uri: string, _intent:LinkIntent='internal') => {};
+    const openUrl=(uri:string,intent:LinkIntent='internal')=>{void activateLink(()=>follow(uri,machine,intent,id));};
+    const term = new Terminal({
+      // The unicode addon is a proposed API; without this flag it throws.
+      allowProposedApi: true,
+      allowTransparency: windowOpacity() < 1,
+      // xterm's default OSC8 handler uses confirm/window.open and bypasses
+      // Khor's content-opening rules.
+      //
+      // A `file://` link (`ls --hyperlink`, ripgrep's and gcc's
+      // hyperlinks, delta) is a path on the session's machine: it opens
+      // where a printed path opens (`lib/term-links`). xterm dropped
+      // every scheme but http(s) without `allowNonHttpProtocols`; any
+      // other scheme still opens nothing (the terminal audit, item 53).
+      linkHandler: {
+        allowNonHttpProtocols: true,
+        activate: (ev, uri) => {
+          if(!canActivateTerminalLink(ev,term))return;
+          const intent=linkIntent(ev);
+          if (/^https?:/i.test(uri)) openUrl(uri,intent);
+          else if (/^file:/i.test(uri)) fileLink(uri,intent);
+        },
+      },
+      // **A secondary click does not select** (the terminal audit, item
+      // 53): xterm's Mac default selected the word under it, and with
+      // copy on select that word replaced the clipboard just before the
+      // menu's 粘贴 read it. iTerm2's menu leaves the selection alone.
+      rightClickSelectsWord: false,
+      // **The size reports programs ask for** (T-1: CSI 14 t, 16 t, 18 t
+      // went unanswered because `windowOptions` defaults to none;
+      // yazi asks 16 t for its cell size). Reports only — nothing here
+      // lets a program move, resize or retitle the window.
+      windowOptions: { getWinSizePixels: true, getCellSizePixels: true, getWinSizeChars: true },
+      // The history this face keeps (`lib/term-history`, item 17; item 15
+      // C raised it from tmux's 2000). The parser in `khor_gui_core::term`
+      // keeps none, so this is the only history a face has; after a
+      // re-attach it holds what the host's ring still has, not more.
+      scrollback: termHistory(),
+      fontFamily: font.family,
+      fontSize: font.size,
+      lineHeight: 1,
+      ...terminalAppearance(box),
+      // **The cursor is the focus** (2026-10-03): the chosen shape while
+      // the terminal has the keys, its hollow or thin form when it does
+      // not. The pane draws no ring of its own (`app.css`). The shape and
+      // the blink are the person's (`lib/term-cursor`, `cursorFollows`).
+      cursorStyle: termCursor().shape,
+      cursorInactiveStyle: RESTING[termCursor().shape],
+      cursorBlink: termCursor().blink,
+      // **⌥-drag is xterm's own selection even when the program asked
+      // for the mouse** — iTerm2's gesture. khor turns tmux's mouse on
+      // for the tmux sessions it attaches (2026-10-01, so the wheel
+      // scrolls tmux's history; `Tmux::grouped_attach_argv`), and from
+      // then on a plain drag is tmux's: it selects in copy mode and
+      // copies into tmux's own buffer, which never reaches the Mac's
+      // clipboard (that would take OSC 52, which this pane does not
+      // answer). xterm's escape hatch is Shift elsewhere, but on a Mac
+      // it is ⌥ and only with this flag — without it there was no way
+      // to select into the clipboard at all. The cost: ⌥-drag is no
+      // longer xterm's column selection.
+      macOptionClickForcesSelection: true,
+      // ⌥ as Meta, the person's (`lib/term-option-meta`); off, as in
+      // Terminal.app and iTerm2.
+      macOptionIsMeta: termOptionMeta(),
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    // Real east-asian widths — the measured `wideFit` scale hack this
+    // replaces existed because the DOM painter had to guess what a
+    // renderer that owns its glyph atlas simply knows. **Unicode 15 with
+    // grapheme clusters** (T-22, the terminal audit: unicode11 drew ❤️
+    // one cell wide, 🇨🇳 as two boxes, 👍🏽 four cells and 👨‍👩‍👧 six),
+    // so an emoji sequence is one character of two cells, as in kitty,
+    // WezTerm and Ghostty. The addon's README says only to load it; its
+    // `activate` registers "15" and "15-graphemes" and selects the
+    // latter (0.4.0), so no `activeVersion` is set here.
+    term.loadAddon(new UnicodeGraphemesAddon());
+    term.open(mount);
+    const stopGlass = keepTerminalGlass(term, box);
+    const stopLegibility = protectTerminal(term);
+    const ime = keepTerminalIme(term, box);
+    // The grid's last row is where the folded capsule measures from
+    // (item 72, `lib/fold-seat`): xterm's screen is exactly its rows tall.
+    term.element?.querySelector(".xterm-screen")?.setAttribute("data-fold-foot", "");
+    // **OSC 52: a program may write the clipboard, never read it** (T-8,
+    // the terminal audit: neither direction was handled). The field's
+    // defaults: kitty, Alacritty, WezTerm and Windows Terminal allow the
+    // write and refuse (or ask about) the read. The read form (`?`) is
+    // answered with nothing, so a program waiting for it times out as it
+    // would on any terminal that refuses.
+    // **Reading is asked about once per terminal** (roadmap 4.3; T-8 had
+    // refused it outright): the answer — kitty's `clipboard_control` and
+    // WezTerm ask the same way — holds until the pane closes. A refusal
+    // answers nothing, so the program times out as on any terminal that
+    // refuses.
+    let mayRead: boolean | null = null;
+    const readClipboard = (target: string) => {
+      void navigator.clipboard
+        ?.readText()
+        .then((text) => {
+          const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+          send(`\x1b]52;${target};${b64}\x07`, true);
+        })
+        .catch(() => {});
+    };
+    const osc52 = term.parser.registerOscHandler(52, (data) => {
+      const semi = data.indexOf(";");
+      const payload = semi >= 0 ? data.slice(semi + 1) : "";
+      const target = semi >= 0 ? data.slice(0, semi) || "c" : "c";
+      if (payload === "?") {
+        // A question from history answers nothing (`replay`).
+        if (replaying > 0) return true;
+        if (mayRead === true) readClipboard(target);
+        else if (mayRead === null) {
+          setAsking({
+            text: gui.clip_read_ask,
+            yes: gui.clip_read_allow,
+            no: gui.clip_read_deny,
+            go: () => {
+              mayRead = true;
+              readClipboard(target);
+            },
+            stop: () => {
+              mayRead = false;
+            },
+          });
+        }
+        return true;
+      }
+      if (payload === "") return true;
+      // A copy from history is not copied again: every attach replayed
+      // the old yanks onto the clipboard (the terminal audit, item 53).
+      if (replaying > 0) return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+        void navigator.clipboard?.writeText(new TextDecoder().decode(bytes)).catch(() => {});
+      } catch {
+        /* not base64: nothing to write */
+      }
+      return true;
+    });
+    // The fastest renderer the webview has; a machine without WebGL
+    // silently keeps xterm's DOM renderer. Nothing to install either
+    // way — this is a build-time library, not a user dependency.
+    //
+    // **A lost context falls back, then comes back** (T-23, the terminal
+    // audit: losing the WebGL context left the terminal blank, still
+    // taking keys, until the context was restored). The addon's own advice
+    // (addon-webgl README; WebglRenderer.ts waits 3 s, then only fires
+    // the event): dispose it on `onContextLoss`, which puts xterm's DOM
+    // renderer back at once, and try WebGL again the next time the page
+    // is shown. iOS drops contexts of pages in the background (WebKit
+    // bug 261331); a Mac's GPU switch does too.
+    const blink = blinksOnInput(term);
+    const cursor = cursorFollows(term);
+    // **The atlas kept honest across panes, late fonts and lost contexts**
+    // (item 24, `lib/term-atlas`): the shared glyph atlas is never cleared
+    // by one pane alone, a lost context drops to the DOM renderer at once
+    // and WebGL comes back on the next showing, and a pane that loses it
+    // again soon after keeps the DOM renderer.
+    const unWebgl = keepWebgl(term, {
+      onLoaded: () => blink.quiet(),
+      onFallback: (why) => {
+        faceNote(`term ${id}: ${why}; this pane keeps the DOM renderer`).catch(() => {});
+      },
+    });
+    // The search paints its matches as decorations, which is the one
+    // proposed API this file leans on besides the unicode addon.
+    const search = new SearchAddon();
+    term.loadAddon(search);
+    searchRef.current = search;
+    const found = search.onDidChangeResults((r) => setHits({ at: r.resultIndex, of: r.resultCount }));
+    // Activation uses the same intent for detected URLs, paths and OSC8.
+    // xterm keeps ownership of selection drags and application mouse input.
+    term.loadAddon(
+      new WebLinksAddon((ev, uri) => {
+        if(canActivateTerminalLink(ev,term))openUrl(uri,linkIntent(ev));
+      }),
+    );
+    // **Pictures in place** (roadmap 3.3): sixel and iTerm2's inline
+    // images, through the xterm.js team's own addon (@xterm/addon-image,
+    // MIT) — what `imgcat`, `chafa`, `timg` and matplotlib's terminal
+    // backends draw. Its store is bounded per pane and lets the oldest go
+    // first (`storageLimit`), smaller under a finger, as is the largest
+    // picture it will decode; a replay's pictures come from the host's
+    // own store (`khor_node::pictures`), not from the text ring.
+    const small = window.matchMedia("(pointer: coarse)").matches;
+    const pictures = new ImageAddon({
+      storageLimit: small ? PICTURES_MB_FINGER : PICTURES_MB,
+      pixelLimit: small ? PICTURE_PX_FINGER : PICTURE_PX,
+    });
+    term.loadAddon(pictures);
+    (box as HTMLDivElement & { __pictures?: ImageAddon }).__pictures = pictures;
+    const picture =(row: number, col: number) => {
+      const canvas = pictures.getImageAtBufferCell(col, row);
+      if (!canvas) return false;
+      setPeek(canvas.toDataURL());
+      return true;
+    };
+    const pictureClick = (ev: MouseEvent) => {
+      if (!(ev.metaKey || ev.ctrlKey) || ev.button !== 0) return;
+      const at = cellAt(term, ev.clientX, ev.clientY);
+      if (at && picture(at.row, at.col)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    };
+    box.addEventListener("mousedown", pictureClick, true);
+    // **iOS's delete key keeps repeating** (item 35, `lib/term-soft-delete`):
+    // under the soft keyboard its keydown is the browser's, the field keeps
+    // text for it to delete, and each edit becomes the key.
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    const softDelete = term.textarea
+      ? softDeletes(term.textarea, {
+          soft: () => coarse && keyboardShown(),
+          send: (kind) =>
+            term.input(
+              kind === "word"
+                ? "\x17"
+                : kind === "line"
+                  ? "\x15"
+                  : kind === "forward"
+                    ? "\x1b[3~"
+                    : (kittyNamed(term, "Backspace", false, false) ?? "\x7f"),
+              true,
+            ),
+        })
+      : null;
+    // ⌘F is caught before xterm sees it, so it neither reaches the pty
+    // nor falls through to the page's own find. Everything else passes.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ime.key(ev)) return false;
+      if (softDelete?.key(ev) === false) return false;
+      // A character held for an Option key behind it goes out before any
+      // other key, so nothing overtakes it (`metaEcho`).
+      if (ev.type === "keydown" && !ev.altKey) flushHeld();
+      // An open picture or table is closed by Esc; the program never
+      // sees it.
+      if (peekRef.current && ev.key === "Escape") {
+        if (ev.type === "keydown") {
+          setPeek(null);
+          setData(null);
+        }
+        return false;
+      }
+      if (ev.type === "keydown" && asksToFind(ev)) {
+        ev.preventDefault();
+        setFinding(true);
+        return false;
+      }
+      const again = asksToFindAgain(ev);
+      if (again !== 0) {
+        ev.preventDefault();
+        findAgain.current(again);
+        return false;
+      }
+      const editing = macEditing(ev);
+      if (editing) {
+        ev.preventDefault();
+        term.input(editing, true);
+        return false;
+      }
+      if (asksToClear(ev)) {
+        ev.preventDefault();
+        clearBuffer();
+        return false;
+      }
+      // **The kitty keyboard protocol** (roadmap 5.1, `lib/term-kitty`):
+      // once a program asked for it, the keys it can tell apart.
+      if (ev.type === "keydown" || ev.type === "keyup") {
+        const k = kittyKey(term, ev, ev.type === "keyup");
+        if (k !== null) {
+          ev.preventDefault();
+          term.input(k, true);
+          return false;
+        }
+      }
+      const meta = optionMeta(ev, !!term.options.macOptionIsMeta);
+      if (meta) {
+        ev.preventDefault();
+        // Under an input method ⌥'s character came first ("∫", then
+        // the key): the one held back is dropped (`metaEcho`).
+        if (held) {
+          window.clearTimeout(held.timer);
+          held = null;
+        }
+        term.input(meta, true);
+        return false;
+      }
+      return true;
+    });
+    // The protocol's flags, kept per screen; its answer goes out the way
+    // xterm's own do, so a replayed question answers into nothing.
+    const kitty = kittyProtocol(term, (bytes) => term.input(bytes, false));
+    (box as HTMLDivElement & { __kitty?: () => number }).__kitty = () => kittyFlags(term);
+    let bellAt = -Infinity;
+    const rung = term.onBell(() => {
+      // The person's bell setting (roadmap 4.2): off is silent; under a
+      // finger it is felt as well as seen.
+      if (!termBell()) return;
+      // A bell from history rang again on every attach (the terminal
+      // audit, item 53).
+      if (replaying > 0) return;
+      // **One bell per flash** (the terminal audit, item 53): a stream of
+      // BELs (a tab completion held, `yes $'\a'`) was a stream of
+      // haptics. The bells inside one flash are that flash.
+      const now = performance.now();
+      if (now - bellAt < BELL_MS) return;
+      bellAt = now;
+      if (window.matchMedia("(pointer: coarse)").matches) bellHaptic().catch(() => {});
+      setRang(true);
+      window.clearTimeout(bellTimer.current);
+      bellTimer.current = window.setTimeout(() => setRang(false), BELL_MS);
+    });
+    // Copy on select. The clipboard can refuse (no permission, no
+    // secure context on a LAN address) and then ⌘C still works — this
+    // is the shortcut, not the only way.
+    //
+    // A search shows its match by selecting it (`addon-search`'s
+    // `_selectResult`): that selection is the find bar's, not the
+    // person's, and copying it put every match stepped through on the
+    // clipboard (the terminal audit, item 53). iTerm2's find leaves the
+    // clipboard alone.
+    const selected = term.onSelectionChange(() => {
+      // Nor khor's own selection under a finger (item 73): the lift
+      // copies nothing (⚠️ 墓碑 T-20); its menu's 拷贝 does.
+      if (searchSelects.current || selectionUp()) return;
+      const s = copyable(term.getSelection());
+      if (s) navigator.clipboard?.writeText(s).catch(() => {});
+    });
+    // **The character an input method commits for an Option key**, with
+    // Option as Meta on. Under pinyin WebKit inserts "∫" *before* it
+    // dispatches ⌥B's keydown (keyCode 229; measured in the scratch app),
+    // so a lone typed character is held for a moment: if ⌥'s key follows,
+    // `optionMeta` has sent ESC b and the character is dropped; if not, it
+    // is typed as it would have been. Off, nothing is held.
+    let held: { text: string; timer: number } | null = null;
+    function flushHeld() {
+      if (!held) return;
+      const { text, timer } = held;
+      held = null;
+      window.clearTimeout(timer);
+      term.input(text, true);
+    }
+    const metaEcho = (e: Event) => {
+      if (!term.options.macOptionIsMeta) return;
+      const it = e as InputEvent;
+      const text = it.data ?? "";
+      if (it.inputType !== "insertText" || it.isComposing || [...text].length !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (held?.text === text && e.type === "input") return;
+      flushHeld();
+      const timer = window.setTimeout(flushHeld, META_ECHO_MS);
+      held = { text, timer };
+    };
+    box.addEventListener("beforeinput", metaEcho, true);
+    box.addEventListener("input", metaEcho, true);
+    // ⌘C (the Edit menu's copy reaches xterm's field as a `copy` event)
+    // copies the same trimmed text, never xterm's own untrimmed one.
+    const copied = (e: ClipboardEvent) => {
+      const s = copyable(term.getSelection());
+      if (!s || !e.clipboardData) return;
+      e.clipboardData.setData("text/plain", s);
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    term.textarea?.addEventListener("copy", copied, true);
+    const shifted = keepShiftedCommits(term);
+    const late = keepLateCommits(term);
+    const composing = keepCompositionInView(term);
+    const field = term.textarea;
+    const composed = (e: CompositionEvent) => {
+      if (!window.matchMedia("(pointer: coarse)").matches) return;
+      setComposingText(e.type === "compositionend" ? null : e.data || null);
+      // On the alternate screen a program keeps its own last row — tmux's
+      // status line, an editor's — and the strip stands one row above it.
+      // Measured to the top of that row: the strip is taller than a row,
+      // and the grid need not end at the pane's foot.
+      const screen = term.element?.querySelector(".xterm-screen")?.getBoundingClientRect();
+      const pane = boxRef.current?.getBoundingClientRect();
+      if (term.buffer.active.type === "alternate" && screen && pane) {
+        const lastRowTop = screen.top + ((term.rows - 1) * screen.height) / term.rows;
+        setComposeLift(Math.max(0, Math.ceil(pane.bottom - STRIP_GAP - lastRowTop)));
+      } else setComposeLift(0);
+    };
+    for (const k of ["compositionstart", "compositionupdate", "compositionend"]) {
+      field?.addEventListener(k, composed as EventListener);
+    }
+    // The shell's marks on xterm's buffer (roadmap 2.2, 2.3), from the
+    // first byte replayed on.
+    const marks = trackMarks(term);
+    // **⌘K: the scrollback and the screen, the prompt line kept** — what
+    // iTerm2's Clear Buffer and Terminal's Clear to Start leave. **At a
+    // prompt the shell is told too** (⌃L, its clear-screen), as WezTerm's
+    // ClearScrollback documentation advises: the shell redraws its prompt
+    // at the top and its idea of the screen is the screen again. A running
+    // program is not sent a form feed it did not ask for. In the Mac app
+    // the menu bar's ⌘K reaches this through `lib/shortcuts`, before the
+    // page ever sees the key. **It survives a re-attach**
+    // (audit/term-attach.md): the attachment's feed forgets up to the
+    // cursor's line, and so does the host's ring where the host speaks
+    // version 2, so a reload or another face starts from the clear; the
+    // ⌃L goes on the same connection, after the forget.
+    const clearBuffer = () => {
+      const at = marks.current();
+      const normal = term.buffer.active.type === "normal";
+      const atPrompt = normal && !marks.running() && !!at?.input && !at.output;
+      term.clear();
+      if (!normal) return;
+      void attachment.forget(atPrompt).catch(() => {
+        if (atPrompt) term.input("\x0c", true);
+      });
+    };
+    const hooks = box as HTMLDivElement & { __clear?: () => void; __find?: () => void };
+    hooks.__clear = clearBuffer;
+    hooks.__find = () => setFinding(true);
+    // For the gates, as `__xterm` is.
+    (box as HTMLDivElement & { __marks?: Marks }).__marks = marks;
+    // Plain links stay in session content; modifiers ask the client system.
+    const here = machine ?? "";
+    // After an attach the face has no marks and no OSC 7 of its own until
+    // the next prompt (the host's snapshot carries neither, item 46), and
+    // a relative path printed before it was no link (the terminal audit,
+    // item 53); the host's ledger still knows where the shell stands.
+    const cwdAt = (line: number) => blockAt(marks, line)?.cwd ?? marks.cwd() ?? doingRef.current?.cwd ?? undefined;
+    const openPath = (t: { path: string; dir: boolean; line: number | null },intent:LinkIntent='internal') => {
+      void activateLink(()=>intent==='system'?openSystemPath(t.path):askOpenPath(here,t.path,t.dir,t.line,id));
+    };
+    fileLink = (uri,intent='internal') => {
+      if(intent==='system'){void activateLink(()=>openSystemFileUri(uri));return;}
+      try {
+        const path = decodeURIComponent(new URL(uri).pathname);
+        if (path) openPath({ path, dir: path.endsWith("/"), line: null },intent);
+      } catch {
+        /* not a URL: nothing to open */
+      }
+    };
+    const linked = term.registerLinkProvider(pathLinks(term, here, cwdAt, openPath));
+    const unclaimLinks = claimTerminalLinkClicks(term, box, (x,y)=>cellAt(term,x,y), TAP_SLOP);
+    const tapped = (row: number, col: number) => {
+      if (picture(row, col)) return true;
+      if(!canActivateTerminalLink({},term,'touch'))return false;
+      const url = urlAt(term, row, col);
+      if (url) {
+        if (/^file:/i.test(url)) fileLink(url);
+        else openUrl(url);
+        return true;
+      }
+      void pathsOn(term, here, cwdAt, row).then((found) => {
+        const hit = found.find((f) => covers(f, row, col));
+        if (hit&&canActivateTerminalLink({},term,'touch')) openPath(hit.target);
+      });
+      return false;
+    };
+    const parked = settledCursor(term, () => frames.painting());
+    let selectsNow: Selects | null = null;
+    const asks = tapsAskFirst(term, box, marks, tapped, parked.at, (x, y) => selectsNow?.tapEnds(x, y) ?? false);
+    const gestures = phoneGestures(term, box);
+    fit.fit();
+    termRef.current = term;
+    keysRef.current = term.textarea ?? null;
+    // **The page opened, or this tab was chosen: the terminal has the
+    // keys** (2026-10-03, `lib/soft-keyboard`). Now, inside the press that
+    // opened it, so a keyboard that was up on this page stays up; under a
+    // finger without raising one otherwise.
+    const finger = window.matchMedia("(pointer: coarse)").matches;
+    if (term.textarea) holdFocus(term.textarea, finger);
+    const shown = terminalShown();
+    // For the gates: the buffer is the screen, and reading it beats
+    // scraping renderer DOM that webgl does not produce. Smoke reads
+    // `document.querySelector('[data-terminal]').__xterm`.
+    (box as HTMLDivElement & { __xterm?: Terminal }).__xterm = term;
+
+    let stopped = false;
+    // **The first second, written down** (item 18 A: on the owner's iPhone
+    // a fresh terminal would not scroll until the keyboard came up, and the
+    // simulator never showed it). Each frame of the first 1.5 s: the grid,
+    // the scroller's range and place; `__termTrace` for the gates and the
+    // Web Inspector, the summary to the app's log (`face_note`).
+    const born = performance.now();
+    const traced: { t: number; what: string; cols: number; rows: number; range: number; top: number; lines: number }[] = [];
+    (box as HTMLDivElement & { __termTrace?: typeof traced }).__termTrace = traced;
+    const trace = (what: string) => {
+      // The first second and a half is what it is for; later events (a
+      // re-join, a replay) are kept up to a bound, never for the pane's
+      // whole life.
+      if (traced.length >= TRACE_MAX) return;
+      const sc = scrollerRef.current;
+      traced.push({
+        t: Math.round(performance.now() - born),
+        what,
+        cols: term.cols,
+        rows: term.rows,
+        range: sc ? Math.round(sc.scrollHeight - sc.clientHeight) : -1,
+        top: sc ? Math.round(sc.scrollTop) : -1,
+        lines: term.buffer.active.length,
+      });
+    };
+    let tracing = window.requestAnimationFrame(function each() {
+      if (stopped) return;
+      trace("frame");
+      if (performance.now() - born < 1500) tracing = window.requestAnimationFrame(each);
+      else {
+        const first = traced.find((x) => x.what === "fit");
+        const scrollable = traced.find((x) => x.range > 0);
+        faceNote(
+          `term ${id}: fit at ${first?.t ?? "never"} ms (${first?.cols}x${first?.rows}), ` +
+            `range > 0 at ${scrollable?.t ?? "never"} ms, last range ${traced[traced.length - 1]?.range}`,
+        ).catch(() => {});
+      }
+    });
+    let joined = false;
+    // **Typing drawn before a slow echo** (roadmap 5.2): every byte of
+    // output passes it on the way in.
+    let composingNow = false;
+    const predict: Predict = predictEcho(term, () => termPredict() && !composingNow);
+    (box as HTMLDivElement & { __predict?: Predict }).__predict = predict;
+    const composeOn = () => (composingNow = true);
+    const composeOff = () => (composingNow = false);
+    term.textarea?.addEventListener("compositionstart", composeOn);
+    term.textarea?.addEventListener("compositionend", composeOff);
+    // **The keyboard going down ends a composition** (item 37,
+    // `lib/term-compose-drop`): iOS drops it without a `compositionend`,
+    // and the strip stayed on the screen.
+    const undrafted = dropsComposition(term, {
+      keyboardUp: () => keyboardUp(term.textarea ?? null),
+      onKeyboardChange,
+      dropped: () => {
+        ime.cancel();
+        composingNow = false;
+        setComposingText(null);
+      },
+    });
+    const predictResized = term.onResize(({ cols, rows }) => {
+      predict.clear();
+      rememberTermSize(cols, rows);
+    });
+    // An iTerm2 picture whose header has no `size` is given one before
+    // xterm's image addon sees it (`lib/term-iip`); a fresh rewriter for
+    // each screen, so a sequence held half-way never outlives a reset.
+    let iip = iipSizes();
+    // zsh's prompt marks are made for this terminal's width, so a history
+    // written at another width does not leave them standing
+    // (`lib/term-prompt-sp`).
+    const marksSp = promptMarks(() => term.cols);
+    // Output painted a whole frame at a time (item 18 B).
+    const frames = framesWhole(term, (bytes) => predict.output(iip(marksSp(bytes))), parked.whole);
+    let seq = 0;
+    let timer = 0;
+    let busy = false;
+    // Which join the screen belongs to (`reopen`): a beat that was in
+    // flight across a re-join writes nothing.
+    let generation = 0;
+    // **Replayed questions answer into nothing** (2026-10-03, the owner's
+    // phone: 「11;rgb:…1;2c1$r2 q…」 typed at a prompt). History written into
+    // xterm — the attach's ring dump, a reset beat, the catch-up after a
+    // long gap — holds the queries programs asked back then, and xterm
+    // answers them again. While such bytes are being parsed (until
+    // `write`'s callback, which xterm calls once the parser has consumed
+    // them), `onData` drops what has the shape of an answer
+    // (`lib/term-replies`); keys still go. The xterm.js maintainers' own
+    // advice is to replay before wiring the pty (discussions #4869); the
+    // pane is wired first so that early keys are not lost, and this is
+    // the same thing done at the one place where answers leave.
+    let replaying = 0;
+    const replay = (bytes: Uint8Array, done?: () => void) => {
+      replaying += 1;
+      const shaped = predict.output(iip(marksSp(bytes)));
+      term.write(shaped.bytes, () => {
+        replaying -= 1;
+        shaped.parsed?.();
+        // The history just landed: the scroller's range is the buffer's
+        // now, not whenever xterm next scrolls (item 18 A).
+        syncScroller.current();
+        done?.();
+      });
+    };
+    /** When the last beat came back: a beat after a long gap (the pane
+        was hidden, the app was suspended) is a catch-up, not live. */
+    let lastBeat = performance.now();
+    /** What a beat came back with: bytes or a wait answered, the
+        attachment ended, or no answer at all. */
+    const tick = async (): Promise<"live" | "ended" | "failed"> => {
+      const mine = generation;
+      const reading = attachment;
+      // **The place this ask was made from.** An ask that left before the
+      // join set `seq` (a poll the page's own focus effect started while
+      // the open was still reaching) comes back with everything since 0 —
+      // the history the join had just replayed — and wrote it a second
+      // time: a far session's whole history twice on the phone, where the
+      // pushed wait holds such an ask open until the ring arrives.
+      const from = seq;
+      try {
+        // **Pushed in the app while the pane is looked at** (round
+        // NET-2): the node answers the moment bytes arrive, so an echo
+        // no longer waits for the next beat. Elsewhere, the beat.
+        const pushed = inApp && pace.current === LIVE_MS;
+        const b = await (pushed ? reading.wait(seq, WAIT_MS) : reading.stream(seq));
+        if (stopped || mine !== generation || from !== seq) return "live";
+        const gap = performance.now() - lastBeat;
+        lastBeat = performance.now();
+        if (performance.now() - born < 1500 && (b.bytes || b.reset)) {
+          trace(`chunk ${b.bytes.length} from ${seq} to ${b.seq}${b.reset ? " reset" : ""}${b.stall ? ` stall ${b.stall.kind}` : ""}`);
+        }
+        // The feed trimmed past our place (a long time hidden): start
+        // the screen over from what the node still holds, rather than
+        // writing a stream whose head is missing.
+        // A reset starts over: what was held belongs to the screen that
+        // goes. A catch-up is history: what was held goes first.
+        if (b.reset) {
+          frames.drop();
+          term.reset();
+          predict.clear();
+          kitty.reset();
+          iip = iipSizes();
+        }
+        if (b.bytes) {
+          if (b.reset || gap > CATCH_UP_MS) {
+            frames.flush();
+            if (b.reset) await new Promise<void>(done => replay(b64bytes(b.bytes), done));
+            else replay(b64bytes(b.bytes));
+          } else frames.paint(b64bytes(b.bytes));
+        }
+        if (stopped || mine !== generation) return "live";
+        // A remote pipe may have rejoined before its first Ready reached
+        // the host. A fresh feed needs the renderer's acknowledgement too.
+        if (b.reset && !b.gone && !b.stall) await reading.ready();
+        if (stopped || mine !== generation) return "live";
+        seq = b.seq;
+        if (b.gone) setGone(true);
+        const held = b.gone ? null : (b.stall ?? null);
+        setStall((was) => (was && held && was.kind === held.kind && was.raw === held.raw ? was : held));
+        setStallSince((t) => (held ? t || Date.now() : 0));
+        return b.gone ? "ended" : "live";
+      } catch {
+        // The next beat asks again, after a wait (below).
+        return "failed";
+      }
+    };
+    /** Beats in a row that came back with no answer. */
+    let failures = 0;
+    // **Strictly one request in flight.** The cell-snapshot poll this
+    // replaces was idempotent — two answers out of order repainted the
+    // same screen. A byte stream is not: the same bytes written twice
+    // are twice on the screen, so the loop awaits its tick and only
+    // then schedules the next.
+    const loop = async () => {
+      // Nothing to ask before the join has said where the stream starts.
+      if (stopped || busy || !joined) return;
+      busy = true;
+      let got: "live" | "ended" | "failed" = "live";
+      try {
+        got = await tick();
+      } finally {
+        busy = false;
+      }
+      // **A beat answered at once is not a reason to ask at once** (item
+      // 36: the app spun at 100–260 % CPU on a terminal whose host had
+      // stopped answering). The pushed wait returns straight away for an
+      // attachment that ended or is not there any more, and the next beat
+      // went out at 0 ms, forever. An ended one asks no more (a reload
+      // starts the loop again); a failed one asks again after a wait that
+      // doubles, up to `FAILED_MS_MOST`.
+      if (got === "ended") return;
+      failures = got === "failed" ? failures + 1 : 0;
+      if (!stopped) {
+        window.clearTimeout(timer);
+        const after = failures > 0 ? Math.min(FAILED_MS_MOST, LIVE_MS * 2 ** failures) : inApp && pace.current === LIVE_MS ? 0 : pace.current;
+        timer = window.setTimeout(() => void loop(), after);
+      }
+    };
+    pollNow.current = () => {
+      window.clearTimeout(timer);
+      void loop();
+    };
+
+    let resizing: { dispose(): void } | null = null;
+    /** Opens the session and takes its screen. **Again** is `reopen`
+        (2026-10-03, the owner: 「term 得有个刷新键…因为有时候会卡住」):
+        this face leaves first, the screen is dropped, and the session is
+        joined from scratch — the screen and the history the host keeps
+        come back as any new attacher gets them. A join that fails says
+        why in the pane, as a first join does, and can be pressed again. */
+    const join = (again: boolean): Promise<void> => {
+      if (recoveryRetired.current) return Promise.resolve();
+      recoveryJoining.current++;
+      const mine = ++generation;
+      window.clearTimeout(timer);
+      if (again) setJoining(true);
+      else {
+        // The waiting clock (`Waiting`): a first join shows its wait with
+        // 停止等待 / 重试; a re-join shows the circle's spinner instead.
+        setWhy(null);
+        setOpenedAt(Date.now());
+      }
+      const previous = attachment;
+      if (again) {
+        attachment = terminalAttachment(id);
+        attachmentRef.current = attachment;
+        void previous.dispose().then(result => {
+          if (result.failures) console.warn("Terminal attachment cleanup failed", result);
+        });
+      }
+      const joining = attachment;
+      const opened = joining.open(term.cols, term.rows, termHistory());
+      return opened
+        .then(() => joining.attach())
+        .then(async (a) => {
+          if (stopped || mine !== generation) return;
+          setJoining(false);
+          // An open that lands after 停止等待 is still an open: the
+          // terminal is there, so the pane shows it.
+          setWhy(null);
+          setStall(null);
+          setStallSince(0);
+          silentWait = SILENT_RETRY_FIRST;
+          failures = 0;
+          setGone(false);
+          if (again) {
+            frames.drop();
+            term.reset();
+            predict.clear();
+            kitty.reset();
+            iip = iipSizes();
+          }
+          // Everything the feed holds — it began with the host's ring
+          // dump, so the screen arrives *with its history*, the same
+          // replay the host gives any attacher. Its old questions get no
+          // answers (`replay`).
+          trace(`attach ${a.bytes.length} to ${a.seq}`);
+          // **Shown once the attach is parsed** (item 46): a version-3
+          // host hands a snapshot, and the screen appears whole — never
+          // the bytes scrolling by under the person. The opening cover
+          // stays over the pane until xterm has them.
+          //
+          // **…and once the scroller knows whose it is** (item 51): a tmux
+          // row on a phone gives the scroller to the pane's history or to
+          // the program's wheel by the first history read, and a drag
+          // begun before that read landed was stopped dead by it. The
+          // cover waits for the read, `DECIDE_MAX_MS` at most.
+          const landed = () => {
+            const shown = () => {
+              if (stopped || mine !== generation) return;
+              setOpening(false);
+              setOpenedAt(null);
+            };
+            const history = tmuxHistoryRef.current;
+            if (!history) return shown();
+            void Promise.race([history.decided(), new Promise((r) => window.setTimeout(r, DECIDE_MAX_MS))]).then(shown);
+          };
+          // What the replay left the face in, for the app's notes (item 33).
+          const noted = (n: number) => () => firstTouchRef.current?.attached(n);
+          if (a.bytes) {
+            const bytes = b64bytes(a.bytes);
+            await new Promise<void>(done => replay(bytes, () => {
+              landed();
+              noted(bytes.length)();
+              done();
+            }));
+          } else {
+            landed();
+            noted(0)();
+          }
+          if (stopped || mine !== generation) return;
+          lastBeat = performance.now();
+          seq = a.seq;
+          joined = true;
+          // The pane is this face's size now: a tmux row's history can be
+          // read (item 33).
+          tmuxHistoryRef.current?.joined();
+          // Wired only now: a resize racing the open would size a pty
+          // the open is about to size again.
+          resizing ??= term.onResize(({ cols, rows }) => {
+            attachment.resize(cols, rows).catch(() => {});
+          });
+          if (again) {
+            fit.fit();
+            joining.resize(term.cols, term.rows).catch(() => {});
+            term.scrollToBottom();
+            // A reload keeps the terminal the focus, and the keyboard as
+            // it was.
+            if (term.textarea) holdFocus(term.textarea, finger);
+          }
+          // Socket attachment precedes rendering. Release automatic shell
+          // input only after replay no longer suppresses live query replies.
+          await joining.ready();
+          if (stopped || mine !== generation) return;
+          void loop();
+        })
+        .catch((e: unknown) => {
+          if (stopped || mine !== generation) return;
+          setOpening(false);
+          setOpenedAt(null);
+          setJoining(false);
+          joined = false;
+          if (e instanceof TerminalUnavailable) {
+            setWhy(null);
+            setStall(e.miss);
+            setStallSince(was => was || Date.now());
+            window.clearTimeout(silentRetry);
+            silentRetry = window.setTimeout(() => void join(true), silentWait);
+            silentWait = Math.min(SILENT_RETRY_MOST, silentWait * 2);
+          } else {
+            setStall(null);
+            setStallSince(0);
+            setWhy(String((e as { message?: string })?.message ?? e));
+          }
+        }).finally(() => {
+          recoveryJoining.current--;
+          notifyRecovery();
+        });
+    };
+    let silentRetry = 0;
+    let silentWait = SILENT_RETRY_FIRST;
+    const reopenHere = () => join(true);
+    reopenRef.current = reopenHere;
+    // For the gates, as `__xterm` is.
+    (box as HTMLDivElement & { __reopen?: () => Promise<void> }).__reopen = reopenHere;
+    reopeners.set(id, reopenHere);
+
+    setOpening(true);
+    // **Opened at the size it will have** (T-27, the terminal audit: the
+    // pty got 114×40 at open and 114×46 two seconds later — two SIGWINCHs,
+    // the first wrong; item 15 A, the owner's phone and Mac: no scrolling
+    // after the first entry until the keyboard or a window resize fitted
+    // again). The first fit and the pty's first size wait until the box
+    // has a size and the screen's entrance has finished (`settled`), then
+    // for the frame after; a char size xterm could not measure at `open`
+    // is measured now (`resize` to the same size does that, xterm.js #785).
+    // Every later change of the box's size fits again (the observer below:
+    // the keyboard, the deck's fold, a window drag).
+    const entering = new AbortController();
+    let firstFrame = 0;
+    void settled(box, entering.signal).then(() => {
+      if (stopped) return;
+      firstFrame = window.requestAnimationFrame(() => {
+        if (stopped) return;
+        term.resize(term.cols, term.rows);
+        fit.fit();
+        native.sync();
+        trace("fit");
+        void join(false);
+      });
+    });
+
+    // Keys travel whole: xterm encodes every key, modifier, mouse
+    // report and (bracketed, when the program asked) paste into the
+    // bytes a terminal sends, and they go out the same `term_key` road
+    // as ever. The immediate re-poll is what makes echo feel wired
+    // rather than polled.
+    //
+    // The latches (`TermKeys`) take the next key xterm hands out — a
+    // character typed on the soft keyboard becomes its control form (C →
+    // 0x03) and, for Alt, gets an ESC before it — and let go; a mouse
+    // report passes and leaves them waiting.
+    // **One send at a time, in the order xterm handed them out** (T-3,
+    // the terminal audit: on the web face 17 of 51 two-answer asks reached
+    // the pty sentinel-first, and fast typing arrived swapped — one HTTP
+    // POST per `onData`, nothing ordering them). Everything typed or
+    // answered while a send is in flight is coalesced into the next one,
+    // so a burst costs one round trip, not one per key. Tauri's own IPC
+    // was already ordered; a browser's fetches are not.
+    //
+    // **And no frame over 64 KiB** (T-16): the host takes at most 1 MiB a
+    // frame, and a paste bigger than that used to go as one. A chunk is
+    // 16 Ki characters — 64 KiB at most once UTF-8 encoded — and the
+    // chunks keep their order like everything else here.
+    let outbox: { view: ReturnType<typeof terminalAttachment>; bytes: string } | null = null;
+    let sending = false;
+    let scrollHealthNotes: ReturnType<typeof notesScrollHealth> | null = null;
+    const send = (bytes: string, protocol = false) => {
+      if (recoveryRetired.current && !protocol) return;
+      const view = attachment;
+      if (outbox?.view === view) outbox.bytes += bytes;
+      else outbox = { view, bytes };
+      if (sending) return;
+      sending = true;
+      recoverySending.current++;
+      void (async () => {
+        try {
+          while (outbox && !stopped) {
+            const batch = outbox;
+            if (batch.view !== attachment) { outbox = null; continue; }
+            // Never split a surrogate pair across two frames.
+            let cut = Math.min(batch.bytes.length, CHUNK_CHARS);
+            if (cut < batch.bytes.length && /[\ud800-\udbff]/.test(batch.bytes[cut - 1])) cut -= 1;
+            const next = batch.bytes.slice(0, cut);
+            batch.bytes = batch.bytes.slice(cut);
+            if (!batch.bytes) outbox = null;
+            const started = performance.now(), queued = next.length + batch.bytes.length;
+            scrollHealthNotes?.sending(started, queued);
+            await batch.view.key(next).catch(() => {});
+            scrollHealthNotes?.sent(started, performance.now(), queued);
+          }
+        } finally {
+          sending = false;
+          recoverySending.current--;
+          notifyRecovery();
+          pollNow.current();
+        }
+      })();
+    };
+    // **A paste of more than one line asks first** (roadmap 4.3): how many
+    // lines and the first, then 粘贴 or 取消 — iTerm2's and Windows
+    // Terminal's multi-line paste warning, because a newline in a paste
+    // is an Enter a person did not press. Every paste comes through here:
+    // the system's (⌘V, iOS's callout) and the key row's (`term.paste`).
+    // xterm still brackets what goes when the program asked for that.
+    //
+    // **Under bracketed paste nothing asks** (item 55, Windows Terminal's
+    // rule): a program that turned on `?2004h` (zsh, fish, Claude Code,
+    // vim) takes the paste as one piece and runs nothing by itself, so a
+    // newline in it is not an Enter. Without it the question stays, and
+    // also comes for a single line that ends in a newline — that one runs
+    // the moment it lands.
+    const pasteRaw = term.paste.bind(term);
+    const guarded = (text: string) => {
+      if (term.modes.bracketedPasteMode) return pasteRaw(text);
+      const unix = text.replace(/\r\n?/g, "\n");
+      const lines = unix.replace(/\n+$/, "").split("\n");
+      if (lines.length < 2 && !unix.endsWith("\n")) return pasteRaw(text);
+      setAsking({
+        text: gui.paste_ask(lines.length),
+        detail: lines[0],
+        yes: gui.key_paste,
+        no: gui.delete_keep,
+        go: () => pasteRaw(text),
+        stop: () => {},
+      });
+    };
+    term.paste = guarded;
+    // A picture with no text goes down the drop's road (item 60 part 4).
+    const pasted = (e: ClipboardEvent) => {
+      const got = pastedFrom(e.clipboardData);
+      if ("text" in got && !got.text) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if ("images" in got) dropFilesRef.current(got.images);
+      else guarded(got.text);
+    };
+    term.textarea?.addEventListener("paste", pasted, true);
+    // **The size follows the face in use** (the audit's spec rule 8,
+    // tmux's `window-size latest`): two faces on one session share one
+    // pty, and the one a person types into, after a quiet spell, says its
+    // size again — so the phone and the Mac each see a whole screen while
+    // they are the one being used. Only input counts: an answer from a
+    // face nobody is looking at must not take the size (tmux asks for the
+    // size at every resize, and both faces answer). An unchanged size
+    // costs nothing; the kernel signals the program only on a change.
+    let sizedAt = performance.now();
+    const ownSize = () => {
+      if (performance.now() - sizedAt < SIZE_AGAIN_MS) {
+        sizedAt = performance.now();
+        return;
+      }
+      sizedAt = performance.now();
+      attachment.resize(term.cols, term.rows).catch(() => {});
+    };
+    const data = term.onData((d) => {
+      const preencoded = isEncodedKeyInput(term);
+      const reply = !preencoded && isReply(d);
+      const focusReport = !preencoded && isFocusReport(d);
+      if (replaying > 0 && (reply || focusReport)) return;
+      // A retired execution-home seat may finish protocol IO, not new input.
+      if (recoveryRetired.current && !reply) return;
+      // The field let go for a touch or a selection (item 54) is not the
+      // person leaving the terminal: the program is not told.
+      if (focusReport && selectionHolds()) return;
+      if (!reply && !focusReport) ownSize();
+      let out = d;
+      const m = modsRef.current;
+      // An answer to a live question is not a key: it neither takes a
+      // latch nor waits for one.
+      if (!reply && !MOUSE_REPORT.test(d)) blink.typed();
+      if (!preencoded && (m.ctrl || m.alt) && !reply && !MOUSE_REPORT.test(d)) {
+        out = d.length === 1 ? (kittyTyped(term, d, m.ctrl, m.alt) ?? typed(d, m)) : d;
+        latch(afterKey(m));
+      }
+      send(out, reply);
+      // An answer is not typing; a key is, and a history replay's keys
+      // are not anybody's (`lib/term-predict`).
+      if (!reply && replaying === 0) predict.typed(out);
+    });
+    // **Command blocks** (roadmap 2.3): drawn from the marks; a block's
+    // actions on a right-click or a long press on its prompt; ⌘↑ ⌘↓, the
+    // menu's jumps and the key sheet's two chevrons move between prompts.
+    // **Drawn only with the command separators setting on** (item 27, off
+    // by default): the marks are kept either way, so the acts and the
+    // jumps below do not depend on it.
+    let unblock: ReturnType<typeof drawBlocks> | null = termBlockLines() ? drawBlocks(term, marks) : null;
+    const relined = onTermBlockLines((on) => {
+      if (on && !unblock) unblock = drawBlocks(term, marks);
+      if (!on && unblock) {
+        unblock.dispose();
+        unblock = null;
+      }
+    });
+    (box as HTMLDivElement & { __drawn?: () => number }).__drawn = () => unblock?.size() ?? 0;
+    const actsFor = (b: Block) => {
+      const command = commandOf(term, b);
+      const acts: { name: string; label: string; run: () => void }[] = [];
+      if (b.output) {
+        acts.push({
+          name: "copy-output",
+          label: gui.block_copy_output,
+          run: () => void navigator.clipboard?.writeText(outputOf(term, b)).catch(() => {}),
+        });
+      }
+      if (command) {
+        acts.push({
+          name: "copy-command",
+          label: gui.block_copy_command,
+          run: () => void navigator.clipboard?.writeText(command).catch(() => {}),
+        });
+        // Again only at a prompt: into a running program it would be
+        // keystrokes, not a command.
+        const at = marks.current();
+        if (!marks.running() && at?.input && !at.output) {
+          acts.push({ name: "rerun", label: gui.block_rerun, run: () => send(`\x15${command}\r`) });
+        }
+      }
+      // **Output that is data** (roadmap 3.4): JSON or a table.
+      const read = b.output ? peekOf(outputOf(term, b)) : null;
+      if (read) acts.push({ name: "peek", label: gui.block_peek, run: () => setData({ command, peek: read }) });
+      if (b.output) {
+        acts.push({
+          name: "to-agent",
+          label: gui.block_to_agent,
+          run: () => {
+            const status = b.exit === undefined || b.exit === null ? "" : `\n(exit ${b.exit})`;
+            handOff(`${programOf(command) || "output"}.txt`, `$ ${command}${status}\n\n${outputOf(term, b)}\n`);
+            askNewSession(machine ?? "", b.cwd ?? marks.cwd() ?? "");
+          },
+        });
+      }
+      return acts;
+    };
+    const showBlock = (row: number, x: number, y: number, promptOnly: boolean): boolean => {
+      const b = blockAt(marks, row);
+      if (!b || (promptOnly && !onPromptOf(b, row))) return false;
+      const acts = actsFor(b);
+      if (acts.length === 0) return false;
+      const r = box.getBoundingClientRect();
+      setBlockMenu({ x: x - r.left, y: y - r.top, acts });
+      return true;
+    };
+    // **A secondary click is one menu, everywhere on the pane**
+    // (Terminal.app's and iTerm2's: a context menu with Copy and Paste):
+    // Copy when something is selected, Paste, then the block's own acts when
+    // the click is on a block. Never WebKit's text-field menu, which came
+    // up off a block (Look Up, Spelling…) and none of whose items mean
+    // anything in a terminal.
+    const rightClick = (e: MouseEvent) => {
+      e.preventDefault();
+      // A program that holds the mouse has the click too (tmux's own
+      // menu, an editor's): iTerm2 reports it and shows nothing.
+      if (term.modes.mouseTrackingMode !== "none") return;
+      const at = cellAt(term, e.clientX, e.clientY);
+      const b = at ? blockAt(marks, at.row) : null;
+      const selection = copyable(term.getSelection());
+      const acts: { name: string; label: string; run: () => void }[] = [];
+      if (selection) {
+        acts.push({ name: "copy", label: menu.copy, run: () => void navigator.clipboard?.writeText(selection).catch(() => {}) });
+      }
+      acts.push({
+        name: "paste",
+        label: menu.paste,
+        run: () => pasteInto(term, (files) => dropFilesRef.current(files)),
+      });
+      if (b) acts.push(...actsFor(b));
+      const r = box.getBoundingClientRect();
+      setBlockMenu({ x: e.clientX - r.left, y: e.clientY - r.top, acts });
+    };
+    box.addEventListener("contextmenu", rightClick);
+    // **Through tmux** (item 21) tmux holds the screen and the history:
+    // its own copy mode moves between the front pane's prompts, and the
+    // row's ledger, read off every pane, says where that pane is.
+    // **A shell with the person's own tmux in front** (item 58) is a tmux
+    // row while it is there: its prompts are tmux's, and on a Mac the
+    // wheel goes to tmux's copy mode (`lib/term-shell-tmux`).
+    const unpage = wheelsToPages(box, term, () => {
+      const history = tmuxHistoryRef.current;
+      history?.approached();
+      return history?.pane() ?? null;
+    });
+    const shellTmux = SHELL_ROW(id) ? followsShellTmux(term, (rows) => attachment.scroll(rows)) : null;
+    const unwheel =
+      shellTmux && !window.matchMedia("(pointer: coarse)").matches ? wheelsToShellTmux(box, term, shellTmux, (rows) => attachment.scroll(rows)) : () => {};
+    const viaTmux = () => (TMUX_ROW.test(id) || !!shellTmux?.front()) && term.buffer.active.type === "alternate";
+    (box as HTMLDivElement & { __jump?: (dir: -1 | 1) => void }).__jump = (dir) => {
+      if (viaTmux()) void attachment.prompt(dir < 0).catch(() => {});
+      else jumpToPrompt(term, marks, dir);
+    };
+    // The menu's ⌘⇧; and the key sheet's 历史命令 (roadmap 2.6).
+    (box as HTMLDivElement & { __history?: () => void }).__history = () => {
+      const d = doingRef.current;
+      // The person's tmux pane in front marks nothing (SESS-BRIEF 3).
+      if (d?.pane_unmarked) {
+        setHistory({ cwd: undefined, atPrompt: false, unmarked: true });
+        return;
+      }
+      if (viaTmux()) {
+        setHistory({ cwd: d?.cwd ?? undefined, atPrompt: !!d?.cwd && !d.running });
+        return;
+      }
+      const at = marks.current();
+      setHistory({ cwd: marks.cwd(), atPrompt: !marks.running() && !!at?.input && !at.output });
+    };
+    // **Under a finger the selection is iOS's own** (item 54,
+    // `lib/term-select`): handles, loupe, the system's menu with khor's
+    // 打开 and 粘贴. A mouse keeps xterm's selection.
+    const claimable = (row: number) => {
+      const b = blockAt(marks, row);
+      return !!b && onPromptOf(b, row) && actsFor(b).length > 0;
+    };
+    // `at`: khor's own selection, with the keyboard up (item 73): the
+    // menu is shown there, and carries 拷贝 itself (iOS's menu has its own).
+    const itemsFor = (p: Picked, at?: MenuBox) => {
+      const items: EditItem[] = [];
+      // A chosen item ends the selection: the terminal has its keys back.
+      const done = () => selectsNow?.end();
+      if (at)
+        items.push({
+          id: "copy",
+          title: menu.copy,
+          run: () => {
+            done();
+            // The app wrote the pasteboard natively; this is the browser's.
+            void navigator.clipboard?.writeText(p.text).catch(() => {});
+          },
+        });
+      const open = (run: () => void) =>
+        items.splice(at ? 1 : 0, 0, {
+          id: "open",
+          title: gui.web_open,
+          run: () => {
+            done();
+            run();
+          },
+        });
+      const offer = () => (at ? showEditMenuAt(at, items.slice(), p.text) : offerEditMenu(items.slice()));
+      const url = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(p.text) ? p.text : urlAt(term, p.from.row, p.from.col);
+      if (url) open(() => (/^file:/i.test(url) ? fileLink(url) : openUrl(url)));
+      items.push({
+        id: "paste",
+        title: menu.paste,
+        run: (text, image) => {
+          done();
+          if (text) term.paste(text);
+          else if (image) dropFilesRef.current([pastedImage(image)]);
+        },
+      });
+      offer();
+      if (url || viaHistory()) return;
+      // A path under the selection: listed on the machine, so a moment
+      // later; the menu shown after it carries 打开.
+      void pathsOn(term, here, cwdAt, p.from.row).then((found) => {
+        const hit = found.find((f) => covers(f, p.from.row, p.from.col));
+        if (!hit || !selectsNow?.layer.isConnected || (at && !selectionUp())) return;
+        open(() => openPath(hit.target));
+        offer();
+      });
+    };
+    const viaHistory = () => !!tmuxHistory?.over();
+    // **No refit while a selection is up** (item 73): a keyboard that
+    // rose or fell under it would cost it; the refit runs when it ends.
+    let fitOwed = false, measureOwed = false;
+    const refit = () => {
+      if (selectionUp()) {
+        fitOwed = true;
+        return;
+      }
+      if(measureOwed){measureOwed=false;term.resize(term.cols,term.rows);}
+      fit.fit();
+    };
+    selectsNow = window.matchMedia("(pointer: coarse)").matches
+      ? nativeSelects({
+          live: term,
+          over: () => tmuxHistory?.over() ?? null,
+          scroller: scrollerRef.current!,
+          host: scrollerRef.current!.querySelector<HTMLElement>("[data-term-stick]")!,
+          claimable,
+          claim: (row, x, y) => showBlock(row, x, y, true),
+          keyboardUp: () => keyboardUp(term.textarea ?? null),
+          keeps: keyPanelUp,
+          refocus: (up, inGesture) => {
+            const f = term.textarea;
+            if (!f) return;
+            if (up && inGesture) raiseKeyboard(f);
+            else if (up) holdFocus(f, true);
+            else lowerKeyboard(f);
+          },
+          picked: (p, at) => {
+            if (p) return itemsFor(p, at);
+            offerEditMenu([]);
+            hideEditMenuAt();
+            // A refit held while it was up (the keyboard moved under it).
+            if (fitOwed) {
+              fitOwed = false;
+              window.requestAnimationFrame(() => !stopped && refit());
+            }
+          },
+        })
+      : null;
+    (box as HTMLDivElement & { __selects?: Selects | null }).__selects = selectsNow;
+    // **A tmux row on a phone scrolls the front pane's history here**
+    // (item 31, `lib/term-tmux-history`), not tmux's copy mode by the
+    // wheel; a mouse's page keeps the wheel going to tmux.
+    let tmuxHistory: ReturnType<typeof holdsTmuxHistory> | null = null;
+    /** The person is up in a tmux pane's history (item 31). */
+    let historyUp = false;
+    const historyHas = () => tmuxHistory?.active() ?? false;
+    // **Under a finger the program's wheel comes from the scroller's own
+    // travel** (item 36): a native scroll, momentum and all, one notch of
+    // the wheel per row it moves, at the point the finger is — instead of
+    // a wheel per touch move, which xterm folded to a few notches. A mouse
+    // keeps xterm's own wheel.
+    const fingers = window.matchMedia("(pointer: coarse)").matches;
+    let at = { x: 0, y: 0 };
+    const landedAt = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (t) at = { x: t.clientX, y: t.clientY };
+    };
+    scrollerRef.current!.addEventListener("touchstart", landedAt, { capture: true, passive: true });
+    const notch = (rows: number) => {
+      const el = term.element;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const x = at.x || r.left + r.width / 2;
+      const y = at.y || r.top + r.height / 2;
+      for (let i = 0; i < Math.abs(rows); i++) {
+        el.dispatchEvent(new WheelEvent("wheel", { deltaY: Math.sign(rows), deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      }
+    };
+    const dragged = fingers ? () => {} : fingerWheels(term, box, historyHas);
+    // **At the bottom before, at the bottom after** (item 50's rest): a
+    // swipe that began with the shell's own buffer at its bottom puts the
+    // view back there once the keyboard has gone. A program's wheel and a
+    // tmux history view have no such bottom.
+    const atRest = () => !historyUp && !programScrolls(term) && term.buffer.active.viewportY === term.buffer.active.baseY;
+    const toRest = () => {
+      if (historyUp || programScrolls(term)) return;
+      term.scrollToBottom();
+      native.sync();
+    };
+    const swiped = swipeLowers(scrollerRef.current!, term.textarea ?? null, { atRest, toRest });
+    // **The same swipe lowers khor's key panel** (UX-31, item 49): any
+    // downward swipe, as for the keyboard.
+    const swipedPanel = swipeLowers(scrollerRef.current!, term.textarea ?? null, {
+      up: keyPanelUp,
+      lower: lowerKeyPanel,
+      atRest,
+      toRest,
+    });
+    // **The finger folds the deck** (item 50): a program holding the
+    // mouse takes the drag as its wheel, and the scroller's events alone
+    // did not fold it. Each swipe's reading goes to the doctor's
+    // terminal row (item 61 a).
+    const folds = swipeFolds(scrollerRef.current!, { judged: (line) => void faceNote(`term ${id}: ${line}`).catch(() => {}) });
+    const native = scrollsNatively(term, scrollerRef.current!, roomRef.current!, mount, { yields: historyHas, wheel: fingers ? notch : undefined });
+    // **A tmux row, or an agent inside a tmux pane** (item 33: the owner
+    // opens Claude Code's own row, not the session's): both are khor's
+    // grouped client, and the history is the pane in front's.
+    const tmuxRow = TMUX_ROW.test(id);
+    // **A shell row too** (item 58): its history is tmux's only while a
+    // tmux client the person typed is in front, which the holder follows.
+    const probe = SHELL_ROW(id) && !muxRef.current;
+    if (tmuxRow || muxRef.current || probe) {
+      tmuxHistory = holdsTmuxHistory({
+        known: tmuxRow,
+        probe,
+        observeOnly: !fingers,
+        live: term,
+        seat: historyRef.current!,
+        scroller: scrollerRef.current!,
+        room: roomRef.current!,
+        read: (since) => attachment.paneHistory(since),
+        changed: () => native.sync(),
+        moved: (to) => {
+          historyUp = to;
+          sync();
+        },
+        gained: () => setFreshBelow(true),
+        // ⚠️ 墓碑 (NOTICE-BRIEF, the owner 2026-10-08: 「暂时读不到tmux
+        // 历史这种，用户需要知道吗」): the corner said so for four seconds
+        // (IMG_5414). A note that changes no action is not shown; the drag
+        // goes to tmux's own scrolling, as it did.
+        outOfReach: () => {},
+      });
+      tmuxHistory.shown(shownRef.current);
+    }
+    tmuxHistoryRef.current = tmuxHistory;
+    const firstTouch = notesFirstTouch({
+      id,
+      term,
+      box,
+      scroller: scrollerRef.current!,
+      history: historyHas,
+      tmuxRow: tmuxHistory !== null && !probe,
+      pane: () => tmuxHistory?.pane() ?? null,
+      reread: tmuxHistory?.reread,
+      joining: () => ({ joined, tries: generation }),
+      note: (line) => void faceNote(line).catch(() => {}),
+    });
+    firstTouchRef.current = firstTouch;
+    scrollHealthNotes = notesScrollHealth({
+      enabled: fingers, term, scroller: scrollerRef.current!, shown: () => shownRef.current,
+      route: () => historyHas() ? "history" : `${term.buffer.active.type}/mouse ${term.modes.mouseTrackingMode}`,
+      note: line => void faceNote(`term ${id}: ${line}`).catch(() => {}),
+    });
+    syncScroller.current = () => {
+      native.sync();
+      trace("replayed");
+    };
+    // The way-back-down pair. `viewportY < baseY` is "the reader is up
+    // in history" in xterm's own coordinates — on the alternate screen
+    // (a full-screen program) baseY stays 0 and neither of these can
+    // fire, which is right: that screen has no history to be up in.
+    // Up in a tmux pane's history (item 31) is up too: the pill takes
+    // the person back down there, and says when output arrived meanwhile.
+    //
+    // **Output means lines** (item 52, `lib/term-gain`): an idle shell
+    // writes when the fold resizes it (a prompt redrawn in place, tmux's
+    // whole client) and tmux's clock ticks; none of that is 新输出. In a
+    // tmux pane's history the history's own reads say what arrived.
+    const gain = countsGain(term);
+    let wasBehind = false;
+    const sync = () => {
+      const b = term.buffer.active;
+      const behind = b.viewportY < b.baseY || historyUp;
+      if (behind && !wasBehind) gain.mark();
+      wasBehind = behind;
+      setBack(behind);
+      if (!behind) setFreshBelow(false);
+    };
+    const scrolled = term.onScroll(sync);
+    const wrote = term.onWriteParsed(() => {
+      const b = term.buffer.active;
+      if (historyUp) return;
+      if (b.viewportY < b.baseY) {
+        if (gain.grew()) setFreshBelow(true);
+      } else sync();
+    });
+
+    // Coalesced to one fit per frame: dragging a window fires
+    // ResizeObserver tens of times a second, and a resize is an IPC
+    // round plus a PTY resize plus a reflow — per callback that is the
+    // drag stutter itself. rAF folds a burst into at most one.
+    //
+    // **One refit per keyboard** (item 29): while the visual viewport is
+    // moving (the keyboard rising or falling, `lib/viewport`), the box
+    // shrinks a step per frame, and a fit per step resized the far pty
+    // several times for one keyboard. Then the grid is refitted once, after
+    // the box has held still for `KEYBOARD_STILL_MS`; the page's own
+    // height (`--app-h`) still follows every step, so the deck rides.
+    let raf = 0;
+    let still = 0;
+    const scheduleFit = () => {
+      if (viewportMoving(KEYBOARD_MOVING_MS)) {
+        window.cancelAnimationFrame(raf);
+        raf = 0;
+        window.clearTimeout(still);
+        // Fitted once the viewport itself has held still, however its
+        // steps were spaced.
+        const fitWhenStill = () => {
+          if (viewportMoving(KEYBOARD_STILL_MS)) still = window.setTimeout(fitWhenStill, KEYBOARD_STILL_MS);
+          else refit();
+        };
+        still = window.setTimeout(fitWhenStill, KEYBOARD_STILL_MS);
+        return;
+      }
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        refit();
+      });
+    };
+    const observer = new ResizeObserver(scheduleFit);
+    observer.observe(box);
+    // WebKit may restore a stale visual viewport/cell measurement without
+    // issuing ResizeObserver, especially after backgrounding while typing.
+    const resumed = (event:Event) => {
+      if(stopped||document.hidden&&event.type!=='khor:foreground')return;
+      measureOwed=true;scheduleFit();
+    };
+    document.addEventListener('visibilitychange',resumed);
+    for(const event of ['pageshow','focus','khor:foreground'])window.addEventListener(event,resumed);
+    // 外观's 终端字号 (the redesign, 2026-10-02): a new size reaches the
+    // open terminal at once — xterm re-measures its cells and the fit
+    // tells the far side the new rows and columns.
+    const sized = onTermSize((px) => {
+      term.options.fontSize = px;
+      fit.fit();
+    });
+    const metaed = onTermOptionMeta((on) => {
+      term.options.macOptionIsMeta = on;
+    });
+    // **⌥-drag selects a rectangle where the program does not hold the
+    // mouse** (Terminal.app's ⌥-drag; iTerm2's ⌘⌥-drag), and is the way
+    // past the program where it does (a tmux khor attached with its mouse
+    // on, `macOptionClickForcesSelection` above). xterm reads the flag at
+    // the press, so it is set just before xterm hears the press.
+    const pressed = (e: MouseEvent) => {
+      if (!e.altKey) return;
+      const held = term.modes.mouseTrackingMode !== "none";
+      if (term.options.macOptionClickForcesSelection !== held) term.options.macOptionClickForcesSelection = held;
+    };
+    box.addEventListener("mousedown", pressed, true);
+    // **A new font is measured and fitted in place** (F7.6): open
+    // terminals take it without reopening.
+    // Scrollback lines (item 17): a new depth reaches the open terminal at once;
+    // a smaller one drops the oldest lines, and the scroller's range
+    // follows.
+    const deepened = onTermHistory((lines) => {
+      term.options.scrollback = lines;
+      native.sync();
+    });
+    const fonted = onTermFont((stack) => {
+      term.options.fontFamily = stack;
+      fit.fit();
+    });
+    // A face that arrives after the first frame (the symbols face, an
+    // uploaded terminal font) is drawn in by `lib/term-atlas`, for every
+    // pane at once. ⚠️ Not here per pane: this pane's clear of the shared
+    // atlas garbled every other open pane (item 24).
+
+    return () => {
+      sized();
+      metaed();
+      box.removeEventListener("mousedown", pressed, true);
+      deepened();
+      fonted();
+      stopped = true;
+      frames.drop();
+      window.clearTimeout(timer);
+      window.clearTimeout(silentRetry);
+      pollNow.current = () => {};
+      if (raf) window.cancelAnimationFrame(raf);
+      observer.disconnect();
+      document.removeEventListener('visibilitychange',resumed);
+      for(const event of ['pageshow','focus','khor:foreground'])window.removeEventListener(event,resumed);
+      window.clearTimeout(still);
+      data.dispose();
+      term.textarea?.removeEventListener("paste", pasted, true);
+      term.textarea?.removeEventListener("copy", copied, true);
+      softDelete?.stop();
+      box.removeEventListener("beforeinput", metaEcho, true);
+      box.removeEventListener("input", metaEcho, true);
+      dragged();
+      scrollerRef.current?.removeEventListener("touchstart", landedAt, true);
+      swiped();
+      swipedPanel();
+      folds();
+      tmuxHistory?.stop();
+      tmuxHistoryRef.current = null;
+      shellTmux?.stop();
+      unwheel();
+      unpage();
+      firstTouch.stop();
+      scrollHealthNotes?.stop();
+      firstTouchRef.current = null;
+      native.stop();
+      selectsNow?.dispose();
+      offerEditMenu([]);
+      relined();
+      unblock?.dispose();
+      box.removeEventListener("contextmenu", rightClick);
+      scrolled.dispose();
+      wrote.dispose();
+      gain.stop();
+      found.dispose();
+      rung.dispose();
+      selected.dispose();
+      shifted();
+      late();
+      composing();
+      for (const k of ["compositionstart", "compositionupdate", "compositionend"]) {
+        field?.removeEventListener(k, composed as EventListener);
+      }
+      asks();
+      parked.stop();
+      gestures();
+      linked.dispose();
+      unclaimLinks();
+      box.removeEventListener("mousedown", pictureClick, true);
+      predictResized.dispose();
+      kitty.dispose();
+      term.textarea?.removeEventListener("compositionstart", composeOn);
+      term.textarea?.removeEventListener("compositionend", composeOff);
+      undrafted();
+      marks.dispose();
+      shown();
+      window.clearTimeout(bellTimer.current);
+      resizing?.dispose();
+      reopenRef.current = null;
+      if (reopeners.get(id) === reopenHere) reopeners.delete(id);
+      entering.abort();
+      window.cancelAnimationFrame(tracing);
+      window.cancelAnimationFrame(firstFrame);
+      osc52.dispose();
+      cursor();
+      unWebgl();
+      ime.stop();
+      stopLegibility();
+      stopGlass();
+      term.dispose();
+      termRef.current = null;
+      searchRef.current = null;
+      keysRef.current = null;
+      if (attachmentRef.current === attachment) attachmentRef.current = null;
+      void attachment.dispose().then(result => {
+        if (result.failures) console.warn("Terminal attachment cleanup failed", result);
+      });
+    };
+  }, [id, attempt]);
+
+  // Twenty polls a second is what a terminal costs to look at; nobody
+  // looking is nobody paying. A shorter pace takes effect at once (a
+  // screen ten seconds stale on return is the wrong thing to come back
+  // to), a longer one waits out the beat already in flight.
+  useEffect(() => {
+    const next = hidden || !active ? HIDDEN_MS : LIVE_MS;
+    shownRef.current = !hidden && active;
+    tmuxHistoryRef.current?.shown(shownRef.current);
+    const shorter = next < pace.current;
+    pace.current = next;
+    if (shorter) pollNow.current();
+  }, [hidden, active]);
+  // **Chosen again: the terminal has the keys, the screen is current**
+  // (`lib/soft-keyboard`, item 11) — without leaving or re-attaching.
+  useEffect(() => {
+    if (!active) return;
+    const field = termRef.current?.textarea;
+    if (field) holdFocus(field, window.matchMedia("(pointer: coarse)").matches);
+    pollNow.current();
+  }, [active]);
+
+  // The theme can flip while a terminal is up, and xterm holds colours,
+  // not tokens — so the tokens are re-resolved when the OS scheme or
+  // the app's own stamp changes. Watching both is the same three-state
+  // rule the stylesheets follow (system unstamped, or data-theme).
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const apply = () => {
+      const term = termRef.current;
+      if (term) {
+        term.options.allowTransparency = windowOpacity() < 1;
+        term.options = terminalAppearance(box);
+        term.refresh(0, term.rows - 1);
+      }
+    };
+    const stopTheme = onTermTheme(apply);
+    const stopSurface = onWindowSurface(apply);
+    return () => {
+      stopTheme();
+      stopSurface();
+    };
+  }, []);
+
+  // Files dropped on this pane land as paths at the cursor, quoted when
+  // they need it (iTerm2's behaviour, 批④, item 60): `term_drop` pastes,
+  // bracketed when the program asked, and for a session on another
+  // machine has that machine pull the files first and pastes where they
+  // landed — its progress on the pill's line (`dropShare`), a failure on
+  // the pill until 重试 or 取消 (`missed`).
+  //
+  // **Only the tab on screen takes a drop.** The kept tabs stand hidden
+  // at the same size in the same place (`DetailPane`), so a test of the
+  // box alone handed one Finder drop to every one of them.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const dropping = useRef(false);
+  const recoveryState = useRef({ joining, opening, dropShare, dropNames });
+  recoveryState.current = { joining, opening, dropShare, dropNames };
+  useEffect(() => {
+    let alive = true;
+    const idle = () => {
+      const state = recoveryState.current;
+      // A retired, not-yet-started animation/open wait owns no IO. Actual
+      // accepted joins, sends and transfers still block disposal until settled.
+      const presented = recoveryRetired.current || (!state.joining && !state.opening && reopenRef.current !== null);
+      return alive && !dropping.current && !recoveryJoining.current && !recoverySending.current &&
+        state.dropShare === null && state.dropNames === null && presented;
+    };
+    const owner: TerminalRecoveryOwner = { idle, retire: () => { recoveryRetired.current = true; }, rejoin: () => {
+      if (recoveryRetired.current || !idle()) return false;
+      void reopenRef.current?.();
+      return true;
+    } };
+    recoveryOwner.current = owner;
+    notifyRecovery();
+    return () => { alive = false; recoveryOwner.current = null; notifyRecovery(); };
+  }, []);
+  useEffect(() => { notifyRecovery(); }, [joining, opening, dropShare, dropNames]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const changeAttachments = useCallback((next: Attachment[]) => {
+    const removed = attachmentsRef.current.filter((x) => x.native && !next.some((n) => n.key === x.key));
+    attachmentsRef.current = next;
+    setAttachments(next);
+    if (removed.length) void termDropForget(removed.map((x) => x.path)).catch(() => {});
+  }, []);
+  useEffect(() => () => {
+    // A transfer already running owns its sources until it settles. A
+    // successful send releases them through its completion callback.
+    const paths = attachmentsRef.current.filter((x) => x.native).map((x) => x.path);
+    if (!dropping.current && paths.length) void termDropForget(paths).catch(() => {});
+  }, []);
+  const missedSeq = useRef(0);
+  const failedDropClean = useRef<(() => void) | null>(null);
+  useEffect(() => () => { failedDropClean.current?.(); }, []);
+  /** A drop that did not get there, onto the pill: `again` drops the same
+      files again, `clean` lets go of what was staged for it. */
+  const fail = useCallback(
+    (miss: Miss, names: string[], again: () => void, clean: () => void) => {
+      if (miss.kind === "cancelled") return;
+      const key = `drop-${(missedSeq.current += 1)}`;
+      const off = () => setMissed((l) => l.filter((n) => n.id !== key));
+      const n = failedNotice({
+        id: key,
+        miss,
+        machine: machine ?? null,
+        what: names,
+        capMb: DROP_CAP / 2 ** 20,
+        retry: () => {
+          off();
+          failedDropClean.current = null;
+          again();
+        },
+        cancel: () => {
+          off();
+          failedDropClean.current = null;
+          clean();
+        },
+      });
+      failedDropClean.current?.();
+      failedDropClean.current = clean;
+      setMissed((l) => [...l.filter((item) => !item.id.startsWith("drop-")), n]);
+    },
+    [machine],
+  );
+  /** One sender for selected sources, paste and OS/browser drops. The
+      registry quotes and pastes once, only after every item is landed. */
+  const dropFrom = useCallback(
+    async (
+      paths: string[] | PreparedDrop | ((gone: () => boolean) => Promise<PreparedDrop | null>),
+      names: string[],
+      from: string | null,
+      into: string | null = null,
+      onLanded?: () => void,
+    ): Promise<boolean> => {
+      if (recoveryRetired.current || (Array.isArray(paths) && paths.length === 0) || dropping.current) return false;
+      const attachment = attachmentRef.current;
+      if (!attachment || attachment.id !== id) return false;
+      // A fresh send supersedes the previous failed attempt. Its
+      // staged bytes and retry affordance must not linger after a
+      // successful retry from the selection panel.
+      failedDropClean.current?.();
+      failedDropClean.current = null;
+      setMissed((l) => l.filter((item) => !item.id.startsWith("drop-")));
+      dropping.current = true;
+      setDropShare(0);
+      setDropStopping(false);
+      setDropNames(names);
+      let cancelled = false;
+      let made: PreparedDrop | null = null;
+      const watch = window.setInterval(() => {
+        attachment.dropProgress().then((p) => p !== null && !cancelled && setDropShare(p), () => {});
+      }, DROP_LOOK_MS);
+      const settle = () => {
+        window.clearInterval(watch);
+        setDropShare(null);
+        setDropNames(null);
+        setDropStopping(false);
+      };
+      let cancellation: Promise<unknown> | null = null;
+      dropCancel.current = () => {
+        if (cancelled) return;
+        cancelled = true;
+        window.clearInterval(watch);
+        setDropStopping(true);
+        cancellation = attachment.dropCancel().catch(() => {});
+      };
+      try {
+        made = typeof paths === "function" ? await paths(() => cancelled) : Array.isArray(paths)
+          ? { items: paths.map((path) => ({ path, from, keep: false })), staged: [] } : paths;
+        if (!made || cancelled) {
+          if (made) await termDropForget(made.staged).catch(() => {});
+          return false;
+        }
+        // Keep the original file operation for a homogeneous source;
+        // no existing wire frame changes for single-file transfers.
+        const first = made.items[0]?.from ?? null;
+        const simple = made.items.every((x) => x.from === first && !x.keep);
+        const end = await (simple ? attachment.drop(made.items.map((x) => x.path), first, into) : attachment.dropItems(made.items, into));
+        if (end?.miss) {
+          const retry = made;
+          if (!cancelled) fail(end.miss, names,
+            () => { void dropFromRef.current(retry, names, null, into, onLanded); },
+            () => { void termDropForget(retry.staged).catch(() => {}); });
+          else await termDropForget(made.staged).catch(() => {});
+          return false;
+        }
+        if (cancelled) {
+          await termDropForget(made.staged).catch(() => {});
+          return false;
+        }
+        for (const dir of new Set((end?.landed ?? []).map(levelOf))) treeChanged({ machine: machine ?? "", here: machine == null, dir });
+        onLanded?.();
+        pollNow.current();
+        return true;
+      } catch (err: unknown) {
+        // A transport failure may leave the result unknown. Keep the
+        // selection and retry inputs; never submit a terminal command.
+        const retry = made ?? paths;
+        if (!cancelled) fail({ kind: "other", machine: null, raw: said(err) }, names,
+          () => { void dropFromRef.current(retry, names, from, into, onLanded); },
+          () => { if (made) void termDropForget(made.staged).catch(() => {}); });
+        else if (made) await termDropForget(made.staged).catch(() => {});
+        return false;
+      } finally {
+        // A cancelled operation still owns its staged bytes and selection
+        // until both preparation/transfer and the cancellation acknowledge.
+        await cancellation;
+        dropping.current = false;
+        dropCancel.current = () => {};
+        settle();
+      }
+    }, [id, machine, fail],
+  );
+  const dropFromRef = useRef(dropFrom);
+  dropFromRef.current = dropFrom;
+  const drop = useCallback(
+    (paths: string[], from: string | null, into?: string | null) => { void dropFrom(paths, paths.map(baseName), from, into ?? null); }, [dropFrom],
+  );
+  const sendAttachments = useCallback((entries: Attachment[], into: string | null = null) =>
+    dropFrom((gone) => prepareAttachments(entries, gone), entries.map((x) => x.name), null, into, () => {
+      changeAttachments(attachmentsRef.current.filter((x) => !entries.some((e) => e.key === x.key)));
+    }), [dropFrom, changeAttachments]);
+  const dropFiles = useCallback((files: File[]) => {
+    if (!files.length || dropping.current) return;
+    try { void sendAttachments(deviceAttachments(files, false, gui.machine_here)); }
+    catch (e) { fail({ kind: "other", machine: null, raw: said(e) }, files.map((x) => x.name), () => {}, () => {}); }
+  }, [sendAttachments, fail]);
+  const dropRef = useRef(drop);
+  dropRef.current = drop;
+  // A pasted picture (item 60 part 4), from the pane's own handlers.
+  dropFilesRef.current = dropFiles;
+
+  // **The OS drop is tauri's** (`lib/window-drop`): the real paths
+  // arrive on a window-wide event, so the point is checked against this
+  // pane's own box. (A row dragged out of khor's own listings is an HTML
+  // drag, on the box below.)
+  useLayoutEffect(
+    () =>
+      onWindowDrop(({ paths, from, x, y }) => {
+        if (!activeRef.current) return;
+        const box = boxRef.current?.getBoundingClientRect();
+        if (!box || x < box.left || x > box.right || y < box.top || y > box.bottom) return;
+        dropRef.current(paths, from ?? null);
+      }),
+    [id],
+  );
+
+  // The search bar's three verbs. Typing looks incrementally (the
+  // match under the caret grows with the word instead of jumping to
+  // the next one), ⏎/⇧⏎ and the two chevrons step, ⎋ and the close
+  // put it away and hand the keys back to the terminal.
+  /** A search step, whose selection of the match is not a copy. */
+  const quietly = (f: () => void) => {
+    searchSelects.current = true;
+    try {
+      f();
+    } finally {
+      searchSelects.current = false;
+    }
+  };
+  const look = (q: string, by = how) => {
+    setQuery(q);
+    const s = searchRef.current;
+    if (!s) return;
+    if (!q || !searchable(q, by)) {
+      s.clearDecorations();
+      setHits(q ? { at: -1, of: 0 } : null);
+      return;
+    }
+    quietly(() => s.findNext(q, { ...by, incremental: true, decorations: found() }));
+  };
+  const step = (dir: 1 | -1) => {
+    const s = searchRef.current;
+    if (!s || !query || !searchable(query, how)) return;
+    quietly(() => (dir > 0 ? s.findNext(query, { ...how, decorations: found() }) : s.findPrevious(query, { ...how, decorations: found() })));
+  };
+  /** A toggle pressed: remembered, and the word looked for again. The
+      addon recounts only for a new word: its `findNext` keeps the new
+      options before it asks whether they changed (addon-search 0.16,
+      `SearchState.shouldUpdateHighlighting`), so the word is dropped
+      from its cache first. */
+  const toggle = (next: FindHow) => {
+    setHow(next);
+    searchRef.current?.clearDecorations();
+    look(query, next);
+  };
+  findAgain.current = (dir) => {
+    const q = query || lastQuery.current;
+    const s = searchRef.current;
+    if (!q || !s || !searchable(q, how)) return;
+    if (!finding) {
+      setFinding(true);
+      setQuery(q);
+    }
+    quietly(() => (dir > 0 ? s.findNext(q, { ...how, decorations: found() }) : s.findPrevious(q, { ...how, decorations: found() })));
+  };
+  const stopFinding = () => {
+    if (query) lastQuery.current = query;
+    searchRef.current?.clearDecorations();
+    setFinding(false);
+    setQuery("");
+    setHits(null);
+    termRef.current?.focus();
+  };
+  // The count beside the field: nothing until there is a word, the
+  // lists' own 没有匹配的 for none, "3 / 12" otherwise. Past the
+  // highlight limit the addon stops counting and says -1; the place
+  // still means something, the total does not.
+  // Visible from the start (F4.8; W18): 「0」 before a word is typed.
+  const hitsText = !query || !hits ? "0" : hits.of === 0 ? gui.no_matches : hits.of < 0 ? `${hits.at + 1}` : `${hits.at + 1} / ${hits.of}`;
+
+  return (
+    <>
+    {/* **The find bar is a row of its own above the screen** (the audit
+        fix plan F4.8; W18): a glass capsule at the head controls' height,
+        pushing the terminal down rather than lying over the lines it
+        found — Safari's and Terminal's arrangement. A field, the count,
+        the two steps, the way out. ⚠️ 墓碑: an opaque card over the
+        screen's top-right corner. */}
+    {finding && (
+      <div data-term-find-row className="flex flex-none justify-end px-page pt-[var(--day-over)] pb-xxs">
+        <div data-term-find className="glass flex h-glass-btn min-w-0 items-center gap-1 rounded-full ps-3 pe-glass-pad">
+          <input
+            data-term-find-input
+            autoFocus
+            value={query}
+            placeholder={gui.search_terminal}
+            onChange={(e) => look(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                stopFinding();
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                step(e.shiftKey ? -1 : 1);
+              } else {
+                const again = asksToFindAgain(e.nativeEvent);
+                if (again !== 0) {
+                  e.preventDefault();
+                  step(again);
+                }
+              }
+            }}
+            className="min-w-0 w-48 bg-transparent text-callout outline-none placeholder:text-tertiary"
+          />
+          <span data-term-find-hits className="min-w-12 text-right text-caption tabular-nums text-muted-foreground">
+            {hitsText}
+          </span>
+          {/* Case and regex (item 70): VS Code's two marks, on when
+              pressed in (`GlassItem`'s on look). */}
+          <GlassItem
+            data-term-find-case
+            // The field keeps the caret: typing goes on after a press.
+            onMouseDown={(e) => e.preventDefault()}
+            aria-label={gui.match_case}
+            aria-pressed={how.caseSensitive}
+            on={how.caseSensitive}
+            onClick={() => toggle({ ...how, caseSensitive: !how.caseSensitive })}
+          >
+            <span aria-hidden className="text-caption font-label">Aa</span>
+          </GlassItem>
+          <GlassItem
+            data-term-find-regex
+            onMouseDown={(e) => e.preventDefault()}
+            aria-label={gui.match_regex}
+            aria-pressed={how.regex}
+            on={how.regex}
+            onClick={() => toggle({ ...how, regex: !how.regex })}
+          >
+            <span aria-hidden className="font-mono text-caption">.*</span>
+          </GlassItem>
+          <GlassItem data-term-find-prev aria-label={gui.match_prev} onClick={() => step(-1)}>
+            <IconChevronUp className="size-affordance" />
+          </GlassItem>
+          <GlassItem data-term-find-next aria-label={gui.match_next} onClick={() => step(1)}>
+            <IconChevronDown className="size-affordance" />
+          </GlassItem>
+          <GlassItem data-term-find-close aria-label={gui.close} onClick={stopFinding}>
+            <IconClose className="size-affordance" />
+          </GlassItem>
+        </div>
+      </div>
+    )}
+    <div
+      data-terminal
+      data-term-bell={rang}
+      ref={boxRef}
+      // **A row out of khor's own listings** (item 60, `lib/path-drag`):
+      // its machine and path, put where this session's machine reads it.
+      onDragOver={(e) => {
+        if (!carriesPath(e) && (inApp || !e.dataTransfer.types.includes("Files"))) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(e) => {
+        const dragged = droppedPath(e);
+        // Native OS files belong to onWindowDrop. Handling the HTML
+        // event as well could paste the same drop twice after enumeration.
+        if (!dragged && (inApp || !e.dataTransfer.types.includes("Files"))) return;
+        e.preventDefault();
+        if (dragged) drop([dragged.path], dragged.machine);
+        else void droppedAttachments(e.dataTransfer, gui.machine_here).then((items) => sendAttachments(items)).catch((err: unknown) => {
+          fail({ kind: "other", machine: null, raw: said(err) }, [], () => {}, () => {});
+        });
+      }}
+      // The terminal owns its own two colours; they follow the theme so
+      // a plain shell is the app's paper, not a black box. **The paper is
+      // the board's** (2026-09-30, 板是纸底是框): this was `--background`,
+      // the ground *around* the board, so the open tab above it was the
+      // board's grey and the screen under it the ground's black — two
+      // pieces where the owner saw one session. It is `--card` now, the
+      // same surface the tab joins (`check-palette` reads the box, what
+      // xterm was handed and the board, and wants one colour). The font
+      // tokens are read off this element by `fontOf` — one source, no
+      // copy in JS.
+      className={cn(
+        "relative min-h-0 flex-1 overflow-hidden bg-[var(--term-bg)] p-1 text-[var(--term-fg)]",
+        // The bell: an inset line the terminal's own yellow, gone in
+        // `BELL_MS`. Inset so the flash never changes the box's size —
+        // a resize on every bell would be a reflow on every bell.
+        rang && "shadow-[inset_0_0_0_2px_var(--term-bell)]",
+      )}
+      style={
+        {
+          "--term-bg": "var(--term-palette-bg, var(--canvas-solid))",
+          "--term-fg": "var(--term-palette-fg, var(--card-foreground))",
+          "--term-bell": terminalTheme(document.documentElement).yellow ?? ANSI16[3],
+          fontFamily: "var(--font-term)",
+          fontSize: "var(--text-term)",
+          lineHeight: "var(--text-term--line-height)",
+        } as React.CSSProperties
+      }
+    >
+      {/* xterm's mount. Everything inside is the renderer's own — the
+          gates read the buffer through `__xterm`, not this subtree. */}
+      <div data-term-scroller ref={scrollerRef} className="h-full w-full overflow-x-hidden overflow-y-auto">
+        {/* **The deck folding resizes the grid as the keyboard does** (item
+            44, overturning item 32's band): the box grows by what the fold
+            frees, the observer above refits, and the pty is told — a
+            SIGWINCH per fold, which the owner accepted (「本来不停收起打开
+            键盘也是在 resize」). */}
+        <div data-term-stick className="sticky top-0 h-full w-full">
+          <div
+            data-term-screen
+            ref={mountRef}
+            // Held back while the pipe is being asked for again: the last
+            // screen that arrived, not a live one.
+            className={cn("h-full w-full transition-opacity", rejoining && "opacity-50")}
+          />
+          {/* A tmux pane's history on a phone (item 31), over the live
+              screen while the person is up in it. */}
+          <div data-term-history ref={historyRef} className="invisible absolute inset-0" />
+        </div>
+        <div data-term-room ref={roomRef} aria-hidden />
+      </div>
+      {asking && (
+        <div
+          data-term-ask
+          role="alertdialog"
+          className="glass absolute inset-x-2 bottom-2 z-20 flex flex-col gap-in rounded-lg p-3 font-sans"
+        >
+          <span className="text-body">{asking.text}</span>
+          {asking.detail && (
+            <span data-term-ask-detail className="truncate text-callout text-muted-foreground" style={{ fontFamily: "var(--font-term)" }}>
+              {asking.detail}
+            </span>
+          )}
+          <span className="flex justify-end gap-in">
+            <button
+              type="button"
+              data-term-ask-no
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                asking.stop();
+                setAsking(null);
+              }}
+              className="min-h-touch rounded-md px-3 text-body hover:bg-fill"
+            >
+              {asking.no}
+            </button>
+            <button
+              type="button"
+              data-term-ask-yes
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                asking.go();
+                setAsking(null);
+              }}
+              className="min-h-touch rounded-md bg-fill-strong px-3 text-body"
+            >
+              {asking.yes}
+            </button>
+          </span>
+        </div>
+      )}
+      {composingText && (
+        <div
+          data-term-composing
+          aria-hidden
+          className="glass pointer-events-none absolute inset-x-2 bottom-2 z-10 truncate rounded-md px-3 py-1 text-[length:var(--text-term)]"
+          style={{ fontFamily: "var(--font-term)", marginBottom: composeLift }}
+        >
+          {composingText}
+        </div>
+      )}
+      {peek && (
+        // **A picture, opened whole** (roadmap 3.3): over the pane, fitted,
+        // two fingers to look closer (`usePinch`, the conversation's own).
+        // The ground around it, ×, or Esc closes it.
+        <div
+          data-term-picture
+          role="dialog"
+          aria-label={gui.term_picture}
+          className="absolute inset-0 z-30 flex items-center justify-center bg-background p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPeek(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            e.stopPropagation();
+            setPeek(null);
+            termRef.current?.focus();
+          }}
+        >
+          <img ref={pinch} src={peek} alt="" className="h-full w-full object-contain" />
+          <GlassCircle aria-label={gui.close} data-term-picture-close className="absolute bottom-2 right-2" onClick={() => setPeek(null)}>
+            <IconClose />
+          </GlassCircle>
+        </div>
+      )}
+      {history && (
+        <TermHistory
+          machine={machine ?? ""}
+          cwd={history.cwd}
+          unmarked={history.unmarked}
+          onClose={() => {
+            setHistory(null);
+            termRef.current?.focus();
+          }}
+          onPick={(text) => {
+            // At a prompt the line is replaced by it, not run (⌃U, then
+            // the text — 重新运行's way without its Enter); while a
+            // program runs it is copied instead.
+            if (history.atPrompt) termRef.current?.input(`\x15${text}`, true);
+            else void navigator.clipboard?.writeText(text).catch(() => {});
+            setHistory(null);
+            termRef.current?.focus();
+          }}
+        />
+      )}
+      {data && (
+        <div
+          data-term-data
+          role="dialog"
+          aria-label={data.command || gui.block_peek}
+          className="absolute inset-0 z-30 flex flex-col bg-background"
+          // Esc with the focus in here (a column's name was clicked);
+          // with it on the terminal, the key handler above closes it.
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            e.stopPropagation();
+            setData(null);
+            termRef.current?.focus();
+          }}
+        >
+          <TermPeek peek={data.peek} />
+          <GlassCircle aria-label={gui.close} data-term-data-close className="absolute bottom-2 right-2" onClick={() => setData(null)}>
+            <IconClose />
+          </GlassCircle>
+        </div>
+      )}
+      {blockMenu && (
+        <div
+          data-term-block-menu
+          role="menu"
+          className="glass absolute z-20 flex min-w-44 flex-col rounded-lg p-1"
+          style={{
+            left: Math.max(8, Math.min(blockMenu.x, (boxRef.current?.clientWidth ?? 0) - 192)),
+            top: Math.max(8, Math.min(blockMenu.y, (boxRef.current?.clientHeight ?? 0) - 48 * blockMenu.acts.length)),
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {blockMenu.acts.map((a) => (
+            <button
+              key={a.name}
+              type="button"
+              role="menuitem"
+              data-term-block-act={a.name}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setBlockMenu(null);
+                a.run();
+              }}
+              className="min-h-touch rounded-md px-3 text-left text-body hover:bg-fill"
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* The way back down, and the only sign that anything arrived
+          while the reader was up in history. Two sentences on one
+          control: "something came in" and "you are simply not at the
+          bottom" are different reasons to press it, and one word for
+          both would make the arrival silent. Absent at the bottom,
+          which is what lets it go to zero. */}
+      {back && <ScrollToBottom data-term-bottom fresh={freshBelow}
+        aria-label={freshBelow?gui.term_new_output:gui.to_bottom}
+        onClick={() => {
+          const history = tmuxHistoryRef.current;
+          if (history?.over()) history.toBottom();
+          else termRef.current?.scrollToBottom();
+          termRef.current?.focus();
+        }}/>}
+      {/* ⚠️ 墓碑 (NOTICE-BRIEF, IMG_5412): reconnecting was a bubble
+          floating at the top of the screen it held (`RejoinPill`), over
+          the program's text. It is the session pill's now. */}
+      {linkFailure&&<div data-term-link-error role="alert" className="absolute inset-x-row bottom-row z-20 flex items-center gap-in rounded-lg bg-popover px-row py-in text-callout shadow-(--shadow-float)">
+        <span className="min-w-0 flex-1 break-words">{linkFailure}</span>
+        <button type="button" aria-label={gui.close} className="grid min-h-touch min-w-touch place-items-center" onMouseDown={e=>e.preventDefault()} onClick={()=>{linkAction.current++;setLinkFailure(null);}}><IconClose className="size-affordance"/></button>
+      </div>}
+      {opening && !why && openedAt !== null && (
+        <div data-term-opening className="absolute inset-0 z-10 bg-card font-sans">
+          <Waiting
+            since={openedAt}
+            machine={machine}
+            onCancel={() => {
+              setOpening(false);
+              setOpenedAt(null);
+              setWhy(machine ? gui.waiting_stopped(machine) : gui.waiting_stopped_here);
+            }}
+            onRetry={() => setAttempt((n) => n + 1)}
+          />
+        </div>
+      )}
+      {why ? (
+        // Centred, not a corner label: there is no screen behind it to
+        // annotate, and this sentence is the whole of what the pane has
+        // to say — with 重试, which opens it again from the start.
+        <div data-term-why className="absolute inset-0 z-10 bg-card font-sans">
+          <RegionState state="error" message={why} onRetry={() => setAttempt((n) => n + 1)} />
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "pointer-events-none absolute right-2 z-10 flex flex-col items-end gap-1 text-caption",
+            // Under the search bar while that is up, so the two never
+            // overprint each other — and under the day while that floats
+            // over the top of the pane (`--day-over`, `DetailPane`).
+            finding ? "top-[var(--spacing)]" : "top-[calc(var(--spacing)+var(--day-over))]",
+          )}
+        >
+          {gone && (
+            <div data-term-over className="text-muted-foreground">
+              {gui.term_over}
+            </div>
+          )}
+          {/* ⚠️ 墓碑 (NOTICE-BRIEF): a drop's failure in red, the backend's
+              sentence with the dial's English in it (IMG_5413), and the
+              tmux history's note in grey (IMG_5414), right-aligned here
+              over the program's own text. A failed drop is the pill's now
+              (`lib/pill-notices`); the note is not shown. */}
+        </div>
+      )}
+    </div>
+    {/* **Under a finger, the keys a soft keyboard lacks and the switch
+        for the keyboard** (`TermKeys`, 2026-10-02). On the narrow face
+        they go to the session bar (row 2, and row 1's right end); where
+        there is no bar — the wide face on an iPad — the row stands here,
+        under the screen, and the switch is not drawn. */}
+    {/* **Reload, right of ‹** (2026-10-03, the owner: 「term 得有个刷新键，
+        可以在返回键右侧，点击后刷新这个终端，因为有时候会卡住」): joins the
+        session again from scratch (`reopen`). On the wide face it stands
+        at the end of the tab strip, among the page's verbs. While it
+        joins the glyph turns and nothing else changes; it stays pressable. */}
+    {/* While files go in, the same seat cancels them (the owner
+        2026-10-07 12:50), as a page's reload is its stop while it loads. */}
+    {active && dropNames !== null && (
+    <BarSeat at="lead">
+      <GlassCircle
+        data-term-drop-stop
+        aria-label={gui.term_drop_stop}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => dropCancel.current()}
+      >
+        <IconClose />
+      </GlassCircle>
+    </BarSeat>
+    )}
+    {/* **The pill's room is the notice's** (NOTICE-BRIEF): while
+        something stops the session the deck's pill says it, and its
+        立即重试 / 重试 are in the grown view — no reload beside it. */}
+    {active && dropNames === null && !(inBar && (missed.length > 0 || rejoining)) && (
+    <BarSeat at="lead">
+      <GlassCircle
+        data-term-reload
+        data-joining={joining || undefined}
+        aria-label={gui.term_reload}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => void reopenRef.current?.()}
+      >
+        <IconReload className={cn(joining && "animate-spin motion-reduce:animate-none")} />
+      </GlassCircle>
+    </BarSeat>
+    )}
+    {/* **The join runs the pill's line** (UX-31): the slot under the pill
+        is this tab's progress while it re-attaches. */}
+    {active && joining && (
+      <BarSeat at="progress">
+        <PillProgress />
+      </BarSeat>
+    )}
+    {/* A drop (item 60) fills the same line by how far its files got;
+        the join's own run wins while both are under way. */}
+    {active && !joining && dropShare !== null && (
+      <BarSeat at="progress">
+        <PillProgress share={dropShare} />
+      </BarSeat>
+    )}
+    {coarse && active && (
+      <>
+        {/* **The keyboard circle only in 点击按钮** (round UX-3 3a): in 自动
+            and 点击屏幕 a tap on the terminal raises the keyboard, and a
+            button for it is a second door; a swipe down lowers it in every
+            mode (this pane's own, `terminalKeyboard`). The mode is
+            `lib/term-tap`'s (`useTermWake`). */}
+        <KeyRowSeats field={keysRef} keyboard={wake === "button" && <KeyboardSwitch field={keysRef} />}>
+          <TermKeys term={termRef} mods={mods} onMods={latch} files={{ machine: machine ?? null, cwd: doing?.cwd ?? null, selected: attachments,
+            add: (items) => changeAttachments(addAttachments(attachmentsRef.current, items)),
+            remove: (item) => changeAttachments(attachmentsRef.current.filter((x) => x.key !== item.key)),
+            send: sendAttachments, dropFiles, busy: dropShare !== null, stopping: dropStopping, progress: dropShare, cancel: () => dropCancel.current() }} />
+        </KeyRowSeats>
+      </>
+    )}
+    </>
+  );
+}
+
+/**
+ * **The key row and its circle** (UX-12, the owner 2026-10-04): the deck
+ * is one row and always there — ‹, the pill, the key row's circle and the
+ * tabs circle — and the key row (`row`) stands under it only while open
+ * (`lib/key-row-open`): collapsed with the keyboard down, open with it up,
+ * toggled by the circle. The terminal ends above whichever rows show, and
+ * its composition strip with it. Drawn by the terminal on screen alone,
+ * which is the one whose keyboard the row follows. In 点击按钮 the
+ * keyboard's own circle (`keyboard`) stands just before it, so the row's
+ * circle keeps its place beside the tabs circle. Without a deck (the
+ * wide face under a finger, an iPad) there is no circle, and the row
+ * stands under the screen as it always did.
+ */
+function KeyRowSeats({
+  field,
+  keyboard,
+  children: row,
+}: {
+  field: RefObject<HTMLElement | null>;
+  keyboard: ReactNode;
+  children: ReactNode;
+}) {
+  const { open, toggle } = useKeyRowOpen(field);
+  if (!useInBar()) return <BarSeat at="under">{row}</BarSeat>;
+  return (
+    <>
+      <BarSeat at="trail">
+        {keyboard}
+        <KeyRowSwitch open={open} onToggle={toggle} />
+      </BarSeat>
+      {open && <BarSeat at="under">{row}</BarSeat>}
+    </>
+  );
+}
+
+/**
+ * **A dead terminal row's page** (P5-SHELL items 1 and 2, the owner
+ * 2026-10-12): a shell whose host is gone opened to nothing — its screen
+ * lived in the host's memory. Its host now leaves `ring.bin`, and the
+ * page draws that last screen, read-only, on the muted ground, under the
+ * one sentence that says how it ended (`session-over`, the row's own
+ * cause). A host from before the file, or one killed before its first
+ * write, left only `commands.json`: the page lists those commands —
+ * command, directory, exit code, when — under the same sentence. A live
+ * shell never comes here; its host serves the ring as ever.
+ */
+export function EndedPane({ id, at }: { id: string; at: number }) {
+  // `undefined` while asked; `null` when nothing is dead here to show.
+  const [page, setPage] = useState<EndedPage | null | undefined>(undefined);
+  useEffect(() => {
+    let gone = false;
+    termEnded(id).then(
+      (p) => !gone && setPage(p),
+      () => !gone && setPage(null),
+    );
+    return () => {
+      gone = true;
+    };
+  }, [id, at]);
+  if (!page) return <div data-term-ended-wait className="min-h-0 flex-1 bg-card" />;
+  return (
+    <div data-term-ended={page.screen ? "screen" : "ledger"} className="flex min-h-0 flex-1 flex-col bg-card font-sans">
+      <p data-term-ended-why className="flex-none border-b border-border px-3 py-2 text-callout text-muted-foreground">
+        {msg.session_over(endedWord(page.ended))}
+      </p>
+      {page.screen ? <EndedScreenView screen={page.screen} /> : <EndedLedger recent={page.recent} />}
+    </div>
+  );
+}
+
+/** The last screen, read-only: written once into a terminal of the size
+    it was laid out for. **The columns stay the screen's** — a dead shell
+    cannot redraw at another width, and a reflowed prompt (a right-hand
+    segment, a box) comes apart — so only the rows follow the pane, and a
+    pane narrower than the screen pans sideways. No keys reach anything;
+    the cursor and any mouse mode the program left on are put away, so a
+    drag selects. */
+function EndedScreenView({ screen }: { screen: EndedScreen }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    const mount = mountRef.current;
+    if (!box || !mount) return;
+    const font = fontOf(box);
+    const term = new Terminal({
+      allowProposedApi: true,
+      cols: screen.cols,
+      rows: screen.rows,
+      disableStdin: true,
+      allowTransparency: windowOpacity() < 1,
+      cursorBlink: false,
+      cursorInactiveStyle: "none",
+      scrollback: termHistory(),
+      fontFamily: font.family,
+      fontSize: font.size,
+      lineHeight: 1,
+      // Snapshots use the same selected palette as live terminals;
+      // the read-only state is conveyed by their header and input mode.
+      ...terminalAppearance(box),
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.loadAddon(new UnicodeGraphemesAddon());
+    term.loadAddon(new ImageAddon());
+    term.open(mount);
+    const stopGlass = keepTerminalGlass(term, box);
+    const stopLegibility = protectTerminal(term);
+    (box as HTMLDivElement & { __xterm?: Terminal }).__xterm = term;
+    // Fitted only while it stands: a write's callback or the observer
+    // can land after the pane went away.
+    let alive = true;
+    const refit = () => {
+      if (!alive || box.clientHeight === 0) return;
+      const d = fit.proposeDimensions();
+      if (d && d.rows > 0 && d.rows !== term.rows) term.resize(screen.cols, d.rows);
+    };
+    term.write(b64bytes(screen.bytes));
+    term.write(ENDED_MODES_OFF, () => {
+      if (!alive) return;
+      refit();
+      term.scrollToBottom();
+      box.setAttribute("data-term-ended-drawn", "");
+    });
+    const repaint = () => { term.options.allowTransparency = windowOpacity() < 1; term.options = terminalAppearance(box); };
+    const stopTheme = onTermTheme(repaint), stopSurface = onWindowSurface(repaint);
+    const seen = new ResizeObserver(refit);
+    seen.observe(box);
+    return () => {
+      alive = false;
+      seen.disconnect();
+      stopTheme(); stopSurface();
+      stopLegibility();
+      stopGlass();
+      term.dispose();
+    };
+  }, [screen]);
+  return (
+    <div
+      data-term-ended-screen
+      ref={boxRef}
+      className="relative min-h-0 flex-1 overflow-x-auto overflow-y-hidden bg-[var(--term-bg)] p-1 text-[var(--term-fg)]"
+      style={
+        {
+          "--term-fg": "var(--term-palette-fg, var(--card-foreground))",
+          fontFamily: "var(--font-term)",
+          fontSize: "var(--text-term)",
+          lineHeight: "var(--text-term--line-height)",
+        } as React.CSSProperties
+      }
+    >
+      <div ref={mountRef} className="h-full w-max min-w-full" />
+    </div>
+  );
+}
+
+/** The cursor hidden and every mouse report off, after the last screen. */
+const ENDED_MODES_OFF = "\x1b[?25l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l";
+
+/** The commands a dead shell marked, newest first: a plain list on the
+    list standard's corners — the command and its exit code, its
+    directory and when it ended. */
+function EndedLedger({ recent }: { recent: EndedCommand[] }) {
+  if (recent.length === 0) {
+    return (
+      <p data-term-ended-none className="p-4 text-center text-callout text-muted-foreground">
+        {gui.ended_commands_none}
+      </p>
+    );
+  }
+  return (
+    <ul data-term-ended-ledger aria-label={gui.ended_commands} className="min-h-0 flex-1 overflow-y-auto">
+      {recent.map((c, i) => (
+        <li key={`${c.started_ms}-${i}`} data-term-ended-row={i} className="flex flex-col gap-0.5 border-b border-border px-3 py-2">
+          <span className="flex min-w-0 items-baseline gap-3">
+            <span data-term-ended-command className="min-w-0 flex-1 truncate text-body" style={{ fontFamily: "var(--font-term)" }}>
+              {c.text}
+            </span>
+            {c.exit !== null && (
+              <span
+                data-term-ended-exit={c.exit}
+                className={cn("flex-none text-caption tabular-nums", c.exit !== 0 && !QUIET_EXITS.includes(c.exit) ? "text-[var(--state-failed)]" : "text-muted-foreground")}
+              >
+                {gui.row_ended_exit(String(c.exit))}
+              </span>
+            )}
+          </span>
+          <span className="flex min-w-0 items-baseline gap-3 text-caption text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate">{c.cwd ? shortDir(c.cwd) : null}</span>
+            <span className="flex-none tabular-nums">{ago(c.ended_ms ?? c.started_ms)}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
