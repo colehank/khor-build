@@ -1,0 +1,597 @@
+//! Real-connection acceptance (docs/NET.md): two nodes on one
+//! machine, real UDP, plus the control groups — what must not connect
+//! really doesn't. Every await is under a timeout: a control that hangs
+//! proves nothing.
+//!
+//! # The clock here is issue #73's, not this file's subject
+//!
+//! Every deadline below is sized to swallow one full first-touch stall
+//! (#73: 20-40s per process on this machine, the comment in
+//! `wait_for_endpoint_file` has the mechanism). **Uniformly**, because
+//! which call pays it is not deterministic — on 2026-08-21 `pair`
+//! cleared 15s here while `sync_now` blew 20s, and a per-call guess
+//! would be exactly that. The runtime is multi-thread for the other
+//! half of #73: that stall is *synchronous*, and on a current-thread
+//! runtime it freezes tokio's clock, so every timeout in the file
+//! silently stretches with it and a real hang stops looking like one.
+
+mod util;
+
+use std::path::Path;
+use std::time::Duration;
+
+use khor_node::Node;
+use khor_node::wide::BROADCAST;
+use khor_sync::chat::{ChatDoc, Sender, wide_dir};
+use tokio::time::timeout;
+
+/// A scratch tree that **takes itself away however the test leaves**
+/// (`crates/node/src/tests.rs::Scratch` has the whole reasoning: a
+/// cleanup written at the end of a test is skipped by the assertion
+/// that fails, so a red run leaks a directory every time it is red).
+/// A copy per file, which is this repo's convention for test helpers —
+/// it costs no dev-dependency.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+fn root(tag: &str) -> Scratch {
+    let p = std::env::temp_dir().join(format!("khor-pair-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
+    std::fs::create_dir_all(&p).unwrap();
+    util::hermetic(&p);
+    Scratch(p)
+}
+
+async fn wait_for_endpoint_file(root: &Path) {
+    // 90s, not 10 (issue #73, sampled 2026-08-20; re-confirmed on this
+    // machine 2026-08-21 — this file's two real-connection tests both
+    // timed out at `sync_now` for this reason and no other). On a Mac operated over
+    // ssh, a freshly compiled test binary is a new face to macOS: its
+    // first network-stack touch (interface enumeration,
+    // SystemConfiguration) hangs **20-40s per process**, waiting on an
+    // authorization prompt nobody can ever click.
+    //
+    // What the budgets here are distinguishing themselves from: a real
+    // hang, which is unbounded. 90s against a measured 40s ceiling is
+    // rather more than double — deliberately, because a timeout that
+    // never fires costs nothing when the test passes, and a flaky red
+    // costs a person a trip to find out it was the machine.
+    let path = root.join(".khor").join("endpoint.json");
+    timeout(Duration::from_secs(90), async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("serve should write endpoint.json");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pairing_joins_both_tables_and_chat_flows_both_ways() {
+    let ra = root("a");
+    let rb = root("b");
+
+    // alpha serves; the serve task owns its node instance.
+    let server = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let serve = tokio::spawn(async move { server.serve().await });
+    wait_for_endpoint_file(&ra).await;
+
+    // A second alpha instance plays the one-shot CLI role.
+    let a = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let ticket = a.invite().unwrap();
+
+    let b = Node::open_as(rb.to_path_buf(), "beta").unwrap();
+    let peer_name = timeout(Duration::from_secs(60), b.pair(&ticket))
+        .await
+        .expect("pairing must not hang")
+        .unwrap();
+    assert_eq!(peer_name, "alpha");
+
+    // Pairing has no direction: both tables hold both machines; one
+    // side alone means pairing is incomplete.
+    let b_names: Vec<String> = b.devices().unwrap().into_iter().map(|d| d.name).collect();
+    assert_eq!(
+        b_names,
+        vec!["alpha", "beta"],
+        "beta's table should hold both"
+    );
+    let a_names: Vec<String> = a.devices().unwrap().into_iter().map(|d| d.name).collect();
+    assert_eq!(
+        a_names,
+        vec!["alpha", "beta"],
+        "alpha's table should hold both"
+    );
+
+    // beta says a line in the broadcast, pushed to alpha; alpha's serve
+    // merges.
+    timeout(Duration::from_secs(60), b.post("@alpha from beta", &[]))
+        .await
+        .expect("a post must not hang")
+        .unwrap();
+    let outcomes = timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let (_, verdict) = outcomes
+        .iter()
+        .find(|(n, _)| n == "alpha")
+        .expect("there should be an alpha entry");
+    verdict.as_ref().expect("the sync to alpha should succeed");
+
+    let a_log = a.log(BROADCAST).unwrap();
+    let texts: Vec<String> = a_log
+        .messages
+        .iter()
+        .map(|m| format!("{:?}", m.body))
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("from beta")),
+        "alpha should receive beta's line: {texts:?}"
+    );
+
+    // The other direction: alpha says a line to nobody in particular,
+    // beta pulls it.
+    timeout(Duration::from_secs(60), a.post("back from alpha", &[]))
+        .await
+        .expect("a post must not hang")
+        .unwrap();
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let b_log = b.log(BROADCAST).unwrap();
+    let texts: Vec<String> = b_log
+        .messages
+        .iter()
+        .map(|m| format!("{:?}", m.body))
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("back from alpha")),
+        "beta should pull alpha's line: {texts:?}"
+    );
+
+    // Everything in the window so far was typed by this one person, and
+    // telling implies looking — so once the seen watermark syncs, nothing
+    // counts as unread on any device.
+    let rows = b.sessions().unwrap();
+    let alpha_row = rows
+        .iter()
+        .find(|v| v.session.id.0 == BROADCAST)
+        .expect("there should be the broadcast row");
+    assert_eq!(
+        alpha_row.session.unread, 0,
+        "own words never count as unread, on any device"
+    );
+
+    // A line nobody here typed (an agent's, say): lands as a raw block in
+    // beta's copy of the broadcast, with no seen state riding along.
+    {
+        let far = ChatDoc::new(0xFA).unwrap();
+        far.tell(
+            &Sender {
+                id: "dev-far".into(),
+                name: "far".into(),
+            },
+            "an outside line",
+        )
+        .unwrap();
+        let block = far.changes_since(&Default::default()).unwrap();
+        let dir = wide_dir(&rb, BROADCAST).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("u-00000000000000fa-00000000.loro"), &block).unwrap();
+    }
+    let rows = b.sessions().unwrap();
+    let row_b = rows.iter().find(|v| v.session.id.0 == BROADCAST).unwrap();
+    assert!(
+        row_b.session.unread > 0,
+        "the outside line should count as unread on beta"
+    );
+
+    // It syncs over and is unread on alpha too (control for the clear).
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let rows = a.sessions().unwrap();
+    let row_a = rows.iter().find(|v| v.session.id.0 == BROADCAST).unwrap();
+    assert!(
+        row_a.session.unread > 0,
+        "the outside line should be unread on alpha too"
+    );
+
+    // Seen is a decision that travels: beta looks, and alpha's badge
+    // clears without anyone touching alpha.
+    b.seen(&row_b.session.id).unwrap();
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let rows = a.sessions().unwrap();
+    let row_a = rows.iter().find(|v| v.session.id.0 == BROADCAST).unwrap();
+    assert_eq!(row_a.session.unread, 0, "seen on beta must clear on alpha");
+
+    // ── control groups ──────────────────────────────────────────────
+    // A burned token pairs nobody: gamma replays beta's ticket.
+    let rc = root("c");
+    let c = Node::open_as(rc.to_path_buf(), "gamma").unwrap();
+    let err = timeout(Duration::from_secs(60), c.pair(&ticket))
+        .await
+        .expect("refusal must not hang either")
+        .unwrap_err();
+    assert_eq!(
+        err,
+        khor_catalog::msg::bad_invite(),
+        "a replay is refused by name"
+    );
+    assert_eq!(
+        c.devices().unwrap().len(),
+        1,
+        "gamma's table should hold only itself"
+    );
+
+    // An unpaired device syncs nothing — even knowing the address.
+    // gamma copies alpha's entry into its own table by hand…
+    use khor_sync::devices::{DeviceDoc, devices_dir};
+    use khor_sync::store::load;
+    {
+        let alpha = a
+            .devices()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.name == "alpha")
+            .unwrap();
+        let loaded = load::<DeviceDoc>(&devices_dir(&rc), 0x77).unwrap();
+        loaded
+            .doc
+            .upsert(&alpha.id, &alpha.name, &alpha.addrs)
+            .unwrap();
+        let mut store = loaded.store;
+        store.flush(&loaded.doc).unwrap();
+    }
+    // …and does not even dial it: gamma is a network of its own, with its
+    // own root, and alpha is on no roster gamma trusts (docs/CONNECT.md
+    // 名单是信任的唯一出处).
+    let alpha_verdict = |outcomes: &[(String, Result<String, String>)]| {
+        outcomes
+            .iter()
+            .find(|(n, _)| n == "alpha")
+            .expect("there should be an alpha entry")
+            .1
+            .clone()
+    };
+    let outcomes = timeout(Duration::from_secs(60), c.sync_now())
+        .await
+        .expect("refusal must not hang either")
+        .unwrap();
+    assert_eq!(
+        alpha_verdict(&outcomes).unwrap_err(),
+        khor_catalog::msg::peer_not_in_roster(),
+        "a machine off this side's roster is not dialed"
+    );
+    // Now gamma takes alpha's root and roster as its own, so it does dial…
+    {
+        std::fs::copy(ra.join(".khor/root.pub"), rc.join(".khor/root.pub")).unwrap();
+        let theirs = load::<DeviceDoc>(&devices_dir(&ra), 0x78).unwrap();
+        let loaded = load::<DeviceDoc>(&devices_dir(&rc), 0x79).unwrap();
+        for (k, bytes) in theirs.doc.rosters() {
+            loaded.doc.put_roster(&k, &bytes).unwrap();
+        }
+        let mut store = loaded.store;
+        store.flush(&loaded.doc).unwrap();
+    }
+    // …and the far side still refuses by name: holding the roster is not
+    // being in the table, and it is the table that says who paired.
+    let outcomes = timeout(Duration::from_secs(60), c.sync_now())
+        .await
+        .expect("refusal must not hang either")
+        .unwrap();
+    assert_eq!(
+        alpha_verdict(&outcomes).unwrap_err(),
+        khor_catalog::msg::not_paired(),
+        "an unpaired sync is refused by name"
+    );
+
+    serve.abort();
+}
+
+/// **A ticket found later is not a key.** Real connection, real refusal,
+/// and the refusal says *expired* rather than *wrong code* — the two
+/// have different fixes and reading them as one sends people hunting for
+/// a paste error they did not make.
+///
+/// The control group is a second ticket minted the same second, taken by
+/// the same machine over the same link: pairing itself still works, so
+/// the refusal above came from the age of the ticket and not from
+/// anything else being wrong.
+///
+/// The ticket is aged by rewriting the issuer's own record of when it
+/// was minted, not by waiting fifteen minutes and not by reaching around
+/// the check: the dial, the request, the refusal and the word all go
+/// through the path a real expired ticket would.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ticket_older_than_its_window_is_refused_as_expired() {
+    let ra = root("exp-a");
+    let rb = root("exp-b");
+
+    let server = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let serve = tokio::spawn(async move { server.serve().await });
+    wait_for_endpoint_file(&ra).await;
+
+    let a = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let stale = a.invite().unwrap();
+    let token = khor_net::endpoint::Ticket::decode(&stale).unwrap().token;
+    let record = ra.join(".khor").join("invites").join({
+        let mut hash = blake3::Hasher::new();
+        hash.update(b"khor-pair-ticket-v1\0");
+        hash.update(token.as_bytes());
+        hash.finalize().to_hex().to_string()
+    });
+    assert!(record.exists(), "control: the issuer keeps a record to age");
+
+    // One millisecond past the window, on the clock that decides.
+    let minted = now_ms() - khor_node::link::INVITE_WINDOW_MS - 1;
+    std::fs::write(&record, minted.to_string()).unwrap();
+
+    let b = Node::open_as(rb.to_path_buf(), "beta").unwrap();
+    let err = timeout(Duration::from_secs(60), b.pair(&stale))
+        .await
+        .expect("a refusal must not hang")
+        .unwrap_err();
+    assert_eq!(
+        err,
+        khor_catalog::msg::invite_expired(khor_node::link::INVITE_WINDOW_MS / 60_000),
+        "expired is its own word"
+    );
+    assert_ne!(
+        err,
+        khor_catalog::msg::bad_invite(),
+        "and not the wrong-code one"
+    );
+    assert_eq!(
+        b.devices().unwrap().len(),
+        1,
+        "beta's table should hold only itself"
+    );
+    assert!(
+        !record.exists(),
+        "an expired ticket is dropped, not left to be re-refused"
+    );
+
+    // The control: a fresh ticket, same machines, same link.
+    let fresh = a.invite().unwrap();
+    let name = timeout(Duration::from_secs(60), b.pair(&fresh))
+        .await
+        .expect("pairing must not hang")
+        .unwrap();
+    assert_eq!(name, "alpha");
+    assert_eq!(
+        b.devices().unwrap().len(),
+        2,
+        "the fresh one really did pair"
+    );
+
+    serve.abort();
+}
+
+/// Minting sweeps what can never be used again — the whole of the
+/// cleanup story, run where somebody is already thinking about invites.
+#[test]
+fn minting_a_ticket_sweeps_the_ones_that_expired() {
+    let ra = root("sweep");
+    let server = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let dir = ra.join(".khor").join("invites");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let empty = dir.join("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    std::fs::write(
+        &old,
+        (now_ms() - khor_node::link::INVITE_WINDOW_MS - 1).to_string(),
+    )
+    .unwrap();
+    // What a khor from before this rule left behind: no mint instant at
+    // all. "I cannot tell how old this is" has one safe reading.
+    std::fs::write(&empty, b"").unwrap();
+
+    // Minting needs a live endpoint file; without one it refuses before
+    // sweeping, which is the wrong thing to be testing here.
+    std::fs::create_dir_all(ra.join(".khor")).unwrap();
+    std::fs::write(
+        ra.join(".khor").join("endpoint.json"),
+        serde_json::json!({ "id": "aa", "addrs": [], "pid": 1 }).to_string(),
+    )
+    .unwrap();
+
+    let ticket = server.invite().unwrap();
+    let minted = khor_net::endpoint::Ticket::decode(&ticket).unwrap().token;
+    assert!(!old.exists(), "an expired ticket is swept");
+    assert!(!empty.exists(), "and so is one whose age cannot be read");
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"khor-pair-ticket-v1\0");
+    hash.update(minted.as_bytes());
+    assert!(
+        dir.join(hash.finalize().to_hex().as_str()).exists(),
+        "while the new one stays"
+    );
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// **A pairing's row is on the inviter's disk before the joiner hears
+/// "paired"** (round NET-6; the term lane found a desk whose table lacked
+/// a phone the phone's own table had). The `Pair` arm writes the joiner's
+/// row and flushes it before it answers, so neither a first round that
+/// fails nor a desk that stops before one can leave the row only in the
+/// joiner's copy — this stops the desk with no round at all and reads its
+/// table back from disk.
+///
+/// Two machines pair **at once**, because that is what lost the row: two
+/// `Pair` arms in one resident each opened the table under the process's
+/// one loro peer, minted ops with the same names, and the second block
+/// to merge was dropped on every read (`khor_sync::store`'s `Lease`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rows_from_two_pairings_at_once_are_both_on_the_inviters_disk() {
+    let ra = root("both-a");
+    let rb = root("both-b");
+    let rc = root("both-c");
+    let server = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let serve = tokio::spawn(async move { server.serve().await });
+    wait_for_endpoint_file(&ra).await;
+    let a = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let (tb, tc) = (a.invite().unwrap(), a.invite().unwrap());
+    let b = Node::open_as(rb.to_path_buf(), "beta").unwrap();
+    let c = Node::open_as(rc.to_path_buf(), "gamma").unwrap();
+    let (pb, pc) = tokio::join!(
+        timeout(Duration::from_secs(60), b.pair(&tb)),
+        timeout(Duration::from_secs(60), c.pair(&tc)),
+    );
+    pb.expect("beta's pairing must not hang").unwrap();
+    pc.expect("gamma's pairing must not hang").unwrap();
+
+    // The desk stops before any round.
+    serve.abort();
+    let _ = serve.await;
+    let back = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let names: Vec<String> = back
+        .devices()
+        .unwrap()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["alpha", "beta", "gamma"],
+        "alpha's table on disk holds both joiners"
+    );
+}
+
+/// **A machine paired through another is answered by a third at once,
+/// not at its next quiet beat** (round NET-6). With no face on screen a
+/// resident rounds every `link::QUIET_PACE`, and until a round brings the
+/// newcomer's row a third machine refuses it as unpaired — the diagnosis
+/// probe's phone waited 20 s for its first listing on the far machine.
+/// The inviter now rounds as soon as it has paired, and a machine a
+/// stranger knocks on rounds too, at most once a `link::SYNC_EVERY`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_newly_paired_machine_is_answered_by_a_third_well_inside_the_quiet_pace() {
+    let (ra, rb, rc) = (root("third-a"), root("third-b"), root("third-c"));
+    let mut serves = Vec::new();
+    for (r, name) in [(&ra, "alpha"), (&rb, "beta"), (&rc, "gamma")] {
+        let n = Node::open_as(r.to_path_buf(), name).unwrap();
+        serves.push(tokio::spawn(async move { n.serve().await }));
+    }
+    for r in [&ra, &rb, &rc] {
+        wait_for_endpoint_file(r).await;
+    }
+    let a = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let c = Node::open_as(rc.to_path_buf(), "gamma").unwrap();
+    timeout(Duration::from_secs(60), c.pair(&a.invite().unwrap()))
+        .await
+        .expect("gamma's pairing must not hang")
+        .unwrap();
+    // Gamma's own pairing round is behind it: what follows is its quiet pace.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let b = Node::open_as(rb.to_path_buf(), "beta").unwrap();
+    timeout(Duration::from_secs(60), b.pair(&a.invite().unwrap()))
+        .await
+        .expect("beta's pairing must not hang")
+        .unwrap();
+    let dir = rc.join("tree");
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.display().to_string();
+    let began = std::time::Instant::now();
+    let mut last = None;
+    while began.elapsed() < Duration::from_secs(12) {
+        match timeout(Duration::from_secs(5), b.ls_of("gamma", &dir)).await {
+            Ok(Ok(_)) => break,
+            other => last = Some(format!("{other:?}")),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let took = began.elapsed();
+    for s in serves {
+        s.abort();
+    }
+    assert!(
+        took < Duration::from_secs(10),
+        "beta's first listing on gamma took {took:?} (last: {last:?})"
+    );
+}
+
+/// A ticket for a machine that is not there: a real id from a store that
+/// never serves, reachable only through `relays`.
+fn ghost_ticket(relays: Vec<String>) -> String {
+    let rg = root("ghost");
+    let ghost = Node::open_as(rg.to_path_buf(), "ghost").unwrap();
+    khor_net::endpoint::Ticket {
+        id: ghost.device_str().to_owned(),
+        name: "ghost".into(),
+        direct: vec![],
+        relays,
+        token: "00".repeat(16),
+    }
+    .encode()
+    .unwrap()
+}
+
+/// **A dial that times out says which side to check** (UX-8, the first
+/// run's failure cases). With the relay answering, the silence is the
+/// issuer's — its khor is not running, or it is offline — and the
+/// sentence says so; with no relay answering here, it is this machine's
+/// road out — no network, or the relay is down — and the sentence says
+/// that instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pairing_dial_that_times_out_says_which_side_is_silent() {
+    let rj = root("j");
+    let j = Node::open_as(rj.to_path_buf(), "joiner").unwrap();
+    let err = timeout(
+        Duration::from_secs(60),
+        j.pair(&ghost_ticket(vec![util::loop_relay().to_owned()])),
+    )
+    .await
+    .expect("a silent issuer must not hang the join")
+    .unwrap_err();
+    assert_eq!(
+        err,
+        khor_catalog::msg::inviter_unreachable_timeout(),
+        "relay up, issuer silent"
+    );
+
+    // A relay nobody listens on: this machine's own map and the ticket's
+    // both name it, so no relay answers anywhere.
+    let dead = "http://127.0.0.1:9".to_owned();
+    let rk = root("k");
+    std::fs::write(
+        rk.join(".khor").join("relays.json"),
+        format!(r#"{{"relays":[{{"url":"{dead}"}}],"only_mine":true}}"#),
+    )
+    .unwrap();
+    let k = Node::open_as(rk.to_path_buf(), "lonely").unwrap();
+    let err = timeout(Duration::from_secs(60), k.pair(&ghost_ticket(vec![dead])))
+        .await
+        .expect("no road out must not hang the join")
+        .unwrap_err();
+    assert_eq!(
+        err,
+        khor_catalog::msg::no_relay_reached(),
+        "no relay answers here"
+    );
+}
