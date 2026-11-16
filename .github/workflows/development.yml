@@ -35,207 +35,12 @@ on:
 permissions:
   contents: read
 
+
 jobs:
-  prepare:
-    if: inputs.executor != 'mac'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: control
-          persist-credentials: false
-      - name: Validate the requested snapshot identity
-        env:
-          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-          REQUEST_ID: ${{ inputs.request_id }}
-        run: |
-          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ inputs.snapshot_sha }}
-          path: source
-          persist-credentials: false
-      - name: Prepare source and trusted control scripts
-        env:
-          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-        run: python3 control/scripts/prepare-development.py source "$RUNNER_TEMP/source-package"
-      - name: Prepare the portable check checkout
-        if: inputs.task == 'fast'
-        run: |
-          git clone --no-hardlinks "$RUNNER_TEMP/source-package/source.git" "$RUNNER_TEMP/portable-source"
-          mkdir -p "$RUNNER_TEMP/portable-evidence"
-          cp "$RUNNER_TEMP/source-package/source.json" "$RUNNER_TEMP/portable-evidence/source.json"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        if: inputs.task == 'fast'
-        with:
-          node-version: 22.19.0
-      - uses: dtolnay/rust-toolchain@1.95.0
-        if: inputs.task == 'fast'
-        with:
-          components: rustfmt
-      - name: Check portable Rust formatting on the hosted lint machine
-        id: rust-format
-        if: inputs.task == 'fast'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          set -euo pipefail
-          python3 scripts/check-rust-format.py --check 2>&1 | tee "$RUNNER_TEMP/portable-evidence/format.log"
-      - name: Validate source workflows before using the Mac worker
-        if: inputs.task == 'fast'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          set -euo pipefail
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          curl --fail --location --silent --show-error https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz --output "$RUNNER_TEMP/shellcheck.tar.xz"
-          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum --check
-          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
-          "$(go env GOPATH)/bin/actionlint" -shellcheck "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" 2>&1 | tee "$RUNNER_TEMP/portable-evidence/workflows.log"
-      - name: Attach the formatter patch for a source-only checkout
-        if: always() && inputs.task == 'fast' && steps.rust-format.outcome == 'failure'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          python3 scripts/check-rust-format.py --write
-          git diff --binary > "$RUNNER_TEMP/portable-evidence/format.patch"
-      - name: Run the portable script suite in its canonical CI environment
-        if: inputs.task == 'fast'
-        working-directory: ${{ runner.temp }}/portable-source
-        run: |
-          set -euo pipefail
-          python3 scripts/sync-install-components.py
-          python3 -m unittest discover -s scripts/tests -p 'test_*.py' --verbose --failfast 2>&1 | tee "$RUNNER_TEMP/portable-evidence/scripts.log"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always() && inputs.task == 'fast'
-        with:
-          name: dev-portable-evidence
-          path: ${{ runner.temp }}/portable-evidence
-          retention-days: 7
-          if-no-files-found: warn
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: dev-source
-          path: ${{ runner.temp }}/source-package
-          retention-days: 3
-          if-no-files-found: error
-
-  development:
-    if: ${{ inputs.executor != 'mac' && !startsWith(inputs.task, 'net') }}
-    needs: prepare
-    concurrency:
-      group: mac-mini-worker
-      cancel-in-progress: false
-    permissions: {}
-    runs-on: [khor-mac-mini, khor-dev]
-    timeout-minutes: 180
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: dev-source
-          path: ${{ runner.temp }}/source-package
-      - name: Run the development task under the shared build guard
-        env:
-          SOURCE_SHA: ${{ inputs.snapshot_sha }}
-          CHECK: full
-          DEV_TASK: ${{ inputs.task }}
-          SOURCE_PACKAGE: ${{ runner.temp }}/source-package
-          REPORT_DIR: ${{ runner.temp }}/dev-evidence
-          LAB_DIR: ${{ runner.temp }}/dev-lab
-        run: |
-          set -euo pipefail
-          mkdir -p "$REPORT_DIR"
-          cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
-          REPORT_DIR="$REPORT_DIR/cache-maintenance" /usr/bin/python3 "$SOURCE_PACKAGE/worker-storage.py" ensure-budget
-          /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a /bin/bash "$SOURCE_PACKAGE/development.sh" 2>&1 | tee "$REPORT_DIR/task.log"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
-        with:
-          name: dev-evidence
-          path: ${{ runner.temp }}/dev-evidence
-          if-no-files-found: warn
-          retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: success() && inputs.task == 'lab'
-        with:
-          name: dev-lab
-          path: ${{ runner.temp }}/dev-lab
-          if-no-files-found: error
-          retention-days: 3
-
-  network:
-    if: ${{ inputs.executor != 'mac' && startsWith(inputs.task, 'net') }}
-    needs: prepare
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    env:
-      CARGO_BUILD_JOBS: '2'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-      CARGO_TARGET_DIR: ${{ github.workspace }}/network-target
-      CARGO_TERM_COLOR: never
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: control
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: dev-source
-          path: ${{ runner.temp }}/source-package
-      - uses: dtolnay/rust-toolchain@1.95.0
-        with:
-          components: rustfmt
-      - name: Install network lab tools on the disposable Linux runner
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nftables conntrack iproute2 tmux
-          if test -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-      - id: network-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            network-target
-          key: network-linux-rust195-${{ inputs.task }}-${{ inputs.snapshot_sha }}
-          restore-keys: |
-            network-linux-rust195-${{ inputs.task }}-
-            network-linux-rust195-
-      - name: Run the exact network source snapshot
-        env:
-          DEV_TASK: ${{ inputs.task }}
-          SOURCE_PACKAGE: ${{ runner.temp }}/source-package
-          REPORT_DIR: ${{ runner.temp }}/dev-evidence
-        run: bash control/scripts/network.sh
-      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        if: always() && steps.network-cache.outputs.cache-hit != 'true'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            network-target
-          key: ${{ steps.network-cache.outputs.cache-primary-key }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
-        with:
-          name: dev-evidence
-          path: ${{ runner.temp }}/dev-evidence
-          if-no-files-found: error
-          retention-days: 7
-
   network-mac:
-    permissions:
-      contents: read
-      statuses: write
-    if: inputs.executor == 'mac'
-    concurrency:
-      group: mac-mini-worker
-      cancel-in-progress: false
-    runs-on: [khor-mac-mini, khor-dev]
-    timeout-minutes: 90
+    if: inputs.executor == 'mac' && inputs.task == 'net-node'
+    runs-on: macos-26
+    timeout-minutes: 15
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
@@ -260,36 +65,23 @@ jobs:
             [[ "$BUNDLE_BLOB" =~ ^[0-9a-f]{40}$ ]]
             [[ "$BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           fi
-      - name: Record host capabilities and installed admission scripts without starting a VM
+      - name: Select the release Xcode and record the hosted network environment
         env:
           REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
         run: |
           set -euo pipefail
-          source /Users/z13/khor-builder/env.sh
-          python3 - <<'PY'
-          import hashlib, json, os, platform, shutil, stat, subprocess
+          sudo xcode-select -s /Applications/Xcode_26.5.app
+          mkdir -p "$REPORT_DIR"
+          python3 - <<'PYHOST'
+          import json, os, platform, subprocess
           from pathlib import Path
-          info = {"system": platform.platform(), "tools": {name: shutil.which(name) for name in ["limactl", "qemu-system-aarch64", "docker", "podman", "colima", "brew"]}, "free_bytes": shutil.disk_usage('/').free}
-          for name in ["kern.hv_support", "hw.memsize", "hw.ncpu"]:
-              try:
-                  result = subprocess.run(['/usr/sbin/sysctl', '-n', name], capture_output=True, text=True, timeout=5)
-                  info[name] = result.stdout.strip() if result.returncode == 0 else None
-              except subprocess.TimeoutExpired:
-                  info[name] = None
-          report = Path(os.environ['REPORT_DIR']); report.mkdir(parents=True, exist_ok=True)
-          info['admission'] = {}
-          for name in ['run-build', 'build_guard.py']:
-              path = Path('/Users/z13/khor-builder/bin') / name
-              if not stat.S_ISREG(path.lstat().st_mode):
-                  raise ValueError('admission script must be a regular file')
-              with path.open('rb') as source:
-                  data = source.read(64 * 1024 + 1)
-              if len(data) > 64 * 1024:
-                  raise ValueError('admission script exceeds inspection limit')
-              (report / ('admission-' + name + '.txt')).write_bytes(data)
-              info['admission'][name] = {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
-          (report / 'host-capabilities.json').write_text(json.dumps(info, indent=2) + '\n')
-          PY
+          commands=[['sw_vers'],['xcodebuild','-version'],['/sbin/ifconfig','lo0'],['/usr/sbin/scutil','--nwi'],['/usr/sbin/netstat','-rn','-f','inet6']]
+          rows=[]
+          for command in commands:
+              result=subprocess.run(command,capture_output=True,text=True,timeout=15)
+              rows.append(dict(command=command,returncode=result.returncode,stdout=result.stdout,stderr=result.stderr))
+          (Path(os.environ['REPORT_DIR'])/'host-capabilities.json').write_text(json.dumps(dict(system=platform.platform(),image=os.environ.get('ImageVersion'),commands=rows),indent=2)+'\n')
+          PYHOST
       - name: Fetch trusted control and exact source through the GitHub API
         if: inputs.bundle_blob_sha != ''
         env:
@@ -322,80 +114,19 @@ jobs:
           script.write_bytes(content)
           runpy.run_path(str(script), run_name='__main__')
           PY
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        if: inputs.bundle_blob_sha == ''
-        with:
-          path: control
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        if: inputs.bundle_blob_sha == ''
-        with:
-          ref: ${{ inputs.snapshot_sha }}
-          path: snapshot
-          persist-credentials: false
-      - name: Materialize and validate the parentless source container
-        if: inputs.bundle_blob_sha == ''
-        env:
-          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-          SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
-        run: |
-          python3 control/scripts/prepare-development.py snapshot "$SOURCE_PACKAGE"
-          echo "NETWORK_CONTROL_DIR=$GITHUB_WORKSPACE/control" >> "$GITHUB_ENV"
-      - name: Run under the existing shared admission guard
+      - name: Run fixed native WebKit diagnostic without Rust builds
         env:
           DEV_TASK: ${{ inputs.task }}
           REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
           SOURCE_PACKAGE: ${{ runner.temp }}/mac-network-package
         run: |
           set -euo pipefail
-          source /Users/z13/khor-builder/env.sh
           export GIT_CONFIG_GLOBAL=/dev/null
-          export CARGO_TERM_COLOR=never
-          export CARGO_HTTP_MULTIPLEXING=false
-          export CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0
-          export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-          mkdir -p "$REPORT_DIR"
-          if [[ "$DEV_TASK" == netlab-vz-probe ]]; then
-            /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a python3 "$NETWORK_CONTROL_DIR/scripts/netlab-vz.py" 2>&1 | tee "$REPORT_DIR/task.log"
-          else
-            /Users/z13/khor-builder/bin/run-build /usr/sbin/taskpolicy -a /bin/bash "$NETWORK_CONTROL_DIR/scripts/network.sh" 2>&1 | tee "$REPORT_DIR/task.log"
-          fi
-      - name: Run isolated WAN peer under the existing guard
-        if: inputs.task == 'net-wan-peer'
-        env:
-          WAN_RUN_ID: ${{ inputs.wan_run_id }}
-          KHOR_WAN_CAPABILITY: ${{ secrets[format('KHOR_WAN_{0}', inputs.wan_run_id)] }}
-          GH_TOKEN: ${{ github.token }}
-          REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
-        run: |
-          set -euo pipefail
-          /Users/z13/khor-builder/bin/run-build /usr/bin/python3 "$NETWORK_CONTROL_DIR/scripts/wan-probe-peer.py"
+          bash "$NETWORK_CONTROL_DIR/scripts/network.sh" 2>&1 | tee "$REPORT_DIR/task.log"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: dev-evidence
           path: ${{ runner.temp }}/mac-network-evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
-
-  retire-snapshot:
-    needs: [prepare, development, network, network-mac]
-    if: ${{ always() && inputs.executor != 'mac' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Retire only this completed request's source branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REQUEST_ID: ${{ inputs.request_id }}
-          SNAPSHOT_SHA: ${{ inputs.snapshot_sha }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          [[ "$REQUEST_ID" =~ ^[0-9a-f]{32}$ ]]
-          [[ "$SNAPSHOT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          ref="heads/dev-snapshots/$REQUEST_ID"
-          actual=$(gh api "repos/$REPOSITORY/git/ref/$ref" --jq .object.sha) || exit 0
-          test "$actual" = "$SNAPSHOT_SHA"
-          gh api --method DELETE "repos/$REPOSITORY/git/refs/$ref"

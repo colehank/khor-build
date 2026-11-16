@@ -21,18 +21,10 @@ if os.environ.get('KHOR_NETWORK_SOURCE_DIR'):
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == source['build_commit']
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip() == source['tree']
 (report / 'environment.json').write_text(json.dumps(dict(task=os.environ['DEV_TASK'], system=platform.platform(),
-    rust=subprocess.check_output(['rustc', '--version'], text=True).strip(), run_id=os.environ['GITHUB_RUN_ID'],
+    rust='not executed (native-only diagnosis)', run_id=os.environ['GITHUB_RUN_ID'],
     control_commit=os.environ['GITHUB_SHA'], jobs=os.environ['CARGO_BUILD_JOBS']), indent=2) + '\n')
-# Preserve the mtime of the same isolated web placeholder across cached builds.
-for name, content in {
-    'apps/gui/dist/assets/index-netlab.js': '// network test fixture\n',
-    'apps/gui/dist/index.html': '<!doctype html><script type="module" src="/assets/index-netlab.js"></script>\n',
-}.items():
-    path = Path(name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists() or path.read_text() != content:
-        path.write_text(content)
 PY
+
 python3 - <<'NATIVE_WEBKIT_DIAG'
 """Fixed native platform diagnosis; no Rust/product change or acceptance credit."""
 import concurrent.futures
@@ -53,6 +45,13 @@ program = REPORT / 'webkit-loopback-original'
 build = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', str(fixture), '-o', str(program)], capture_output=True, text=True)
 (REPORT / 'swift-build.log').write_text(build.stdout + build.stderr)
 assert build.returncode == 0
+observer_source = REPORT / 'webkit-loopback-error-observer.swift'
+text = fixture.read_text().replace('"error": error.localizedDescription', '"error": error.localizedDescription, "domain": (error as NSError).domain, "code": (error as NSError).code, "underlying": String(describing: (error as NSError).userInfo[NSUnderlyingErrorKey])')
+observer_source.write_text(text)
+observer_program = REPORT / 'webkit-loopback-error-observer'
+observed_build = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', str(observer_source), '-o', str(observer_program)], capture_output=True, text=True)
+(REPORT / 'swift-observer-build.log').write_text(observed_build.stdout + observed_build.stderr)
+assert observed_build.returncode == 0
 
 def listener(address, port=0):
     sock = socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET)
@@ -73,7 +72,7 @@ def head(sock):
         assert len(value) <= 8192
     return value
 
-def case(index, host, mode):
+def case(index, host, mode, policy, observer=False):
     facts = dict(proxy_accepted=0, forward_accepted=0, connects=[], served=0, errors=[])
     stop = threading.Event()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=12)
@@ -81,7 +80,15 @@ def case(index, host, mode):
     threads = []
     proxy = listener('127.0.0.1')
     sockets.append(proxy)
-    first = listener('::1' if host == '[::1]' else '127.0.0.1')
+    family_host = '::1' if host == '[::1]' else '127.0.0.1'
+    if policy == 'v4_reserved':
+        reserve = listener('127.0.0.1')
+        chosen = reserve.getsockname()[1]
+        reserve.close()
+        first = listener(family_host, chosen)
+    else:
+        assert policy == 'family_allocated'
+        first = listener(family_host)
     port = first.getsockname()[1]
     sockets.append(first)
     if host == 'localhost':
@@ -140,16 +147,31 @@ def case(index, host, mode):
         thread = threading.Thread(target=accept, args=(sock, respond if sock is proxy else forward, 'proxy_accepted' if sock is proxy else 'forward_accepted'))
         thread.start()
         threads.append(thread)
-    outcome = dict(index=index, host=host, mode=mode, port=port, facts=facts)
+    outcome = dict(index=index, host=host, mode=mode, port=port, facts=facts, port_policy=policy, error_observer=observer)
     try:
         env = dict(os.environ, CFNETWORK_DIAGNOSTICS='3')
-        result = subprocess.run([str(program), mode, f'http://{target}/', str(proxy.getsockname()[1])], capture_output=True, text=True, timeout=30, env=env)
+        result = subprocess.run([str(observer_program if observer else program), mode, f'http://{target}/', str(proxy.getsockname()[1])], capture_output=True, text=True, timeout=30, env=env)
         (REPORT / f'webkit-{index}.stdout').write_text(result.stdout)
         (REPORT / f'webkit-{index}.stderr').write_text(result.stderr)
         outcome.update(returncode=result.returncode, result=json.loads(result.stdout), passed=result.returncode == 0 and json.loads(result.stdout).get('body') == 'BORROWED_EXIT')
     except Exception as error:
         outcome.update(error=repr(error), passed=False)
     finally:
+        outcome['facts'] = json.loads(json.dumps(facts))
+        if observer and not outcome.get('passed'):
+            try:
+                with socket.create_connection((family_host, port), timeout=2) as raw:
+                    raw.sendall(f'GET / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n'.encode())
+                    response = b''
+                    while len(response) < 8192:
+                        chunk = raw.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                outcome['raw_TCP_after_native_failure'] = dict(response=response.decode(errors='replace'), passed=response.endswith(b'BORROWED_EXIT'))
+            except Exception as error:
+                outcome['raw_TCP_after_native_failure'] = dict(error=repr(error), passed=False)
+            outcome['oracle_facts_after'] = json.loads(json.dumps(facts))
         stop.set()
         for sock in sockets:
             sock.close()
@@ -158,14 +180,19 @@ def case(index, host, mode):
         pool.shutdown(wait=True)
     return outcome
 
-# Exactly three independent default-store rounds, plus two IPv6 mode controls.
-order = [(host, 'default') for _ in range(3) for host in ['127.0.0.1', 'localhost', '[::1]']]
-order += [('[::1]', 'direct'), ('[::1]', 'explicit')]
+# Freeze the complete population before the first browser process.
+policies = ['v4_reserved', 'family_allocated', 'family_allocated', 'v4_reserved', 'v4_reserved', 'family_allocated']
+order = [(host, 'default', policy, False) for policy in policies for host in ['127.0.0.1', 'localhost', '[::1]']]
+order += [('[::1]', mode, policy, False) for policy in ['v4_reserved', 'family_allocated'] for mode in ['direct', 'explicit']]
+order += [('[::1]', mode, 'v4_reserved', True) for mode in ['default', 'direct', 'explicit']]
+assert len(order) == 25
+plan = dict(schema=1, original_fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(), observer_source_sha256=hashlib.sha256(observer_source.read_bytes()).hexdigest(), order=order, primary_original_default_cases=18, original_mode_controls=4, error_observer_cases=3, runtime_executions_before_protocol=0, replacements=0, Rust_builds=0, product_changes=0, limits=['Independent Python forwarding isolates platform/port/proxy behavior; not Rust product acceptance', 'Only post-failure observer controls issue raw TCP oracles; primary cohorts have no priming probes'])
+(REPORT / 'hosted-webkit-design.json').write_text(json.dumps(plan, indent=2) + '\n')
 results = []
-for index, (host, mode) in enumerate(order, 1):
-    row = case(index, host, mode)
+for index, (host, mode, policy, observer) in enumerate(order, 1):
+    row = case(index, host, mode, policy, observer)
     results.append(row)
-    (REPORT / 'webkit-platform-diagnostic.json').write_text(json.dumps(dict(schema=1, fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(), fixed_cases=11, replacements=0, product_changes=0, Rust_tests_run=0, results=results, accepted=False), indent=2) + '\n')
+    (REPORT / 'hosted-webkit-diagnostic.json').write_text(json.dumps(dict(schema=1, plan=plan, results=results, accepted=False), indent=2) + '\n')
     print(json.dumps(row), flush=True)
 raise SystemExit(0 if all(row['passed'] and not row['facts']['errors'] for row in results) else 1)
 
