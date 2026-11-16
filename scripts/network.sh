@@ -115,18 +115,7 @@ PYTHON
     done
     exit "$congestion_status"
   else
-    cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
-    cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
-    cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
-    cargo test --locked -p khor-node --lib journal::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/journal-unit.log"
-    cargo test --locked -p khor-node --lib link::dial_budget -- --test-threads=1 2>&1 | tee "$REPORT_DIR/dial-budget-unit.log"
-    cargo test --locked -p khor-node --lib ipc:: -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::leased_ipc_callers_release_all_held_response_permits_when_dropped -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-response-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::process_contracts::independent_process_budget_releases_a_reply_without_caller_eof_or_manual_release -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-process-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::quic_cancel_contracts::leased_ipc_cancellation_releases_all_remote_encoded_replies -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/quic-response-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::resume_admission_contracts::local_resume_accepts_a_new_connection_before_the_next_pause_poll -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/resume-admission-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::canonical_content_routes_without_metadata_owner_and_cancels_through_busy_real_wires -- --test-threads=1 2>&1 | tee "$REPORT_DIR/content-wire-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::quic_stop_contracts::all_cancelled_reply_streams_observe_stop_and_keep_the_same_wire -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/quic-stop-wire-unit.log"
+    cargo test --locked -p khor-node --test early -- --test-threads=1 2>&1 | tee "$REPORT_DIR/early-unit.log"
   fi
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
