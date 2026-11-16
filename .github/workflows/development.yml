@@ -40,7 +40,7 @@ jobs:
   network-mac:
     if: inputs.executor == 'mac' && inputs.task == 'net-node'
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       CARGO_BUILD_JOBS: '2'
       CARGO_INCREMENTAL: '0'
@@ -114,7 +114,8 @@ jobs:
           script.write_bytes(content)
           runpy.run_path(str(script), run_name='__main__')
           PY
-      - name: Run fixed native WebKit diagnostic without Rust builds
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Run exact extracted Rust transport and native WebKit diagnostic
         env:
           DEV_TASK: ${{ inputs.task }}
           REPORT_DIR: ${{ runner.temp }}/mac-network-evidence

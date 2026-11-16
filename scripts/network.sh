@@ -21,179 +21,51 @@ if os.environ.get('KHOR_NETWORK_SOURCE_DIR'):
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == source['build_commit']
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip() == source['tree']
 (report / 'environment.json').write_text(json.dumps(dict(task=os.environ['DEV_TASK'], system=platform.platform(),
-    rust='not executed (native-only diagnosis)', run_id=os.environ['GITHUB_RUN_ID'],
+    rust=subprocess.check_output(['rustc', '--version'], text=True).strip(), run_id=os.environ['GITHUB_RUN_ID'],
     control_commit=os.environ['GITHUB_SHA'], jobs=os.environ['CARGO_BUILD_JOBS']), indent=2) + '\n')
 PY
 
 python3 - <<'NATIVE_WEBKIT_DIAG'
-"""Fixed native platform diagnosis; no Rust/product change or acceptance credit."""
-import concurrent.futures
-import hashlib
-import json
-import os
+"""Remote-only small Rust diagnosis extracted from exact source; not product acceptance."""
 from pathlib import Path
-import selectors
-import socket
-import subprocess
-import threading
-import time
-
-REPORT = Path(os.environ['REPORT_DIR'])
-SOURCE = Path.cwd()
-fixture = SOURCE / 'apps/gui/core/tests/fixtures/webkit_loopback.swift'
-program = REPORT / 'webkit-loopback-original'
-build = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', str(fixture), '-o', str(program)], capture_output=True, text=True)
-(REPORT / 'swift-build.log').write_text(build.stdout + build.stderr)
-assert build.returncode == 0
-observer_source = REPORT / 'webkit-loopback-error-observer.swift'
-text = fixture.read_text().replace('"error": error.localizedDescription', '"error": error.localizedDescription, "domain": (error as NSError).domain, "code": (error as NSError).code, "underlying": String(describing: (error as NSError).userInfo[NSUnderlyingErrorKey])')
-observer_source.write_text(text)
-observer_program = REPORT / 'webkit-loopback-error-observer'
-observed_build = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', str(observer_source), '-o', str(observer_program)], capture_output=True, text=True)
-(REPORT / 'swift-observer-build.log').write_text(observed_build.stdout + observed_build.stderr)
-assert observed_build.returncode == 0
-
-def listener(address, port=0):
-    sock = socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET)
-    if ':' in address:
-        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-    sock.bind((address, port))
-    sock.listen(16)
-    sock.settimeout(.2)
-    return sock
-
-def head(sock):
-    value = b''
-    while not value.endswith(b'\r\n\r\n'):
-        chunk = sock.recv(1)
-        if not chunk:
-            return value
-        value += chunk
-        assert len(value) <= 8192
-    return value
-
-def case(index, host, mode, policy, observer=False):
-    facts = dict(proxy_accepted=0, forward_accepted=0, connects=[], served=0, errors=[])
-    stop = threading.Event()
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=12)
-    sockets = []
-    threads = []
-    proxy = listener('127.0.0.1')
-    sockets.append(proxy)
-    family_host = '::1' if host == '[::1]' else '127.0.0.1'
-    if policy == 'v4_reserved':
-        reserve = listener('127.0.0.1')
-        chosen = reserve.getsockname()[1]
-        reserve.close()
-        first = listener(family_host, chosen)
-    else:
-        assert policy == 'family_allocated'
-        first = listener(family_host)
-    port = first.getsockname()[1]
-    sockets.append(first)
-    if host == 'localhost':
-        sockets.append(listener('::1', port))
-    target = f'{host}:{port}'
-
-    def respond(client):
-        with client:
-            client.settimeout(5)
-            request = head(client)
-            if not request:
-                return
-            line = request.split(b'\r\n')[0].decode()
-            facts['connects'].append(line)
-            assert line == f'CONNECT {target} HTTP/1.1', line
-            client.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
-            request = head(client)
-            if not request:
-                return
-            assert request.startswith(b'GET / '), request
-            assert f'Host: {target}'.lower().encode() in request.lower(), request
-            client.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\nBORROWED_EXIT')
-            facts['served'] += 1
-
-    def forward(client):
-        with client, socket.create_connection(proxy.getsockname(), timeout=5) as upstream:
-            upstream.sendall(f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n'.encode())
-            assert head(upstream).startswith(b'HTTP/1.1 200 ')
-            with selectors.DefaultSelector() as selected:
-                selected.register(client, selectors.EVENT_READ, upstream)
-                selected.register(upstream, selectors.EVENT_READ, client)
-                while not stop.is_set():
-                    for key, _ in selected.select(.2):
-                        value = key.fileobj.recv(65536)
-                        if not value:
-                            return
-                        key.data.sendall(value)
-
-    def accept(sock, handler, counter):
-        def guarded(client):
-            try:
-                handler(client)
-            except Exception as error:
-                facts['errors'].append(repr(error))
-        while not stop.is_set():
-            try:
-                client, _ = sock.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                return
-            facts[counter] += 1
-            pool.submit(guarded, client)
-
-    for sock in sockets:
-        thread = threading.Thread(target=accept, args=(sock, respond if sock is proxy else forward, 'proxy_accepted' if sock is proxy else 'forward_accepted'))
-        thread.start()
-        threads.append(thread)
-    outcome = dict(index=index, host=host, mode=mode, port=port, facts=facts, port_policy=policy, error_observer=observer)
-    try:
-        env = dict(os.environ, CFNETWORK_DIAGNOSTICS='3')
-        result = subprocess.run([str(observer_program if observer else program), mode, f'http://{target}/', str(proxy.getsockname()[1])], capture_output=True, text=True, timeout=30, env=env)
-        (REPORT / f'webkit-{index}.stdout').write_text(result.stdout)
-        (REPORT / f'webkit-{index}.stderr').write_text(result.stderr)
-        outcome.update(returncode=result.returncode, result=json.loads(result.stdout), passed=result.returncode == 0 and json.loads(result.stdout).get('body') == 'BORROWED_EXIT')
-    except Exception as error:
-        outcome.update(error=repr(error), passed=False)
-    finally:
-        outcome['facts'] = json.loads(json.dumps(facts))
-        if observer and not outcome.get('passed'):
-            try:
-                with socket.create_connection((family_host, port), timeout=2) as raw:
-                    raw.sendall(f'GET / HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n'.encode())
-                    response = b''
-                    while len(response) < 8192:
-                        chunk = raw.recv(4096)
-                        if not chunk:
-                            break
-                        response += chunk
-                outcome['raw_TCP_after_native_failure'] = dict(response=response.decode(errors='replace'), passed=response.endswith(b'BORROWED_EXIT'))
-            except Exception as error:
-                outcome['raw_TCP_after_native_failure'] = dict(error=repr(error), passed=False)
-            outcome['oracle_facts_after'] = json.loads(json.dumps(facts))
-        stop.set()
-        for sock in sockets:
-            sock.close()
-        for thread in threads:
-            thread.join(1)
-        pool.shutdown(wait=True)
-    return outcome
-
-# Freeze the complete population before the first browser process.
-policies = ['v4_reserved', 'family_allocated', 'family_allocated', 'v4_reserved', 'v4_reserved', 'family_allocated']
-order = [(host, 'default', policy, False) for policy in policies for host in ['127.0.0.1', 'localhost', '[::1]']]
-order += [('[::1]', mode, policy, False) for policy in ['v4_reserved', 'family_allocated'] for mode in ['direct', 'explicit']]
-order += [('[::1]', mode, 'v4_reserved', True) for mode in ['default', 'direct', 'explicit']]
-assert len(order) == 25
-plan = dict(schema=1, original_fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(), observer_source_sha256=hashlib.sha256(observer_source.read_bytes()).hexdigest(), order=order, primary_original_default_cases=18, original_mode_controls=4, error_observer_cases=3, runtime_executions_before_protocol=0, replacements=0, Rust_builds=0, product_changes=0, limits=['Independent Python forwarding isolates platform/port/proxy behavior; not Rust product acceptance', 'Only post-failure observer controls issue raw TCP oracles; primary cohorts have no priming probes'])
-(REPORT / 'hosted-webkit-design.json').write_text(json.dumps(plan, indent=2) + '\n')
-results = []
-for index, (host, mode, policy, observer) in enumerate(order, 1):
-    row = case(index, host, mode, policy, observer)
-    results.append(row)
-    (REPORT / 'hosted-webkit-diagnostic.json').write_text(json.dumps(dict(schema=1, plan=plan, results=results, accepted=False), indent=2) + '\n')
-    print(json.dumps(row), flush=True)
-raise SystemExit(0 if all(row['passed'] and not row['facts']['errors'] for row in results) else 1)
+import hashlib,json,os,subprocess,tomllib
+S=Path.cwd();R=Path(os.environ['REPORT_DIR']);H=R/'rust-loopback-harness';H.mkdir();(H/'src').mkdir()
+s=(S/'apps/gui/core/src/web.rs').read_text()
+production=s[s.index('#[derive(Clone, Debug)]\npub struct LoopbackLease'):s.index('\n#[cfg(test)]\nmod loopback_tests')]
+test=s[s.index('    #[cfg(target_os = "macos")]\n    #[tokio::test]'):s.index('\n}\n\n#[cfg(test)]\nmod navigation_contract_tests')]
+assert 'native_webkit_reaches_the_borrowed_loopback_origin' in test
+observed_production=production.replace('let Ok((sock, _)) = accepted else { break };','let Ok((sock, peer)) = accepted else { eprintln!("OBS accept error {accepted:?}"); break }; eprintln!("OBS accepted peer={peer} local={:?}", sock.local_addr());').replace('let _ = through(sock, &target, &proxy).await;','let result = through(sock, &target, &proxy).await; eprintln!("OBS through {target} via {proxy}: {result:?}");')
+assert observed_production!=production
+observed_test=test.replace('let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();','eprintln!("OBS native stderr {}", String::from_utf8_lossy(&output.stderr));\n            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();')
+assert observed_test!=test
+stub='mod khor_catalog { pub mod msg { pub fn page_port_taken(port:u16)->String { format!("occupied port {port}") } } }\n'
+wrapper=lambda name,p,t: 'mod '+name+' { use crate::khor_catalog;\n'+p+'\n#[cfg(test)] mod loopback_tests { use super::hold_loopback; use tokio::io::{AsyncReadExt,AsyncWriteExt};\n'+t+'\n}\n}\n'
+(H/'src/lib.rs').write_text(stub+wrapper('original',production,test)+wrapper('observed',observed_production,observed_test))
+(H/'Cargo.toml').write_text('[package]\nname="khor-loopback-diagnostic"\nversion="0.0.0"\nedition="2024"\n[dependencies]\ntokio={version="=1.53.1",features=["full"]}\nserde_json={version="=1.0.151",features=["preserve_order"]}\n')
+(H/'Cargo.lock').write_bytes((S/'Cargo.lock').read_bytes())
+fixture=S/'apps/gui/core/tests/fixtures/webkit_loopback.swift'
+programs={}
+for name,body in [('original',fixture.read_text()),('observed',fixture.read_text().replace('"error": error.localizedDescription','"error": error.localizedDescription, "domain": (error as NSError).domain, "code": (error as NSError).code, "underlying": String(describing: (error as NSError).userInfo[NSUnderlyingErrorKey])'))]:
+ f=R/('webkit-'+name+'.swift');f.write_text(body);out=R/('webkit-'+name)
+ b=subprocess.run(['xcrun','swiftc','-swift-version','5',str(f),'-o',str(out)],capture_output=True,text=True);(R/('swift-'+name+'-build.log')).write_text(b.stdout+b.stderr);assert b.returncode==0
+ programs[name]=str(out)
+order=['original','observed','observed','original','original','observed']
+plan=dict(order=order,source_sha256=hashlib.sha256(s.encode()).hexdigest(),production_sha256=hashlib.sha256(production.encode()).hexdigest(),test_sha256=hashlib.sha256(test.encode()).hexdigest(),original_fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(),product_changes=0,replacements=0,limits=['Minimal extracted Rust module diagnostic, not full original product gate','Only catalog occupied-port text is stubbed; all original transport/test bodies retained','Observer adds logs and NSError fields; no deadlines/retries/acceptance predicates changed'])
+(R/'rust-loopback-design.json').write_text(json.dumps(plan,indent=2)+'\n')
+with (R/'rust-build.log').open('w') as log:
+ built=subprocess.run(['cargo','test','--manifest-path',str(H/'Cargo.toml'),'--no-run'],stdout=log,stderr=subprocess.STDOUT)
+assert built.returncode==0
+locked=tomllib.loads((H/'Cargo.lock').read_text());original=tomllib.loads((S/'Cargo.lock').read_text());original_ids={(p['name'],p['version'],p.get('source'),p.get('checksum')) for p in original['package']}
+used=[(p['name'],p['version'],p.get('source'),p.get('checksum')) for p in locked['package'] if p.get('source')];assert all(p in original_ids for p in used),[p for p in used if p not in original_ids]
+(R/'rust-dependency-identities.json').write_text(json.dumps(used,indent=2)+'\n')
+rows=[]
+for i,name in enumerate(order,1):
+ env=dict(os.environ,KHOR_WEBKIT_PROBE=programs[name],CFNETWORK_DIAGNOSTICS='3')
+ with (R/f'rust-case-{i}-{name}.log').open('w') as log:
+  result=subprocess.run(['cargo','test','--locked','--manifest-path',str(H/'Cargo.toml'),name+'::loopback_tests::native_webkit_reaches_the_borrowed_loopback_origin','--','--exact','--ignored','--nocapture','--test-threads=1'],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=110)
+ rows.append(dict(index=i,variant=name,returncode=result.returncode))
+ (R/'rust-loopback-results.json').write_text(json.dumps(dict(plan=plan,results=rows,accepted=False),indent=2)+'\n')
+ print(json.dumps(rows[-1]),flush=True)
+raise SystemExit(0 if all(r['returncode']==0 for r in rows) else 1)
 
 NATIVE_WEBKIT_DIAG
