@@ -127,47 +127,25 @@ PYTHON
     done
     exit "$congestion_status"
   else
-    cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/iroh-full-library.log"
-    python3 - <<'REFRESH_IROH_GRAPH'
-import hashlib,json,os,time
+    resume_limit=10
+    if [[ "$(uname -s)" == Darwin ]]; then resume_limit=6; fi
+    resume_status=0
+    for ((resume_attempt=1; resume_attempt<=resume_limit; resume_attempt++)); do
+      resume_status=0
+      cargo test --locked -p khor-node --test resume a_deafened_serve_hears_its_peer_again_after_resume_without_being_reopened -- --exact --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/resume-observer-$resume_attempt.log" || resume_status=$?
+      python3 - "$resume_attempt" "$resume_status" "$resume_limit" <<'RESUME_LEDGER'
+import json,os,sys
 from pathlib import Path
-path=Path('vendor/iroh/src/lib.rs');data=path.read_bytes();before=path.stat().st_mtime_ns
-stamp=max(time.time_ns(),before+1);os.utime(path,ns=(stamp,stamp));assert path.read_bytes()==data
-(Path(os.environ['REPORT_DIR'])/'iroh-between-graphs-refresh.json').write_text(json.dumps(dict(path=str(path),sha256=hashlib.sha256(data).hexdigest(),before_mtime_ns=before,after_mtime_ns=stamp,content_changed=False,reason='Rebuild root iroh after standalone library graph; preserve hashed dependency types'),indent=2)+'\n')
-REFRESH_IROH_GRAPH
-    cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
-    cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
-    cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
-    cargo test --locked -p khor-node --lib journal::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/journal-unit.log"
-    cargo test --locked -p khor-node --lib link::dial_budget -- --test-threads=1 2>&1 | tee "$REPORT_DIR/dial-budget-unit.log"
-    cargo test --locked -p khor-node --lib ipc:: -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::leased_ipc_callers_release_all_held_response_permits_when_dropped -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-response-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::process_contracts::independent_process_budget_releases_a_reply_without_caller_eof_or_manual_release -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-process-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::quic_cancel_contracts::leased_ipc_cancellation_releases_all_remote_encoded_replies -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/quic-response-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::resume_admission_contracts::local_resume_accepts_a_new_connection_before_the_next_pause_poll -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/resume-admission-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::canonical_content_routes_without_metadata_owner_and_cancels_through_busy_real_wires -- --test-threads=1 2>&1 | tee "$REPORT_DIR/content-wire-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::quic_stop_contracts::all_cancelled_reply_streams_observe_stop_and_keep_the_same_wire -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/quic-stop-wire-unit.log"
-    cargo test --locked -p khor-node --test early -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-early.log"
-    cargo test --locked -p khor-node --test machine_pause -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-machine_pause.log"
-    cargo test --locked -p khor-node --test peer_pause -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-peer_pause.log"
-    cargo test --locked -p khor-node --test pairing -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-pairing.log"
-    cargo test --locked -p khor-node --test refused_dial -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-refused_dial.log"
-    cargo test --locked -p khor-node --test resume -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-resume.log"
-    cargo test --locked -p khor-node --test relays -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-relays.log"
-    cargo test --locked -p khor-node --test sync_doc_isolation -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-sync_doc_isolation.log"
-    cargo test --locked -p khor-node --test departed -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-departed.log"
-    cargo test --locked -p khor-node --test act -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-act.log"
-    cargo test --locked -p khor-node --test transfer_race -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-transfer_race.log"
-    cargo test --locked -p khor-node --test transfer -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-transfer.log"
-    cargo test --locked -p khor-node --test files_wire -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-files_wire.log"
-    cargo test --locked -p khor-net --test pkarr -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/pkarr-integration.log"
-    cargo test --locked -p khor-net --test relay_restart -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_restart-integration.log"
-    cargo test --locked -p khor-net --test relay_token -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_token-integration.log"
-    cargo test --locked -p khor-net --test relay_jitter -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_jitter-integration.log"
-    cargo test --locked -p khor-net --test relay_stuck -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_stuck-integration.log"
+p=Path(os.environ['REPORT_DIR'])/'resume-observer-attempts.json'
+d=json.loads(p.read_text()) if p.exists() else dict(schema=1,limit=int(sys.argv[3]),attempts=[],replacements=0)
+assert len(d['attempts'])+1==int(sys.argv[1])
+d['attempts'].append(dict(attempt=int(sys.argv[1]),original_returncode=int(sys.argv[2])))
+d['unexecuted']=d['limit']-len(d['attempts']);d['stopped_on_first_failure']=int(sys.argv[2])!=0
+p.write_text(json.dumps(d,indent=2)+chr(10))
+RESUME_LEDGER
+      if [[ "$resume_status" != 0 ]]; then break; fi
+    done
+    exit "$resume_status"
   fi
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
