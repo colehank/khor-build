@@ -1,0 +1,148 @@
+import {pickPopup} from "./popup-helpers.mjs";
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createServer} from 'vite';
+import {chromium} from 'playwright-core';
+
+const gui=fileURLToPath(new URL('..',import.meta.url));
+const evidence=process.env.KEY_ROW_CHECK_DIR||mkdtempSync(join(tmpdir(),'khor-key-row-'));
+mkdirSync(evidence,{recursive:true});
+const fixture=mkdtempSync(join(gui,'.key-row-check-'));
+const sourceFiles=['src/views/TermKeys.tsx','src/views/KeyRowEntryEditor.tsx','src/views/TerminalKeyboard.tsx','src/lib/term-keyboard-layout.ts','src/views/more/AppearanceRows.tsx','src/views/TerminalPane.tsx','src/lib/term-key-model.ts','src/lib/term-key-codec.ts','src/lib/term-keys.ts','src/lib/term-kitty.ts','src/gen/catalog.ts','src/components/ui/popup-button.tsx','src/components/ui/dropdown-menu.tsx','src/components/AgentInteraction.tsx','scripts/fixtures/key-row-probe.tsx','scripts/popup-helpers.mjs','scripts/check-key-row-ui.mjs'];
+const fingerprint=()=>Object.fromEntries(sourceFiles.map(file=>[file,createHash('sha256').update(readFileSync(join(gui,file))).digest('hex')]));
+const before=fingerprint(),results=[],errors=[],groupErrors=[];
+writeFileSync(join(fixture,'index.html'),'<meta name="viewport" content="width=device-width, initial-scale=1"><div id="root"></div><script type="module" src="./probe.tsx"></script>');
+writeFileSync(join(fixture,'probe.tsx'),readFileSync(new URL('./fixtures/key-row-probe.tsx',import.meta.url)));
+let server,browser;
+const port=Number(process.env.KEY_ROW_CHECK_PORT||23840);
+const mark=(name,data={})=>results.push({name,...data});
+try{
+ server=await createServer({root:gui,configFile:join(gui,'vite.config.ts'),server:{host:'127.0.0.1',port,strictPort:true}});await server.listen();
+ browser=await chromium.launch({channel:(process.env.PLAYWRIGHT_CHROMIUM_CHANNEL??'chrome')||undefined,headless:true});
+ const context=await browser.newContext({viewport:{width:1100,height:800}});
+ const url=`http://127.0.0.1:${port}/${fixture.split('/').pop()}/index.html`;
+ const open=async p=>{await p.locator('[data-setting-row-name="term-key-row"]').click();await p.locator('[data-key-row-editor]').waitFor()};
+ // Exercise the production shared menu and agent form, including keyboard and long lists.
+ const choicesPage=await context.newPage();choicesPage.on('pageerror',error=>errors.push(error.message));await choicesPage.goto(url+'?choices=1');
+ try{
+ const trigger=choicesPage.getByRole('button',{name:'Grouped choices: Gamma',exact:true});await trigger.focus();await choicesPage.keyboard.press('ArrowDown');
+ const menu=choicesPage.locator('[data-popup-menu]:visible');await menu.waitFor();
+ await choicesPage.waitForFunction(()=>document.activeElement?.getAttribute('data-popup-option')==='gamma');
+ assert.equal(await menu.locator('[data-popup-option="gamma"]').getAttribute('aria-checked'),'true');
+ assert.equal(await menu.locator('[data-popup-option="beta"]').getAttribute('data-disabled')!==null,true);
+ assert.equal(await menu.locator('[data-slot="dropdown-menu-label"]').count(),2);
+ assert(await menu.locator('[data-popup-option="gamma"]').innerText().then(text=>text.includes('Rich choice detail')));
+ const font=await menu.evaluate(el=>({menu:getComputedStyle(el).fontFamily,body:getComputedStyle(document.body).fontFamily}));assert.equal(font.menu,font.body);
+ await choicesPage.keyboard.press('ArrowUp');await choicesPage.waitForFunction(()=>document.activeElement?.getAttribute('data-popup-option')==='alpha');await choicesPage.keyboard.press('Enter');await menu.waitFor({state:'detached'});assert.equal(await choicesPage.locator('[data-choice-value]').textContent(),'alpha');
+ const choicesTrigger=choicesPage.locator('[data-popup-trigger]').first();await choicesTrigger.focus();await choicesPage.keyboard.press('ArrowDown');await choicesPage.keyboard.press('g');
+ await choicesPage.waitForFunction(()=>document.activeElement?.getAttribute('data-popup-option')==='gamma');await choicesPage.keyboard.press('End');
+ await choicesPage.waitForFunction(()=>document.activeElement?.getAttribute('data-popup-option')==='item-39');
+ const long=await menu.evaluate(el=>{const box=el.getBoundingClientRect(),item=document.activeElement.getBoundingClientRect();return {top:box.top,bottom:box.bottom,left:box.left,right:box.right,itemTop:item.top,itemBottom:item.bottom,height:innerHeight,width:innerWidth}});
+ assert.ok(long.top>=0&&long.bottom<=long.height&&long.left>=0&&long.right<=long.width&&long.itemTop>=long.top&&long.itemBottom<=long.bottom,JSON.stringify(long));
+ await choicesPage.keyboard.press('Escape');await menu.waitFor({state:'detached'});assert.equal(await choicesTrigger.evaluate(el=>document.activeElement===el),true);
+ const ring=await choicesTrigger.evaluate(el=>({style:getComputedStyle(el).outlineStyle,width:parseFloat(getComputedStyle(el).outlineWidth)}));assert.ok(ring.style!=='none'&&ring.width>0,'Keyboard return keeps a visible focus ring');
+ const form=choicesPage.locator('[data-agent-interaction]');await form.getByRole('button',{name:'确认',exact:true}).click();await form.getByRole('alert').waitFor();assert.deepEqual(await choicesPage.evaluate(()=>window.__keyWire.answers),[]);
+ await pickPopup(form.getByRole('button',{name:/^Machine:/}),'remote');await form.getByRole('button',{name:/^Agents:/}).click();
+ const multi=choicesPage.locator('[data-popup-menu]:visible');await multi.getByRole('menuitemcheckbox',{name:'claude',exact:true}).click();await multi.getByRole('menuitemcheckbox',{name:'codex',exact:true}).click();
+ assert.equal(await multi.getByRole('menuitemcheckbox',{name:'claude',exact:true}).getAttribute('aria-checked'),'true');await multi.getByRole('menuitemcheckbox',{name:'claude',exact:true}).click();
+ await choicesPage.keyboard.press('Escape');await multi.waitFor({state:'detached'});await form.getByRole('button',{name:'确认',exact:true}).click();
+ assert.deepEqual(await choicesPage.evaluate(()=>window.__keyWire.answers),[{action:'accept',content:{agents:['codex'],machine:'remote'}}]);await choicesPage.close();
+ mark('shared menu grouping, disabled choices, current focus, typeahead, long-list bounds, Khor font, multi-select and required agent answers');
+ }catch(error){groupErrors.push({group:'choice-menu',error:String(error),stack:error.stack});await choicesPage.screenshot({path:join(evidence,'choice-menu-failure.png'),fullPage:true}).catch(()=>{});}
+ finally{await choicesPage.close();}
+
+ try{
+ const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
+ page.setDefaultTimeout(10000);await page.goto(url);
+ const editor=page.locator('[data-key-row-editor]');
+ const row=async()=>page.evaluate(()=>JSON.parse(localStorage.getItem('khor.term-key-row')));
+ const custom=async()=>{const value=await row();return value.entries.find(entry=>entry.kind!=='builtin')};
+ const add=async()=>{await editor.locator('[data-key-row-add]').click();await editor.locator('[data-key-entry-name]').waitFor()};
+ assert.equal(await page.evaluate(()=>matchMedia('(pointer: coarse)').matches),false);assert.equal(await page.locator('[data-term-keys]').count(),0);
+ // Shared Khor choice menu: rich cursor shapes and keyboard dismissal.
+ const cursor=page.locator('[data-setting-select="term-cursor"]');await cursor.click();
+ const cursorMenu=page.locator('[data-popup-menu]:visible');assert.equal(await cursorMenu.locator('[data-cursor-option]').count(),3);
+ await page.keyboard.press('Escape');await cursorMenu.waitFor({state:'detached'});assert.equal(await cursor.evaluate(el=>document.activeElement===el),true);
+ await pickPopup(cursor,'bar');assert.equal(await cursor.getAttribute('value'),'bar');
+ await open(page);await add();assert.equal(await editor.locator('[data-key-entry-save]').isDisabled(),true);
+ assert.equal(await editor.locator('[data-key-entry-name]').evaluate(el=>document.activeElement===el),false);
+ const key=()=>editor.locator('[data-setting-select="key-entry-base"]');
+ const modifier=async(name,on)=>{const toggle=editor.locator(`[data-setting-row-name="key-entry-${name}"] [role="switch"]`);if((await toggle.getAttribute('aria-checked')==='true')!==on)await toggle.click();};
+ await pickPopup(key(),'ArrowLeft');await modifier('shift',true);assert.match(await editor.locator('[data-key-entry-preview]').innerText(),/⇧←/);
+ await editor.locator('[data-key-entry-clear]').click();assert.equal(await editor.locator('[data-key-entry-save]').isDisabled(),true);
+ await pickPopup(key(),'ArrowLeft');await editor.locator('[data-key-entry-save]').click();const first=await custom();assert.equal(first.label,'');assert.equal(first.kind,'chord');
+ mark('empty draft, no forced keyboard, clearable primary, modifiers and rich Khor menu');
+ await editor.locator(`[data-key-row-edit="${first.id}"]`).click();await editor.locator('[data-key-entry-name]').fill('discarded');await editor.locator('[data-key-entry-cancel-visible]').click();assert.equal((await custom()).label,'');
+ await editor.locator(`[data-key-row-edit="${first.id}"]`).click();await editor.locator('[data-key-entry-name]').fill('下一窗');
+ await pickPopup(key(),'KeyB');await modifier('shift',false);await modifier('ctrl',true);
+ await editor.locator('[data-key-step-add]').click();await pickPopup(key(),'KeyN');
+ await editor.locator('[data-key-step-add]').click();await pickPopup(key(),'KeyC');
+ assert.equal(await editor.locator('[data-key-entry-steps] [data-key-step-remove],[data-key-entry-steps] [data-key-step-up],[data-key-entry-steps] [data-key-step-down]').count(),0,'Steps remain plain selectable keys');await editor.locator('[data-key-step-menu]').click();await page.locator('[data-key-step-up]').click();await page.locator('[data-key-step-up]').waitFor({state:'detached'});assert.match(await editor.locator('[data-key-step-select="1"]').innerText(),/C/);
+ await editor.locator('[data-key-step-menu]').click();await page.locator('[data-key-step-remove]').click();await page.locator('[data-key-step-remove]').waitFor({state:'detached'});
+ await editor.locator('[data-key-entry-save]').click();assert.deepEqual((await custom()).steps.map(step=>step.key),['KeyB','KeyN']);
+ mark('single-key editing, reversible draft and ordered sequence');
+ const seat=editor.locator(`[data-key-row-seat="${first.id}"]`);await seat.getByRole('switch').click();assert.equal((await custom()).on,false);await seat.getByRole('switch').click();
+ await seat.locator('[data-key-row-grip]').focus();await page.keyboard.press('ArrowUp');const ordered=(await row()).entries.map(entry=>entry.id);
+ await editor.locator('[data-key-row-done]').click();await page.reload();await open(page);assert.deepEqual((await row()).entries.map(entry=>entry.id),ordered);
+ mark('visibility, order and persistence');
+ const other=await context.newPage();other.on('pageerror',error=>errors.push(error.message));await other.goto(url);await open(other);
+ await editor.locator(`[data-key-row-edit="${first.id}"]`).click();await editor.locator('[data-key-entry-name]').fill('同步按键');await editor.locator('[data-key-entry-save]').click();
+ await other.locator(`[data-key-row-edit="${first.id}"]`).filter({hasText:'同步按键'}).waitFor();await other.close();mark('second-window update');
+ await add();await pickPopup(key(),'ArrowLeft');await modifier('shift',true);await editor.locator('[data-key-entry-save]').click();
+ const shift=(await row()).entries.find(entry=>entry.kind==='chord'&&entry.stroke.key==='ArrowLeft');await editor.locator('[data-key-row-done]').click();
+ await page.goto(url+'?terminal=1');await page.locator('[data-term-keys]').waitFor();
+ await page.evaluate(()=>window.__keyWire.focus());const focus=await page.evaluate(()=>document.activeElement?.className);
+ await page.evaluate(()=>window.__keyWire.lock());await page.locator(`[data-term-key="${shift.id}"]`).click();
+ assert.deepEqual(await page.evaluate(()=>window.__keyWire.inputs),['\x1b[1;2D']);assert.deepEqual(await page.evaluate(()=>window.__keyWire.data),['\x1b[1;2D']);
+ assert.equal(await page.locator('[data-key-mods]').textContent(),JSON.stringify({ctrl:true,alt:true,lock:{ctrl:true,alt:true}}));assert.equal(await page.evaluate(()=>document.activeElement?.className),focus);
+ await page.evaluate(()=>window.__keyWire.clear());await page.evaluate(()=>window.__keyWire.negotiate('\x1b[>1u'));
+ await page.locator(`[data-term-key="${shift.id}"]`).click();assert.deepEqual(await page.evaluate(()=>window.__keyWire.inputs),['\x1b[1;2D']);
+ await page.evaluate(()=>window.__keyWire.clear());await page.clock.install();
+ const cap=page.locator(`[data-term-key="${shift.id}"]`);await cap.scrollIntoViewIfNeeded();const bounds=await cap.boundingBox();assert(bounds);
+ await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);await page.mouse.down();await page.clock.runFor(1000);assert.equal(await page.evaluate(()=>window.__keyWire.inputs.length),0);await page.mouse.up();assert.equal(await page.evaluate(()=>window.__keyWire.inputs.length),1);
+ await page.evaluate(()=>window.__keyWire.clear());const tab=page.locator('[data-term-key="tab"]');await tab.scrollIntoViewIfNeeded();const tabBox=await tab.boundingBox();assert(tabBox);await page.mouse.move(tabBox.x+tabBox.width/2,tabBox.y+tabBox.height/2);await page.mouse.down();await page.clock.runFor(900);await page.mouse.up();assert((await page.evaluate(()=>window.__keyWire.inputs.length))>1,'the existing builtin Tab still repeats');
+ assert.deepEqual(await page.evaluate(()=>window.__keyWire.unknown),[]);mark('actual xterm input, modifier isolation, negotiated mode, focus, custom no-repeat and builtin repeat');
+
+ await page.goto(url);await open(page);await add();await pickPopup(key(),'KeyN');await modifier('shift',true);await editor.locator('[data-key-step-add]').click();await pickPopup(key(),'Digit1');await modifier('ctrl',true);await editor.locator('[data-key-entry-name]').fill('unsupported');await editor.locator('[data-key-entry-save]').click();const bad=(await row()).entries.find(entry=>entry.label==='unsupported');assert(bad);await editor.locator('[data-key-row-done]').click();await page.goto(url+'?terminal=1');await page.locator('[data-term-keys]').waitFor();await page.locator(`[data-term-key="${bad.id}"]`).click();await page.getByRole('alert').waitFor();assert.equal(await page.evaluate(()=>window.__keyWire.inputs.length),0);mark('unsupported sequence does not send a partial prefix');
+ }catch(error){groupErrors.push({group:'desktop-editor',error:String(error),stack:error.stack});for(const [index,page] of context.pages().entries())await page.screenshot({path:join(evidence,`desktop-editor-failure-${index}.png`),fullPage:true}).catch(()=>{});}
+ finally{await context.close();}
+ const broken=await browser.newContext({viewport:{width:1100,height:800}}),damaged=await broken.newPage();
+ await damaged.addInitScript(()=>localStorage.setItem('khor.term-key-row','{"version":999,"entries":[]}'));
+ await damaged.goto(url);await open(damaged);assert.equal(await damaged.locator('[data-key-row-add]').count(),0);
+ assert.equal(await damaged.evaluate(()=>localStorage.getItem('khor.term-key-row')),'{"version":999,"entries":[]}');
+ assert(await damaged.locator('[data-key-row-damaged]').isVisible());await damaged.locator('[data-key-row-reset]').click();
+ assert.equal(await damaged.evaluate(()=>JSON.parse(localStorage.getItem('khor.term-key-row')).version),1);await damaged.locator('[data-key-row-add]').waitFor();
+ await broken.close();mark('damaged configuration visible and explicit reset unlocks editing');
+ for(const width of [320,390]) {
+  const narrow=await browser.newContext({viewport:{width,height:844},isMobile:true,hasTouch:true}),small=await narrow.newPage();small.on('pageerror',error=>errors.push(error.message));
+  try{
+  await small.goto(url);await open(small);await small.locator('[data-key-row-add]').click();
+  assert.equal(await small.locator('[data-key-entry-name]').evaluate(el=>document.activeElement===el),false);
+  assert.equal(await small.locator('[data-key-entry-save]').isDisabled(),true);
+  assert.equal(await small.locator('[data-key-show-keyboard]').getAttribute('aria-expanded'),'true');await small.locator('[data-terminal-keyboard]').waitFor();
+  await small.locator('button[data-skbtn="{ArrowLeft}"]').click();await small.locator('button[data-skbtn="{ArrowLeft}"]').click();assert.equal(await small.locator('[data-key-entry-save]').isDisabled(),true);
+  await small.locator('[data-setting-row-name="key-entry-ctrl"] [role="switch"]').click();
+  await small.getByRole('radio',{name:'字母',exact:true}).click();await small.locator('button[data-skbtn="{KeyC}"]').click();
+  assert.match(await small.locator('[data-key-entry-preview]').innerText(),/⌃C/);
+  const geometry=await small.locator('[data-terminal-keyboard]').evaluate(el=>({width:el.clientWidth,scroll:el.scrollWidth,keys:[...el.querySelectorAll('button[data-skbtn]')].map(key=>{const r=key.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width,height:r.height};})}));
+  assert.ok(geometry.scroll<=geometry.width+1,'Visual key picker fits the phone');assert.ok(geometry.keys.every(key=>key.left>=0&&key.right<=width&&key.width>=40&&key.height>=40));
+  const firstAddBounds=await small.locator('[data-key-step-add]').boundingBox();
+  for(let index=0;index<5;index++){await small.locator('[data-key-step-add]').click();await small.locator('button[data-skbtn="{KeyC}"]').click();}
+  const strip=await small.locator('[data-key-entry-steps]').evaluate(el=>({height:el.getBoundingClientRect().height,client:el.clientWidth,scroll:el.scrollWidth}));
+  assert.ok(strip.height<=60&&strip.scroll>strip.client,'Many steps scroll horizontally and leave the mobile editor available');
+  const addBounds=await small.locator('[data-key-step-add]').boundingBox();assert.ok(addBounds&&addBounds.x>=0&&addBounds.x+addBounds.width<=width&&addBounds.width>=44,'Add stays visible beside the step strip');assert.ok(Math.abs(addBounds.x-firstAddBounds.x)<1,'Adding steps keeps the Add target in the same place');
+  const save=await small.locator('[data-key-entry-save]').boundingBox();assert.ok(save&&save.x>=0&&save.x+save.width<=width,'Save remains in the fixed header');
+  await small.screenshot({path:join(evidence,`mobile-key-editor-${width}.png`),fullPage:true});
+  await small.locator('[data-key-entry-name]').fill('手机组合');await small.evaluate(()=>window.__keyWire.keyboard());await small.waitForFunction(()=>window.__keyWire.shown());
+  await small.locator('[data-key-entry-save]').click();assert.equal(await small.evaluate(()=>JSON.parse(localStorage.getItem('khor.term-key-row')).entries.filter(entry=>entry.label==='手机组合').length),1);
+  assert.equal(await small.evaluate(()=>window.__keyWire.inputs.length),0);mark(`mobile ${width}: reversible selection, modifiers, compact keyboard, fixed save and keyboard viewport`);
+  }catch(error){groupErrors.push({group:`mobile-${width}`,error:String(error),stack:error.stack});await small.screenshot({path:join(evidence,`mobile-${width}-failure.png`),fullPage:true}).catch(()=>{});}
+  finally{await narrow.close();}
+ }
+ assert.deepEqual(groupErrors,[]);assert.deepEqual(errors,[]);assert.deepEqual(fingerprint(),before);writeFileSync(join(evidence,'result.json'),JSON.stringify({passed:results.length,results,sources:before,unchanged:true,errors},null,2));console.log(JSON.stringify({passed:results.length,evidence}));
+}catch(error){const screenshots=[];for(const context of browser?.contexts()??[])for(const page of context.pages()){const path=join(evidence,`failure-${screenshots.length}.png`);try{await page.screenshot({path,fullPage:true,timeout:5000});screenshots.push({path})}catch(capture){screenshots.push({path,error:String(capture)})}}writeFileSync(join(evidence,'failure.json'),JSON.stringify({error:String(error),stack:error.stack,results,errors,groupErrors,screenshots,before,after:fingerprint()},null,2));throw error}
+finally{await browser?.close();await server?.close();rmSync(fixture,{recursive:true,force:true})}
