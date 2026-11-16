@@ -1,0 +1,30 @@
+name: Native build tools
+description: Fixed Rust/Node/Bun versions and bounded registry cache
+inputs:
+  target:
+    description: Rust target triple
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Bind native binaries to their checked-out build identity
+      shell: bash
+      run: python3 scripts/release_manifest.py build-env
+    - uses: dtolnay/rust-toolchain@1.95.0
+      with:
+        targets: ${{ inputs.target }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: release-${{ inputs.target }}
+        cache-targets: false
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 22.19.0
+        cache: npm
+        cache-dependency-path: |
+          apps/agent/package-lock.json
+          apps/gui/package-lock.json
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.14
