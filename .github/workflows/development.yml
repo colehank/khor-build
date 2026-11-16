@@ -37,41 +37,46 @@ permissions:
 
 
 
+
 jobs:
-  capture-cleanup:
+  native-error-fixture:
     runs-on: macos-26
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - name: Reproduce exact background capture cleanup without product tests
+      - name: Exercise exact candidate native NSError callback for IPv4 and IPv6
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/capture-cleanup"
-          sudo tcpdump -i lo0 -n -U -s 256 -c 2000 -w "$RUNNER_TEMP/capture-cleanup/empty.pcap" 'tcp and port 65534' > "$RUNNER_TEMP/capture-cleanup/capture.log" 2>&1 &
-          capture_pid=$!
-          sleep 1
-          ps -p "$capture_pid" -o pid,ppid,comm | tee "$RUNNER_TEMP/capture-cleanup/process.log"
-          sudo kill -INT "$capture_pid" 2>/dev/null || true
-          for index in 1 2 3; do
-            sleep 1
-            if ! kill -0 "$capture_pid" 2>/dev/null; then break; fi
-          done
-          if kill -0 "$capture_pid" 2>/dev/null; then
-            echo 'original_INT_cleanup_exited=false' | tee "$RUNNER_TEMP/capture-cleanup/result.txt"
-            children=$(pgrep -P "$capture_pid" || true)
-            if [[ -n "$children" ]]; then
-              while IFS= read -r child; do sudo kill -TERM "$child" 2>/dev/null || true; done <<< "$children"
-            fi
-            sudo kill -TERM "$capture_pid" 2>/dev/null || true
-            sleep 1
-            sudo kill -KILL "$capture_pid" 2>/dev/null || true
-          else
-            echo 'original_INT_cleanup_exited=true' | tee "$RUNNER_TEMP/capture-cleanup/result.txt"
-          fi
-          wait "$capture_pid" 2>/dev/null || true
+          sudo xcode-select -s /Applications/Xcode_26.5.app
+          python3 - <<'NATIVE_ERROR'
+          import base64,hashlib,json,os,socket,subprocess
+          from pathlib import Path
+          R=Path(os.environ['RUNNER_TEMP'])/'fixture-error-evidence';R.mkdir()
+          source=base64.b64decode('aW1wb3J0IEFwcEtpdAppbXBvcnQgTmV0d29yawppbXBvcnQgV2ViS2l0CgovLyBBbiBpc29sYXRlZCBuYXRpdmUgbmV0d29ya2luZyBwcm9iZS4gTm8gYXBwL3VzZXIgd2Vic2l0ZSBkYXRhIGlzIG9wZW5lZC4KZmluYWwgY2xhc3MgUHJvYmU6IE5TT2JqZWN0LCBXS05hdmlnYXRpb25EZWxlZ2F0ZSB7CiAgICB2YXIgd2ViOiBXS1dlYlZpZXchCiAgICB2YXIgZmluaXNoZWQgPSBmYWxzZQogICAgbGV0IG1vZGUgPSBDb21tYW5kTGluZS5hcmd1bWVudHNbMV0KCiAgICBmdW5jIHN0YXJ0KCkgewogICAgICAgIGxldCBjb25maWcgPSBXS1dlYlZpZXdDb25maWd1cmF0aW9uKCkKICAgICAgICBsZXQgc3RvcmUgPSBXS1dlYnNpdGVEYXRhU3RvcmUubm9uUGVyc2lzdGVudCgpCiAgICAgICAgaWYgbW9kZSAhPSAiZGlyZWN0IiB7CiAgICAgICAgICAgIGxldCBlbmRwb2ludCA9IE5XRW5kcG9pbnQuaG9zdFBvcnQoaG9zdDogIjEyNy4wLjAuMSIsIHBvcnQ6IE5XRW5kcG9pbnQuUG9ydChDb21tYW5kTGluZS5hcmd1bWVudHNbM10pISkKICAgICAgICAgICAgdmFyIHByb3h5ID0gUHJveHlDb25maWd1cmF0aW9uKGh0dHBDT05ORUNUUHJveHk6IGVuZHBvaW50LCB0bHNPcHRpb25zOiBuaWwpCiAgICAgICAgICAgIHByb3h5LmFsbG93RmFpbG92ZXIgPSBmYWxzZQogICAgICAgICAgICBpZiBtb2RlID09ICJleHBsaWNpdCIgewogICAgICAgICAgICAgICAgcHJveHkubWF0Y2hEb21haW5zID0gWyIiLCAiMTI3LjAuMC4xIiwgImxvY2FsaG9zdCJdCiAgICAgICAgICAgICAgICBwcm94eS5leGNsdWRlZERvbWFpbnMgPSBbXQogICAgICAgICAgICB9CiAgICAgICAgICAgIHN0b3JlLnByb3h5Q29uZmlndXJhdGlvbnMgPSBbcHJveHldCiAgICAgICAgfQogICAgICAgIGNvbmZpZy53ZWJzaXRlRGF0YVN0b3JlID0gc3RvcmUKICAgICAgICB3ZWIgPSBXS1dlYlZpZXcoZnJhbWU6IENHUmVjdCh4OiAwLCB5OiAwLCB3aWR0aDogNDgwLCBoZWlnaHQ6IDMyMCksIGNvbmZpZ3VyYXRpb246IGNvbmZpZykKICAgICAgICB3ZWIubmF2aWdhdGlvbkRlbGVnYXRlID0gc2VsZgogICAgICAgIHdlYi5sb2FkKFVSTFJlcXVlc3QodXJsOiBVUkwoc3RyaW5nOiBDb21tYW5kTGluZS5hcmd1bWVudHNbMl0pISkpCiAgICAgICAgRGlzcGF0Y2hRdWV1ZS5tYWluLmFzeW5jQWZ0ZXIoZGVhZGxpbmU6IC5ub3coKSArIDIwKSB7CiAgICAgICAgICAgIHNlbGYuZmluaXNoKFsiZXJyb3IiOiAibmF2aWdhdGlvbiB0aW1lb3V0Il0pCiAgICAgICAgfQogICAgfQoKICAgIGZ1bmMgZGVzY3JpYmVGYWlsdXJlKF8gZXJyb3I6IEVycm9yKSAtPiBbU3RyaW5nOiBBbnldIHsKICAgICAgICBsZXQgZXJyb3IgPSBlcnJvciBhcyBOU0Vycm9yCiAgICAgICAgcmV0dXJuIFsKICAgICAgICAgICAgImVycm9yIjogZXJyb3IubG9jYWxpemVkRGVzY3JpcHRpb24sCiAgICAgICAgICAgICJkb21haW4iOiBlcnJvci5kb21haW4sCiAgICAgICAgICAgICJjb2RlIjogZXJyb3IuY29kZSwKICAgICAgICAgICAgInVuZGVybHlpbmciOiBTdHJpbmcoZGVzY3JpYmluZzogZXJyb3IudXNlckluZm9bTlNVbmRlcmx5aW5nRXJyb3JLZXldKSwKICAgICAgICBdCiAgICB9CgogICAgZnVuYyBmaW5pc2goXyByZXN1bHQ6IFtTdHJpbmc6IEFueV0pIHsKICAgICAgICBndWFyZCAhZmluaXNoZWQgZWxzZSB7IHJldHVybiB9CiAgICAgICAgZmluaXNoZWQgPSB0cnVlCiAgICAgICAgdmFyIHZhbHVlID0gcmVzdWx0CiAgICAgICAgdmFsdWVbIm1vZGUiXSA9IG1vZGUKICAgICAgICBsZXQgZGF0YSA9IHRyeSEgSlNPTlNlcmlhbGl6YXRpb24uZGF0YSh3aXRoSlNPTk9iamVjdDogdmFsdWUsIG9wdGlvbnM6IFsuc29ydGVkS2V5c10pCiAgICAgICAgcHJpbnQoU3RyaW5nKGRhdGE6IGRhdGEsIGVuY29kaW5nOiAudXRmOCkhKQogICAgICAgIGZmbHVzaChzdGRvdXQpCiAgICAgICAgTlNBcHBsaWNhdGlvbi5zaGFyZWQudGVybWluYXRlKG5pbCkKICAgIH0KCiAgICBmdW5jIHdlYlZpZXcoXyB3ZWJWaWV3OiBXS1dlYlZpZXcsIGRpZEZpbmlzaCBuYXZpZ2F0aW9uOiBXS05hdmlnYXRpb24hKSB7CiAgICAgICAgd2ViVmlldy5ldmFsdWF0ZUphdmFTY3JpcHQoImRvY3VtZW50LmJvZHkuaW5uZXJUZXh0IikgeyB2YWx1ZSwgZXJyb3IgaW4KICAgICAgICAgICAgaWYgbGV0IGVycm9yID0gZXJyb3IgeyBzZWxmLmZpbmlzaChzZWxmLmRlc2NyaWJlRmFpbHVyZShlcnJvcikpIH0KICAgICAgICAgICAgZWxzZSB7IHNlbGYuZmluaXNoKFsiYm9keSI6IHZhbHVlIGFzPyBTdHJpbmcgPz8gIiJdKSB9CiAgICAgICAgfQogICAgfQoKICAgIGZ1bmMgd2ViVmlldyhfIHdlYlZpZXc6IFdLV2ViVmlldywgZGlkRmFpbFByb3Zpc2lvbmFsTmF2aWdhdGlvbiBuYXZpZ2F0aW9uOiBXS05hdmlnYXRpb24hLCB3aXRoRXJyb3IgZXJyb3I6IEVycm9yKSB7CiAgICAgICAgZmluaXNoKGRlc2NyaWJlRmFpbHVyZShlcnJvcikpCiAgICB9CiAgICBmdW5jIHdlYlZpZXcoXyB3ZWJWaWV3OiBXS1dlYlZpZXcsIGRpZEZhaWwgbmF2aWdhdGlvbjogV0tOYXZpZ2F0aW9uISwgd2l0aEVycm9yIGVycm9yOiBFcnJvcikgewogICAgICAgIGZpbmlzaChkZXNjcmliZUZhaWx1cmUoZXJyb3IpKQogICAgfQp9CgpsZXQgYXBwID0gTlNBcHBsaWNhdGlvbi5zaGFyZWQKYXBwLnNldEFjdGl2YXRpb25Qb2xpY3koLnByb2hpYml0ZWQpCmxldCBwcm9iZSA9IFByb2JlKCkKcHJvYmUuc3RhcnQoKQphcHAucnVuKCkK')
+          assert hashlib.sha256(source).hexdigest()=='9902bc9974d57c64a5760e896280d7d843a19dc70d9d0a754162d0e10f3408f8'
+          fixture=R/'webkit_loopback.swift';fixture.write_bytes(source);program=Path(os.environ['RUNNER_TEMP'])/'webkit-loopback'
+          meta=dict(source_commit='43df97304d1cbf8c725fd9769c528595e8fab413',source_fixture_sha256='9902bc9974d57c64a5760e896280d7d843a19dc70d9d0a754162d0e10f3408f8',source_fixture_git_blob='0c3ebe569a0539535e4de7400bae268535792cb6',control=os.environ['GITHUB_SHA'],run_id=os.environ['GITHUB_RUN_ID'],fixed_cases=['127.0.0.1','[::1]'],Rust_builds=0,product_changes=0,replacements=0,limits='Failure callback serialization only, not full native Rust gate or original cause')
+          (R/'source.json').write_text(json.dumps(meta,indent=2)+'\n')
+          build=subprocess.run(['xcrun','swiftc','-swift-version','5',str(fixture),'-o',str(program)],capture_output=True,text=True);(R/'swift-build.log').write_text(build.stdout+build.stderr);assert build.returncode==0
+          rows=[]
+          for index,host in enumerate(meta['fixed_cases'],1):
+           family=socket.AF_INET6 if ':' in host else socket.AF_INET
+           with socket.socket(family,socket.SOCK_STREAM) as reserved:
+            reserved.bind(('::1' if family==socket.AF_INET6 else host,0));port=reserved.getsockname()[1]
+            # Keep the port bound but not listening throughout the native call.
+            row=dict(index=index,host=host,port=port)
+            try:
+             result=subprocess.run([str(program),'direct',f'http://{host}:{port}/','1'],capture_output=True,text=True,timeout=30)
+             (R/f'case-{index}.stdout').write_text(result.stdout);(R/f'case-{index}.stderr').write_text(result.stderr);value=json.loads(result.stdout)
+             passed=result.returncode==0 and value.get('mode')=='direct' and 'body' not in value and bool(value.get('error')) and bool(value.get('domain')) and type(value.get('code')) is int and value['code']!=0 and isinstance(value.get('underlying'),str)
+             row.update(returncode=result.returncode,result=value,passed=passed)
+            except Exception as error:row.update(error=repr(error),passed=False)
+            rows.append(row);(R/'results.json').write_text(json.dumps(dict(source=meta,results=rows),indent=2)+'\n');print(json.dumps(row),flush=True)
+          raise SystemExit(0 if len(rows)==2 and all(x['passed'] for x in rows) else 1)
+          NATIVE_ERROR
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
-          name: capture-cleanup-control
-          path: ${{ runner.temp }}/capture-cleanup
+          name: native-error-fixture
+          path: ${{ runner.temp }}/fixture-error-evidence
           retention-days: 7
           if-no-files-found: error
