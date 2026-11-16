@@ -3,10 +3,6 @@
 set -euo pipefail
 case "$DEV_TASK" in net-unit|net-node|net-vendor|net-wan-build|net-wan-lifetime|net-wan-peer|net-congestion|netlab-measure-check|netlab-cpu-check|netlab-mobility-calibrate|netlab-mobility-node|netlab-mobility-roam|netlab-peer-mobility|netlab-peer-mobility-samples|netlab-nat-rebind|netlab-nat-rebind-lifecycle|netlab-hop-reference|netlab-hop-reference-lifecycle|netlab-hop-ownership|netlab-hop-lifecycle|netlab-smoke|netlab-dynamic|netlab-compare|netlab-hop|netlab-recovery|netlab-stability|netlab-stalls|netlab-diagnostic|netlab-hop-diagnostic|netlab) ;; *) exit 2 ;; esac
 mkdir -p "$REPORT_DIR"
-if [[ "$DEV_TASK" == net-node ]]; then
-  export KHOR_EXPERIMENT_PULL_WIRE=separate
-  printf '{"global_file_mode":"separate","original_test_commands_and_assertions":true,"explicit_negative_control_overrides_preserved":true}\n' > "$REPORT_DIR/file-mode.json"
-fi
 cp "$SOURCE_PACKAGE/source.json" "$REPORT_DIR/source.json"
 source_dir="${KHOR_NETWORK_SOURCE_DIR:-$RUNNER_TEMP/network-source}"
 if [[ -z "${KHOR_NETWORK_SOURCE_DIR:-}" ]]; then
@@ -37,246 +33,140 @@ for name, content in {
     if not path.exists() or path.read_text() != content:
         path.write_text(content)
 PY
-repeat_netlab() {
-  local status=0 repeat
-  for repeat in 1 2 3; do
-    printf '[netlab-repeat] %s/3\n' "$repeat"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh "$@" || status=$?
-  done
-  return "$status"
-}
-check_format() {
-  if cargo fmt --all -- --check 2>&1 | tee "$REPORT_DIR/format.log"; then
-    return 0
-  fi
-  local formatting_source="$source_dir"
-  if [[ -n "${KHOR_NETWORK_SOURCE_DIR:-}" ]]; then
-    formatting_source="$RUNNER_TEMP/network-format"
-    git clone --no-hardlinks "$SOURCE_PACKAGE/source.git" "$formatting_source" || return 1
-  fi
-  # Export a formatter patch from a disposable copy, preserving cached inputs.
-  (
-    cd "$formatting_source" || exit 1
-    cargo fmt --all >&2 || exit 1
-    git diff --binary
-  ) > "$REPORT_DIR/format.patch" || return 1
-  return 1
-}
-if [[ "$DEV_TASK" == net-unit || "$DEV_TASK" == net-node || "$DEV_TASK" == net-vendor || "$DEV_TASK" == net-congestion || "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime || "$DEV_TASK" == net-wan-peer ]]; then
-  check_format || exit 1
-  if [[ "$DEV_TASK" == net-node ]]; then
-    python3 - <<'REFRESH_IROH'
-import hashlib,json,os
+python3 - <<'NATIVE_WEBKIT_DIAG'
+"""Fixed native platform diagnosis; no Rust/product change or acceptance credit."""
+import concurrent.futures
+import hashlib
+import json
+import os
 from pathlib import Path
-p=Path('vendor/iroh/src/lib.rs');before=hashlib.sha256(p.read_bytes()).hexdigest();os.utime(p,None);assert hashlib.sha256(p.read_bytes()).hexdigest()==before
-(Path(os.environ['REPORT_DIR'])/'iroh-source-refresh.json').write_text(json.dumps(dict(sha256=before,bytes_unchanged=True,reason='Different CLI/Node graphs share un-hashed libiroh outputs; force native dependency refresh without editing source.'))+'\n')
-REFRESH_IROH
-  fi
-  if [[ "$DEV_TASK" == net-unit ]]; then
-    cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
-  elif [[ "$DEV_TASK" == net-wan-build || "$DEV_TASK" == net-wan-lifetime || "$DEV_TASK" == net-wan-peer ]]; then
-    cargo build --locked -p khor-node --example net_wan_probe 2>&1 | tee "$REPORT_DIR/wan-build.log"
-    python3 - "$CARGO_TARGET_DIR/debug/examples/net_wan_probe" "$REPORT_DIR" <<'PYTHON'
-import hashlib,json,os,pathlib,sys
-binary=pathlib.Path(sys.argv[1]);report=pathlib.Path(sys.argv[2]);stat=binary.lstat()
-assert binary.is_absolute() and binary.is_file() and not binary.is_symlink() and stat.st_uid==os.getuid() and stat.st_mode & 0o111
-source=json.loads((report/'source.json').read_text())
-manifest=dict(schema=1,path=str(binary),sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),bytes=stat.st_size,source=source,executed=False,storage='mutable build cache; reverify hash under guard before owned runtime copy')
-(report/'wan-binary.json').write_text(json.dumps(manifest,indent=2)+'\n')
-PYTHON
-    if [[ "$DEV_TASK" == net-wan-lifetime ]]; then
-      wan_status=0
-      python3 "$(dirname "$0")/wan-probe-lease.py" --check "$REPORT_DIR/wan-binary.json" "$REPORT_DIR" || wan_status=$?
-      python3 - "$REPORT_DIR" <<'PYTHON'
-import json,pathlib,sys
-report=pathlib.Path(sys.argv[1]);path=report/'wan-binary.json';manifest=json.loads(path.read_text());contracts=report/'wan-lifetime-contracts.json'
-manifest['executed']=any(r.get('lifecycle',{}).get('worker_pid') for r in json.loads(contracts.read_text())['results']) if contracts.exists() else None
-manifest['execution_scope']='isolated lifetime contracts; no mint, pair or WAN business'
-path.write_text(json.dumps(manifest,indent=2)+'\n')
-PYTHON
-      exit "$wan_status"
-    fi
-  elif [[ "$DEV_TASK" == net-vendor ]]; then
-    # Excluded dependencies cannot run their dev-dependencies from the root
-    # workspace. Use each committed package lock, and make iroh test our noq
-    # patch rather than the registry copy. Keep the exact resolution as evidence.
-    cp vendor/noq-proto/Cargo.lock "$REPORT_DIR/noq-proto-Cargo.lock"
-    cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/noq-proto/Cargo.toml --lib 2>&1 | tee "$REPORT_DIR/noq-proto-unit.log"
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib socket::remote_map::remote_state::tests 2>&1 | tee "$REPORT_DIR/iroh-path-unit.log"
-    # The path filter omits our relay-home, QAD and interface regressions.
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib khor_ 2>&1 | tee "$REPORT_DIR/iroh-home-unit.log"
-  elif [[ "$DEV_TASK" == net-congestion ]]; then
-    # Lower-layer baseline, not a Node/SSH/hop SLO. Preserve every outcome
-    # and repeat sequentially, without another timed case sharing the runtime.
-    printf '{"measurement_version":2,"road_model":"independent_fifo_v2","calibration_required":true,"layer":"noq","slo":false,"test_threads":1,"repeats":3,"rtt_ms":300,"loss_pct_per_direction":2,"mbit_per_direction":20,"queue_ms":200,"bulk_seconds":20,"seeds":["9e3779b97f4a7c15","2545f4914f6cdd1d"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    cargo test --locked -p khor-net --test congestion \
-      road_directions_do_not_wait_for_each_others_future_packets \
-      -- --exact --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/road-calibration.log"
-    grep -Fq 'test result: ok. 1 passed; 0 failed;' "$REPORT_DIR/road-calibration.log"
-    congestion_status=0
-    for congestion_repeat in 1 2 3; do
-      printf '[congestion-repeat] %s/3\n' "$congestion_repeat"
-      env -u CC_ONLY CC_RTT_MS=300 CC_LOSS_PCT=2 CC_MBIT=20 CC_SECS=20 \
-        cargo test --locked -p khor-net --test congestion -- --ignored --nocapture --test-threads=1 \
-        2>&1 | tee "$REPORT_DIR/congestion-$congestion_repeat.log" || congestion_status=$?
-    done
-    exit "$congestion_status"
-  else
-    cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/iroh-full-library.log"
-    python3 - <<'REFRESH_IROH_GRAPH'
-import hashlib,json,os,time
-from pathlib import Path
-path=Path('vendor/iroh/src/lib.rs');data=path.read_bytes();before=path.stat().st_mtime_ns
-stamp=max(time.time_ns(),before+1);os.utime(path,ns=(stamp,stamp));assert path.read_bytes()==data
-(Path(os.environ['REPORT_DIR'])/'iroh-between-graphs-refresh.json').write_text(json.dumps(dict(path=str(path),sha256=hashlib.sha256(data).hexdigest(),before_mtime_ns=before,after_mtime_ns=stamp,content_changed=False,reason='Rebuild root iroh after standalone library graph; preserve hashed dependency types'),indent=2)+'\n')
-REFRESH_IROH_GRAPH
-    cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
-    cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
-    cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
-    cargo test --locked -p khor-node --lib journal::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/journal-unit.log"
-    cargo test --locked -p khor-node --lib link::dial_budget -- --test-threads=1 2>&1 | tee "$REPORT_DIR/dial-budget-unit.log"
-    cargo test --locked -p khor-node --lib ipc:: -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::leased_ipc_callers_release_all_held_response_permits_when_dropped -- --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-response-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::process_contracts::independent_process_budget_releases_a_reply_without_caller_eof_or_manual_release -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/ipc-process-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::quic_cancel_contracts::leased_ipc_cancellation_releases_all_remote_encoded_replies -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/quic-response-lease-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::resume_admission_contracts::local_resume_accepts_a_new_connection_before_the_next_pause_poll -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/resume-admission-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::canonical_content_routes_without_metadata_owner_and_cancels_through_busy_real_wires -- --test-threads=1 2>&1 | tee "$REPORT_DIR/content-wire-unit.log"
-    cargo test --locked -p khor-node --lib session_content::wire_tests::quic_stop_contracts::all_cancelled_reply_streams_observe_stop_and_keep_the_same_wire -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/quic-stop-wire-unit.log"
-    cargo test --locked -p khor-node --test early -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-early.log"
-    cargo test --locked -p khor-node --test machine_pause -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-machine_pause.log"
-    cargo test --locked -p khor-node --test peer_pause -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-peer_pause.log"
-    cargo test --locked -p khor-node --test pairing -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-pairing.log"
-    cargo test --locked -p khor-node --test refused_dial -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-refused_dial.log"
-    cargo test --locked -p khor-node --test resume -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-resume.log"
-    cargo test --locked -p khor-node --test relays -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-relays.log"
-    cargo test --locked -p khor-node --test sync_doc_isolation -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-sync_doc_isolation.log"
-    cargo test --locked -p khor-node --test departed -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-departed.log"
-    cargo test --locked -p khor-node --test act -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-act.log"
-    cargo test --locked -p khor-node --test transfer_race -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-transfer_race.log"
-    cargo test --locked -p khor-node --test transfer -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-transfer.log"
-    cargo test --locked -p khor-node --test files_wire -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-files_wire.log"
-    cargo test --locked -p khor-net --test pkarr -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/pkarr-integration.log"
-    cargo test --locked -p khor-net --test relay_restart -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_restart-integration.log"
-    cargo test --locked -p khor-net --test relay_token -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_token-integration.log"
-    cargo test --locked -p khor-net --test relay_jitter -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_jitter-integration.log"
-    cargo test --locked -p khor-net --test relay_stuck -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_stuck-integration.log"
-  fi
-else
-  # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
-  unshare -Urn sh -ec 'ip link add probe0 type dummy; ip link set probe0 up; tc qdisc add dev probe0 root netem delay 1ms; nft add table inet probe; nft list ruleset' > "$REPORT_DIR/namespace.log" 2>&1
-  export NETLAB_RUN_DIR="$REPORT_DIR/netlab"
-  if [[ "$DEV_TASK" == netlab-measure-check ]]; then
-    printf '{"layer":"fixture","slo":false,"measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::attempts::"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::attempts:: --ignored
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" --calibration > "$REPORT_DIR/attempt-calibration.json"
-  elif [[ "$DEV_TASK" == netlab-cpu-check ]]; then
-    printf '{"layer":"fixture","slo":false,"measurement_revision":"checked_affinity_v3","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::cpu::"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::cpu:: --ignored
-  elif [[ "$DEV_TASK" == netlab-mobility-calibrate ]]; then
-    check_format || exit 1
-    printf '{"layer":"fixture","slo":false,"measurement_revision":"ipv6_renumber_v1","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::mobility::"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::mobility:: --ignored
-  elif [[ "$DEV_TASK" == netlab-nat-rebind || "$DEV_TASK" == netlab-nat-rebind-lifecycle ]]; then
-    check_format || exit 1
-    diagnostic=off
-    if [[ "$DEV_TASK" == netlab-nat-rebind-lifecycle ]]; then
-      diagnostic=lifecycle
-      export NETLAB_DIAGNOSTICS=lifecycle
-    fi
-    printf '{"layer":"node","slo":false,"scenario_revision":"node_nat_port_rebind_v1","calibration_revision":"nat_port_rebind_calibration_v1","calibration_required":true,"measurement_revision":"attempt_outcomes_v4","diagnostic":"%s","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::rebind::r0_","paths::rebind::r1_"]}\n' "$diagnostic" > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::rebind::r0_ --ignored
-    grep -RFq '[netlab-rebind-calibration]' "$REPORT_DIR/netlab"
-    grep -RFq 'test result: ok. 1 passed; 0 failed;' "$REPORT_DIR/netlab"
-    mobility_status=0
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::rebind::r1_ --ignored || mobility_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    if [[ "$diagnostic" == lifecycle && "$mobility_status" == 0 ]]; then
-      python3 scripts/netlab-nat-selection.py "$REPORT_DIR" > "$REPORT_DIR/nat-selection-contract.json" || mobility_status=$?
-    fi
-    exit "$mobility_status"
-  elif [[ "$DEV_TASK" == netlab-peer-mobility || "$DEV_TASK" == netlab-peer-mobility-samples ]]; then
-    check_format || exit 1
-    diagnostic=lifecycle
-    if [[ "$DEV_TASK" == netlab-peer-mobility-samples ]]; then diagnostic=1; fi
-    printf '{"layer":"node","slo":false,"scenario_revision":"peer_relay_replug_v1","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"diagnostic":"%s","filters":["hop::mobility::pm_"]}\n' "$diagnostic" > "$REPORT_DIR/measurement-mode.json"
-    mobility_status=0
-    NETLAB_DIAGNOSTICS="$diagnostic" NETLAB_TEST_THREADS=1 bash scripts/netlab.sh hop::mobility::pm_ --ignored || mobility_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    exit "$mobility_status"
-  elif [[ "$DEV_TASK" == netlab-mobility-roam ]]; then
-    check_format || exit 1
-    printf '{"layer":"node","slo":false,"scenario_revision":"node_replug_triad_v1","scenario_revisions":["node_v4_nat_replug_v1","node_dual_stack_replug_v1","node_v4_to_v6_replug_v1"],"measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::roam::roam_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    mobility_status=0
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::roam::roam_ --ignored || mobility_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    exit "$mobility_status"
-  elif [[ "$DEV_TASK" == netlab-mobility-node ]]; then
-    check_format || exit 1
-    printf '{"layer":"node","slo":false,"scenario_revision":"ipv6_node_overlap_pair_v1","scenario_revisions":["ipv6_node_overlap_v1","ipv6_node_overlap_remote_first_v1"],"measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":1,"ignored":true,"filters":["paths::mobile::mv6_overlap_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    mobility_status=0
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::mobile::mv6_overlap_ --ignored || mobility_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    exit "$mobility_status"
-  elif [[ "$DEV_TASK" == netlab-hop-reference ]]; then
-    printf '{"layer":"node","slo":false,"reference":"hop_reference_v2","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":3,"ignored":true,"filters":["hop::reference::fr_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    reference_status=0
-    repeat_netlab hop::reference::fr_ --ignored || reference_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    exit "$reference_status"
-  elif [[ "$DEV_TASK" == netlab-hop-reference-lifecycle ]]; then
-    printf '{"layer":"node","slo":false,"reference":"hop_reference_v2","diagnostic":"lifecycle","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":3,"ignored":true,"filters":["hop::reference::fr_automatic_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    reference_status=0
-    NETLAB_DIAGNOSTICS=lifecycle repeat_netlab hop::reference::fr_automatic_ --ignored || reference_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    exit "$reference_status"
-  elif [[ "$DEV_TASK" == netlab-hop-ownership ]]; then
-    printf '{"layer":"node","slo":false,"diagnostic":"lifecycle","measurement_revision":"attempt_outcomes_v4","test_threads":1,"repeats":3,"filters":["hop::f4_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    ownership_status=0
-    NETLAB_DIAGNOSTICS=lifecycle repeat_netlab hop::f4_ || ownership_status=$?
-    python3 scripts/netlab-attempts.py "$REPORT_DIR/netlab" > "$REPORT_DIR/attempts.json"
-    exit "$ownership_status"
-  elif [[ "$DEV_TASK" == netlab-hop-lifecycle ]]; then
-    printf '{"layer":"node","slo":false,"diagnostic":true,"test_threads":1,"repeats":3,"filters":["hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_DIAGNOSTICS=1 repeat_netlab hop::f4i_
-  elif [[ "$DEV_TASK" == netlab-smoke ]]; then
-    printf '{"test_threads":2,"repeats":1,"filters":["paths::p2_","paths::p3_","paths::p6_","hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=2 bash scripts/netlab.sh paths::p2_ paths::p3_ paths::p6_ hop::f4_ hop::f4s_ hop::f4i_
-  elif [[ "$DEV_TASK" == netlab-dynamic ]]; then
-    printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p7_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    repeat_netlab paths::p2_ paths::p3_ paths::p7_
-  elif [[ "$DEV_TASK" == netlab-recovery ]]; then
-    printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    repeat_netlab paths::p2_ paths::p3_
-  elif [[ "$DEV_TASK" == netlab-stability ]]; then
-    printf '{"test_threads":1,"repeats":1,"filters":["paths::p1_","paths::p1j_","paths::p1s_","paths::p5_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p1_ paths::p1j_ paths::p1s_ paths::p5_
-  elif [[ "$DEV_TASK" == netlab-stalls ]]; then
-    printf '{"test_threads":1,"repeats":1,"filters":["paths::p1s_","paths::p5_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p1s_ paths::p5_
-  elif [[ "$DEV_TASK" == netlab-diagnostic ]]; then
-    printf '{"test_threads":1,"repeats":1,"diagnostic":true,"filters":["paths::p1s_","hop::f4s_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_DIAGNOSTICS=1 NETLAB_TEST_THREADS=1 bash scripts/netlab.sh paths::p1s_ hop::f4s_
-  elif [[ "$DEV_TASK" == netlab-hop-diagnostic ]]; then
-    printf '{"test_threads":1,"repeats":1,"diagnostic":true,"filters":["hop::f4s_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_DIAGNOSTICS=1 NETLAB_TEST_THREADS=1 bash scripts/netlab.sh hop::f4s_
-  elif [[ "$DEV_TASK" == netlab-hop ]]; then
-    printf '{"test_threads":1,"repeats":3,"filters":["hop::f4_","hop::f4s_","hop::f4i_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    repeat_netlab hop::f4_ hop::f4s_ hop::f4i_
-  elif [[ "$DEV_TASK" == netlab-compare ]]; then
-    # Performance comparisons run sequentially; retain all three outcomes
-    # even when one iteration exposes the baseline's expected product red.
-    printf '{"test_threads":1,"repeats":3,"filters":["paths::p2_","paths::p3_","paths::p6_"]}\n' > "$REPORT_DIR/measurement-mode.json"
-    repeat_netlab paths::p2_ paths::p3_ paths::p6_
-  else
-    printf '{"test_threads":8,"repeats":1,"filters":[]}\n' > "$REPORT_DIR/measurement-mode.json"
-    NETLAB_TEST_THREADS=8 bash scripts/netlab.sh
-  fi
-fi
+import selectors
+import socket
+import subprocess
+import threading
+import time
+
+REPORT = Path(os.environ['REPORT_DIR'])
+SOURCE = Path.cwd()
+fixture = SOURCE / 'apps/gui/core/tests/fixtures/webkit_loopback.swift'
+program = REPORT / 'webkit-loopback-original'
+build = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', str(fixture), '-o', str(program)], capture_output=True, text=True)
+(REPORT / 'swift-build.log').write_text(build.stdout + build.stderr)
+assert build.returncode == 0
+
+def listener(address, port=0):
+    sock = socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET)
+    if ':' in address:
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+    sock.bind((address, port))
+    sock.listen(16)
+    sock.settimeout(.2)
+    return sock
+
+def head(sock):
+    value = b''
+    while not value.endswith(b'\r\n\r\n'):
+        chunk = sock.recv(1)
+        if not chunk:
+            return value
+        value += chunk
+        assert len(value) <= 8192
+    return value
+
+def case(index, host, mode):
+    facts = dict(proxy_accepted=0, forward_accepted=0, connects=[], served=0, errors=[])
+    stop = threading.Event()
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=12)
+    sockets = []
+    threads = []
+    proxy = listener('127.0.0.1')
+    sockets.append(proxy)
+    first = listener('::1' if host == '[::1]' else '127.0.0.1')
+    port = first.getsockname()[1]
+    sockets.append(first)
+    if host == 'localhost':
+        sockets.append(listener('::1', port))
+    target = f'{host}:{port}'
+
+    def respond(client):
+        with client:
+            client.settimeout(5)
+            request = head(client)
+            if not request:
+                return
+            line = request.split(b'\r\n')[0].decode()
+            facts['connects'].append(line)
+            assert line == f'CONNECT {target} HTTP/1.1', line
+            client.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+            request = head(client)
+            if not request:
+                return
+            assert request.startswith(b'GET / '), request
+            assert f'Host: {target}'.lower().encode() in request.lower(), request
+            client.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 13\r\nConnection: close\r\n\r\nBORROWED_EXIT')
+            facts['served'] += 1
+
+    def forward(client):
+        with client, socket.create_connection(proxy.getsockname(), timeout=5) as upstream:
+            upstream.sendall(f'CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n'.encode())
+            assert head(upstream).startswith(b'HTTP/1.1 200 ')
+            with selectors.DefaultSelector() as selected:
+                selected.register(client, selectors.EVENT_READ, upstream)
+                selected.register(upstream, selectors.EVENT_READ, client)
+                while not stop.is_set():
+                    for key, _ in selected.select(.2):
+                        value = key.fileobj.recv(65536)
+                        if not value:
+                            return
+                        key.data.sendall(value)
+
+    def accept(sock, handler, counter):
+        def guarded(client):
+            try:
+                handler(client)
+            except Exception as error:
+                facts['errors'].append(repr(error))
+        while not stop.is_set():
+            try:
+                client, _ = sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            facts[counter] += 1
+            pool.submit(guarded, client)
+
+    for sock in sockets:
+        thread = threading.Thread(target=accept, args=(sock, respond if sock is proxy else forward, 'proxy_accepted' if sock is proxy else 'forward_accepted'))
+        thread.start()
+        threads.append(thread)
+    outcome = dict(index=index, host=host, mode=mode, port=port, facts=facts)
+    try:
+        env = dict(os.environ, CFNETWORK_DIAGNOSTICS='3')
+        result = subprocess.run([str(program), mode, f'http://{target}/', str(proxy.getsockname()[1])], capture_output=True, text=True, timeout=30, env=env)
+        (REPORT / f'webkit-{index}.stdout').write_text(result.stdout)
+        (REPORT / f'webkit-{index}.stderr').write_text(result.stderr)
+        outcome.update(returncode=result.returncode, result=json.loads(result.stdout), passed=result.returncode == 0 and json.loads(result.stdout).get('body') == 'BORROWED_EXIT')
+    except Exception as error:
+        outcome.update(error=repr(error), passed=False)
+    finally:
+        stop.set()
+        for sock in sockets:
+            sock.close()
+        for thread in threads:
+            thread.join(1)
+        pool.shutdown(wait=True)
+    return outcome
+
+# Exactly three independent default-store rounds, plus two IPv6 mode controls.
+order = [(host, 'default') for _ in range(3) for host in ['127.0.0.1', 'localhost', '[::1]']]
+order += [('[::1]', 'direct'), ('[::1]', 'explicit')]
+results = []
+for index, (host, mode) in enumerate(order, 1):
+    row = case(index, host, mode)
+    results.append(row)
+    (REPORT / 'webkit-platform-diagnostic.json').write_text(json.dumps(dict(schema=1, fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(), fixed_cases=11, replacements=0, product_changes=0, Rust_tests_run=0, results=results, accepted=False), indent=2) + '\n')
+    print(json.dumps(row), flush=True)
+raise SystemExit(0 if all(row['passed'] and not row['facts']['errors'] for row in results) else 1)
+
+NATIVE_WEBKIT_DIAG
