@@ -1,0 +1,260 @@
+//! Real-connection acceptance for the live kind (docs/SESSION.md): a
+//! session backed by a real process on its home machine becomes a row on
+//! another device through peer reports — with its source attached — and
+//! the cross-device seen loop closes over the CRDT. Controls: the
+//! missing-ending rule, remote close refused by name, and Act kept off
+//! live sessions at the wire. Every await under a timeout.
+
+//!
+//! # The clock here is issue #73's, not this file's subject
+//!
+//! Every deadline below is sized to swallow one full first-touch stall
+//! (#73: 20-40s per process on this machine — the comment in
+//! `wait_for_endpoint_file` has the mechanism). **Uniformly**, because
+//! which call pays it is not deterministic: measured 2026-08-21, a bind
+//! cost 21ms and a dial 1.1s while the first real sync cost 37s. The
+//! runtime is multi-thread for the other half of #73: that stall is
+//! *synchronous*, and on a current-thread runtime it freezes tokio's
+//! clock, so every timeout in the file silently stretches with it and a
+//! real hang stops looking like one.
+
+use std::fs;
+use std::path::Path;
+use std::time::Duration;
+
+use khor_core::State;
+use khor_node::proto::{Request, Response};
+use khor_node::{Node, SessionId};
+use tokio::time::timeout;
+
+mod util;
+
+/// A scratch tree that **takes itself away however the test leaves**
+/// (`crates/node/src/tests.rs::Scratch` has the whole reasoning: a
+/// cleanup written at the end of a test is skipped by the assertion
+/// that fails, so a red run leaks a directory every time it is red).
+/// A copy per file, which is this repo's convention for test helpers —
+/// it costs no dev-dependency.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+fn root(tag: &str) -> Scratch {
+    let p = std::env::temp_dir().join(format!("khor-lv-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&p);
+    fs::create_dir_all(&p).unwrap();
+    util::hermetic(&p);
+    Scratch(p)
+}
+
+async fn wait_for_endpoint_file(root: &Path) {
+    // 90s, not 10 (issue #73, sampled 2026-08-20; every real-connection
+    // test in this directory timed out for it on 2026-08-21). On a Mac
+    // operated over ssh, a freshly compiled test binary is a new face to
+    // macOS: its first network-stack touch (interface enumeration,
+    // SystemConfiguration) hangs **20-40s per process**, waiting on an
+    // authorization prompt nobody can ever click.
+    //
+    // What the budgets in this file are distinguishing themselves from:
+    // a real hang, which is unbounded. 90s against a measured 40s
+    // ceiling is more than double, deliberately — a timeout that never
+    // fires costs nothing when the test passes, and a flaky red costs a
+    // person a trip to find out it was the machine.
+    let path = root.join(".khor").join("endpoint.json");
+    timeout(Duration::from_secs(90), async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("serve should write endpoint.json");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_live_row_travels_as_a_report_and_the_seen_loop_closes() {
+    let ra = root("a");
+    let rb = root("b");
+    let sa = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let serve_a = tokio::spawn(async move { sa.serve().await });
+    wait_for_endpoint_file(&ra).await;
+
+    let a = Node::open_as(ra.to_path_buf(), "alpha").unwrap();
+    let b = Node::open_as(rb.to_path_buf(), "beta").unwrap();
+    let ticket = a.invite().unwrap();
+    timeout(Duration::from_secs(60), b.pair(&ticket))
+        .await
+        .expect("pairing must not hang")
+        .unwrap();
+
+    // The agent: a real process alpha watches. Registered blocked — the
+    // word whose whole point is being seen from elsewhere.
+    let mut agent = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let id = SessionId("tui/agent1".to_owned());
+    let ephemeral = a.open_ephemeral("tui", "the agent").unwrap();
+    a.report_state(&ephemeral, State::Busy).unwrap();
+    {
+        // Register the watched one through the same public surface the
+        // wrapper uses: open, then bind the pid.
+        use khor_node::live::LiveKind;
+        let k = LiveKind::new(ra.to_path_buf(), a.device());
+        k.register(&id, "tui", "claude in proj", Some(agent.id()), None)
+            .unwrap();
+        k.report(&id, State::Blocked, khor_node::live::Source::Reported)
+            .unwrap();
+    }
+    // Found, not started: on the list because somebody imported it
+    // (docs/SHELL.md 第八轮) — and the list is one list, so beta shows it.
+    a.import(&id.0).unwrap();
+
+    // beta is not home: its row can only be a report, and says so.
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let views = b.sessions().unwrap();
+    let view = views
+        .iter()
+        .find(|v| v.session.id == id)
+        .expect("the live row should reach the other device");
+    assert_eq!(
+        view.session.state.unwrap().state,
+        State::Blocked,
+        "等准许,从别的设备看得到"
+    );
+    assert_eq!(view.session.title, "claude in proj");
+    let (reporter, _) = view
+        .source
+        .as_ref()
+        .expect("a reported row must carry its source");
+    assert_eq!(reporter, "alpha");
+    assert!(
+        views
+            .iter()
+            .any(|v| v.session.id == ephemeral && v.session.state.unwrap().state == State::Busy),
+        "the ephemeral row travels too"
+    );
+
+    // The turn ends; the seen loop closes across devices: beta looks,
+    // the watermark replicates, home derives 空闲, beta sees 空闲.
+    a.report_state(&id, State::Done).unwrap();
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let views = b.sessions().unwrap();
+    let view = views.iter().find(|v| v.session.id == id).unwrap();
+    assert_eq!(
+        (view.session.state.unwrap().state, view.session.unread),
+        (State::Done, 1),
+        "turn done, unread on every device"
+    );
+    b.seen(&id).unwrap();
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let views = b.sessions().unwrap();
+    let view = views.iter().find(|v| v.session.id == id).unwrap();
+    assert_eq!(
+        (view.session.state.unwrap().state, view.session.unread),
+        (State::Idle, 0),
+        "looked at on beta clears the row everywhere"
+    );
+
+    // Remote close is not a thing yet — refused by name, pointing home.
+    // Asked of the row khor started (on the list as `new`): an imported
+    // row is not closed at all, only taken off the list (below).
+    let err = b.close(&ephemeral).unwrap_err();
+    assert_eq!(
+        err,
+        khor_catalog::msg::remote_close_not_yet("alpha"),
+        "remote close points home"
+    );
+    // 删除 on the imported row, from beta: off the list, and nothing
+    // else — alpha's process is untouched (docs/SHELL.md 第八轮 第 3 条).
+    b.close(&id).unwrap();
+    assert!(!b.sessions().unwrap().iter().any(|v| v.session.id == id));
+    assert!(agent.try_wait().unwrap().is_none(), "the process lives on");
+    // …and brought back, for the ending rule below.
+    b.import(&id.0).unwrap();
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+
+    // The missing-ending rule: the agent dies, nobody records an exit,
+    // the row turns 失败 — and the far side sees it.
+    agent.kill().unwrap();
+    agent.wait().unwrap();
+    let row = a
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .find(|v| v.session.id == id)
+        .unwrap()
+        .session;
+    assert_eq!(
+        row.state.unwrap().state,
+        State::Failed,
+        "a dead process with no recorded ending"
+    );
+    timeout(Duration::from_secs(60), b.sync_now())
+        .await
+        .expect("sync must not hang")
+        .unwrap();
+    let views = b.sessions().unwrap();
+    let view = views.iter().find(|v| v.session.id == id).unwrap();
+    assert_eq!(view.session.state.unwrap().state, State::Failed);
+
+    // ── wire control: Act stays off live sessions ───────────
+    let alpha_info = b
+        .devices()
+        .unwrap()
+        .into_iter()
+        .find(|d| d.name == "alpha")
+        .unwrap();
+    let beta_key =
+        khor_net::identity::load_or_create(&rb.join(".khor").join("identity.key")).unwrap();
+    let resp = timeout(
+        Duration::from_secs(60),
+        util::raw_request(
+            beta_key,
+            &alpha_info.id,
+            &alpha_info.addrs,
+            &Request::Act {
+                session: id.0.clone(),
+                action: "take".into(),
+            },
+        ),
+    )
+    .await
+    .expect("a refused act must not hang")
+    .unwrap();
+    match resp {
+        Response::Refused { why } => {
+            assert_eq!(
+                why,
+                khor_catalog::msg::no_such_transfer(&id.0),
+                "take stays off live sessions"
+            )
+        }
+        other => panic!("Act on a live session must be refused, got {other:?}"),
+    }
+
+    serve_a.abort();
+}

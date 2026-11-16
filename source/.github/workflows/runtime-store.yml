@@ -1,0 +1,32 @@
+name: Runtime store
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Verify immutable programs, signed releases and interrupted update recovery
+        run: cargo test --locked -p khor-runtime -p khor-update -- --nocapture --test-threads=1
+      - name: Check that the shared runtime library also compiles for the iOS client
+        if: matrix.os == 'macos-26'
+        run: |
+          rustup target add aarch64-apple-ios
+          cargo check --locked -p khor-runtime --target aarch64-apple-ios
