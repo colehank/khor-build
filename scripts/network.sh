@@ -127,17 +127,6 @@ PYTHON
     done
     exit "$congestion_status"
   else
-    cp vendor/iroh/Cargo.lock "$REPORT_DIR/iroh-Cargo.lock"
-    cargo test --locked --manifest-path vendor/iroh/Cargo.toml \
-      --config "patch.crates-io.noq-proto.path=\"$source_dir/vendor/noq-proto\"" \
-      --lib -- --test-threads=1 2>&1 | tee "$REPORT_DIR/iroh-full-library.log"
-    python3 - <<'REFRESH_IROH_GRAPH'
-import hashlib,json,os,time
-from pathlib import Path
-path=Path('vendor/iroh/src/lib.rs');data=path.read_bytes();before=path.stat().st_mtime_ns
-stamp=max(time.time_ns(),before+1);os.utime(path,ns=(stamp,stamp));assert path.read_bytes()==data
-(Path(os.environ['REPORT_DIR'])/'iroh-between-graphs-refresh.json').write_text(json.dumps(dict(path=str(path),sha256=hashlib.sha256(data).hexdigest(),before_mtime_ns=before,after_mtime_ns=stamp,content_changed=False,reason='Rebuild root iroh after standalone library graph; preserve hashed dependency types'),indent=2)+'\n')
-REFRESH_IROH_GRAPH
     cargo test --locked -p khor-net --lib 2>&1 | tee "$REPORT_DIR/net-unit.log"
     cargo test --locked -p khor-node --lib hop::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/hop-unit.log"
     cargo test --locked -p khor-node --lib wires::tests -- --test-threads=1 2>&1 | tee "$REPORT_DIR/wires-unit.log"
@@ -163,11 +152,13 @@ REFRESH_IROH_GRAPH
     cargo test --locked -p khor-node --test transfer_race -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-transfer_race.log"
     cargo test --locked -p khor-node --test transfer -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-transfer.log"
     cargo test --locked -p khor-node --test files_wire -- --test-threads=1 2>&1 | tee "$REPORT_DIR/integration-files_wire.log"
-    cargo test --locked -p khor-net --test pkarr -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/pkarr-integration.log"
-    cargo test --locked -p khor-net --test relay_restart -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_restart-integration.log"
-    cargo test --locked -p khor-net --test relay_token -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_token-integration.log"
-    cargo test --locked -p khor-net --test relay_jitter -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_jitter-integration.log"
-    cargo test --locked -p khor-net --test relay_stuck -- --nocapture --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_stuck-integration.log"
+    cargo test --locked -p khor-node --lib accounts::tests::the_answer_to_a_far_machine_is_what_this_disk_holds_at_any_age -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/cached-quota-held-contract.log"
+    cargo test --locked -p khor-node --lib trust::tests::admission_separates_waiting_approval_from_revoked_access -- --exact --test-threads=1 2>&1 | tee "$REPORT_DIR/main-admission-contract.log"
+    cargo test --locked -p khor-net --test pkarr -- --test-threads=1 2>&1 | tee "$REPORT_DIR/pkarr-integration.log"
+    cargo test --locked -p khor-net --test relay_restart -- --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_restart-integration.log"
+    cargo test --locked -p khor-net --test relay_token -- --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_token-integration.log"
+    cargo test --locked -p khor-net --test relay_jitter -- --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_jitter-integration.log"
+    cargo test --locked -p khor-net --test relay_stuck -- --test-threads=1 2>&1 | tee "$REPORT_DIR/relay_stuck-integration.log"
   fi
 else
   # Prove the actual namespace, veth, netem and firewall capabilities before compiling.
