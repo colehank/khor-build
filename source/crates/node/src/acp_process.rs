@@ -1,0 +1,240 @@
+use crate::agent_process::{Control, Pipes, Session};
+use agent_client_protocol::{AcpAgent, ByteStreams};
+use std::{
+    collections::VecDeque,
+    io::Read,
+    path::Path,
+    process::Command,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+};
+use tokio::sync::watch;
+
+#[path = "acp_process_io.rs"]
+mod io;
+
+pub(crate) struct Transport {
+    pub streams: ByteStreams<io::Writer, io::Reader>,
+    /// Actual child returned by the owned Session, not an inferred descendant.
+    /// Persistent recovery must also verify OS birth before treating this PID
+    /// as a later owner; a PID by itself is not an exit or liveness receipt.
+    /// None means this platform has not carried that fact out of its adapter.
+    pub provider_pid: Option<u32>,
+    pub lifecycle: khor_acp::TransportLifecycle,
+    pub control: Arc<Control>,
+    pub stderr: Arc<Mutex<VecDeque<u8>>>,
+}
+
+struct Building {
+    session: Option<Session>,
+    control: Arc<Control>,
+    input: Option<Arc<io::Queue<io::WriteOp>>>,
+    output: Option<Arc<io::Queue<std::io::Result<Vec<u8>>>>>,
+    workers: Vec<JoinHandle<()>>,
+}
+impl Building {
+    fn close_queues(&self) {
+        if let Some(input) = &self.input {
+            input.close();
+        }
+        if let Some(output) = &self.output {
+            output.close();
+        }
+    }
+    fn join_workers(&mut self) -> Result<(), String> {
+        let mut error = None;
+        for worker in self.workers.drain(..) {
+            if worker.join().is_err() {
+                error = Some("ACP I/O worker panicked".to_owned());
+            }
+        }
+        error.map_or(Ok(()), Err)
+    }
+    fn run(mut self) -> Result<khor_acp::ProcessExit, String> {
+        let mut session = self.session.take().expect("building owns session");
+        let status = session.wait().map_err(|error| error.to_string());
+        self.close_queues();
+        let workers = self.join_workers();
+        let status = status?;
+        workers?;
+        Ok(khor_acp::ProcessExit {
+            code: status.code(),
+        })
+    }
+}
+impl Drop for Building {
+    fn drop(&mut self) {
+        self.close_queues();
+        self.control.shutdown();
+        if let Some(mut session) = self.session.take() {
+            let _ = session.finish(true);
+        }
+        let _ = self.join_workers();
+    }
+}
+
+/// Keep ACP's inherited environment/cwd; Pi's model-specific allowlist is unrelated.
+fn command_of(command: &str) -> Result<Command, String> {
+    let config = AcpAgent::from_str(command)
+        .map_err(|error| error.to_string())?
+        .into_config();
+    let mut command = Command::new(config.command());
+    command.args(config.arguments());
+    // The Windows owned-process adapter consumes only explicit Command environment.
+    command
+        .env_clear()
+        .envs(std::env::vars_os())
+        .envs(config.environment());
+    command.current_dir(std::env::current_dir().map_err(|error| error.to_string())?);
+    Ok(command)
+}
+
+pub(crate) fn spawn(command: &str) -> Result<Transport, String> {
+    spawn_observed(command, |_, _| ()).map(|(transport, ())| transport)
+}
+
+/// Login/capability setup uses the same execution-node vendor stores as a session host.
+pub(crate) fn spawn_setup(command: &str, root: &Path) -> Result<Transport, String> {
+    let mut command = command_of(command)?;
+    command
+        .current_dir(root)
+        .env("CODEX_HOME", crate::adaptor::codex_home(root))
+        .env("CLAUDE_CONFIG_DIR", crate::adaptor::claude_home(root));
+    spawn_command_observed(command, |_, _| ()).map(|(transport, ())| transport)
+}
+
+/// Only finite startup categories cross the API; arbitrary agent stderr may contain credentials.
+pub(crate) fn startup_reason(stderr: &str) -> Option<&'static str> {
+    let text = stderr.to_ascii_lowercase();
+    if (text.contains("enotdir") || text.contains("enoent") || text.contains("eacces"))
+        && (text.contains("_cacache") || text.contains("_npx") || text.contains("npm cache"))
+    {
+        Some("npm_cache_unavailable")
+    } else if text.contains("npm err") && (text.contains("etarget") || text.contains("e404")) {
+        Some("npm_package_unavailable")
+    } else if text.contains("npm err")
+        && [
+            "econnreset",
+            "eai_again",
+            "enotfound",
+            "etimedout",
+            "unable_to_get_issuer_cert",
+        ]
+        .iter()
+        .any(|code| text.contains(code))
+    {
+        Some("npm_download_failed")
+    } else if text.contains("node")
+        && (text.contains("no such file or directory") || text.contains("is not recognized"))
+    {
+        Some("node_unavailable")
+    } else {
+        None
+    }
+}
+
+/// Capture finite facts before the Session's supervisor starts. The same Control
+/// is borrowed here and then moved into Transport; the observation is not a
+/// second lifecycle owner or an exit receipt. Unknown facts remain the caller's
+/// value and never cause an implicit respawn.
+pub(crate) fn spawn_observed<T>(
+    command: &str,
+    observe: impl FnOnce(Option<u32>, &Arc<Control>) -> T,
+) -> Result<(Transport, T), String> {
+    let command = command_of(command)?;
+    spawn_command_observed(command, observe)
+}
+
+fn spawn_command_observed<T>(
+    command: Command,
+    observe: impl FnOnce(Option<u32>, &Arc<Control>) -> T,
+) -> Result<(Transport, T), String> {
+    let control = Arc::new(Control::default());
+    let (
+        session,
+        Pipes {
+            stdin,
+            stdout,
+            mut stderr,
+        },
+        observed,
+    ) = Session::spawn_with_profile_observed(
+        command,
+        control.clone(),
+        crate::agent_process::SpawnProfile::Contained,
+        |pid| observe(pid, &control),
+    )
+    .map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    let provider_pid = Some(session.pid());
+    #[cfg(not(unix))]
+    let provider_pid = None;
+    let mut building = Building {
+        session: Some(session),
+        control: control.clone(),
+        input: None,
+        output: None,
+        workers: Vec::new(),
+    };
+    let (reader, output, worker) = io::read_pipe(stdout).map_err(|error| error.to_string())?;
+    building.output = Some(output.clone());
+    building.workers.push(worker);
+    let (writer, input, worker) = io::write_pipe(stdin).map_err(|error| error.to_string())?;
+    building.input = Some(input.clone());
+    building.workers.push(worker);
+    let tail = Arc::new(Mutex::new(VecDeque::new()));
+    let captured = tail.clone();
+    building.workers.push(
+        std::thread::Builder::new()
+            .name("acp-stderr".into())
+            .spawn(move || {
+                let mut bytes = [0u8; io::CHUNK];
+                loop {
+                    match stderr.read(&mut bytes) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let mut tail = captured.lock().unwrap_or_else(|p| p.into_inner());
+                            tail.extend(&bytes[..n]);
+                            let excess = tail.len().saturating_sub(64 * 1024);
+                            tail.drain(..excess);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?,
+    );
+    let (done, completion) = watch::channel(None);
+    std::thread::Builder::new()
+        .name("acp-process-owner".into())
+        .spawn(move || {
+            let result = building.run();
+            done.send_replace(Some(result));
+        })
+        .map_err(|error| error.to_string())?;
+    let requests = control.clone();
+    let lifecycle = khor_acp::TransportLifecycle::new(
+        move || {
+            input.close();
+            output.close();
+            requests.shutdown();
+        },
+        completion,
+    );
+    Ok((
+        Transport {
+            streams: ByteStreams::new(writer, reader),
+            provider_pid,
+            lifecycle,
+            control,
+            stderr: tail,
+        },
+        observed,
+    ))
+}
+
+#[cfg(test)]
+#[path = "acp_process_tests.rs"]
+mod tests;
