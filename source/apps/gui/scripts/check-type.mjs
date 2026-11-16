@@ -1,0 +1,263 @@
+// The type gate, static half: tokens.css owns every font size, weight,
+// radius and tempo — a literal outside it is a second source of truth
+// that drifts silently (the px gate's judgment, extended to type).
+//
+// What it blocks:
+//   - a tailwind weight class by number-name (font-medium, font-bold…):
+//     the ink weights are semantic (font-body/label/title) so a rank is
+//     stated as a role, not as a number someone liked;
+//   - an arbitrary value carrying a length for type or radius
+//     (text-[13px], rounded-[7px], font-[550]);
+//   - a bare font-size / font-weight / border-radius declaration in a
+//     stylesheet other than tokens.css;
+//   - the TS tempo twin drifting from the CSS one: `--time-yield` and
+//     `lib/tempo.ts` carry one number under one name, and this is the
+//     only gate that can see both files at once.
+//
+// What it cannot block: a *wrong* role — a label dressed as a title
+// compiles and passes; the face gate (`check-face.mjs`) holds the
+// rendered distribution, and neither gate can read intent.
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join, relative } from "node:path";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+// tokens own the numbers; shadcn ui/ is vendored; gen/ is machine output.
+const ALLOW = [
+  /^src\/styles\/tokens\.css$/,
+  /^src\/components\/ui\//,
+  // `src/day/` is the 24-hour panel and its stylesheet, moved across
+  // whole from the prototype that is its definition — vendored in the
+  // same sense `ui/` is. **The numbers in there are the design.**
+  // Re-expressing them as tokens is the re-implementation the
+  // transplant exists to undo, and this repo has already paid for that
+  // once (2026-09-04).
+  /^src\/day\//,
+  /^src\/gen\//,
+];
+
+const NUMBER_WEIGHT =
+  /\bfont-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black)\b/;
+// **One type scale, named for what a line is** (docs/SHELL.md 第十五轮
+// 第 1 条): `title-lg/md/sm`, `headline`, `body`, `callout`, `caption`,
+// `group`, `read` and `doc-h1/2/3`, `mono` and `term` — the fourteen of
+// docs/design-system/tokens.json. The sets it replaced — Tailwind's
+// `xs/sm/base/lg/xl…` and this app's `title/fact/aux/hero/code` — are
+// refused by name, because each of them still *works*: Tailwind ships
+// its four, so a stray `text-sm` compiles, renders at Tailwind's 14 and
+// passes every other check. `ui/` is held to it too; it is vendored,
+// but it is also the app's buttons and inputs.
+const OLD_SCALE = /(?<![\w-])text-(xs|sm|base|lg|[2-9]?xl|title|fact|aux|hero|code)(?![\w-])/;
+const OLD_SCALE_VAR = /var\(--text-(xs|sm|base|lg|title|fact|aux|hero|code)(--line-height)?\)/;
+const ARBITRARY_TYPE = /\b(text|font|rounded)-\[[^\]]*\d[^\]]*\]/;
+const CSS_LITERAL = /\b(font-size|font-weight|border-radius)\s*:\s*[\d.]/;
+
+const offenders = [];
+walk(join(root, "src"));
+
+function walk(dir) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) walk(p);
+    else check(p);
+  }
+}
+
+function check(path) {
+  const rel = relative(root, path).replaceAll("\\", "/");
+  if (!/\.(tsx?|css|html)$/.test(rel)) return;
+  if (rel !== "src/styles/tokens.css" && !rel.startsWith("src/gen/") && !rel.startsWith("src/day/")) {
+    readFileSync(path, "utf8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+        if (OLD_SCALE.test(line) || OLD_SCALE_VAR.test(line)) {
+          offenders.push(`${rel}:${i + 1}: the old type scale — ${line.trim()} (use title-lg/md/sm, headline, body, callout, caption, group)`);
+        }
+      });
+  }
+  if (ALLOW.some((rx) => rx.test(rel))) return;
+  const css = rel.endsWith(".css") || rel.endsWith(".html");
+  readFileSync(path, "utf8")
+    .split("\n")
+    .forEach((line, i) => {
+      if (
+        NUMBER_WEIGHT.test(line) ||
+        ARBITRARY_TYPE.test(line) ||
+        (css && CSS_LITERAL.test(line))
+      ) {
+        offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+      }
+    });
+}
+
+// ── the machine page's drawings stay on the type scale ───────────────
+//
+// 2026-09-28: the 24h figure wrote its words at 6.5–10.5px and the
+// scatter's ticks at 10 — under `caption` 11, the floor of the scale —
+// and nothing here could say so, because `src/day/` is allowed above
+// (its numbers are the design) and an SVG `font-size` is an attribute,
+// not a class. The allowance stands for geometry; **type is the one
+// number in there that now comes from the tokens** (`TYPE` in
+// `day-core.js`, read off `--text-caption` / `--text-callout`). So:
+//
+//   - a numeric `'font-size'` in `src/day/*.js`, or a numeric
+//     `font-size:` in `src/day/*.css`, is red — the size has to be read
+//     from the scale, not written;
+//   - a numeric `fontSize={…}` in `MachineCard.tsx` is red for the same
+//     reason, and `PLOT.tick` (the ticks both scatters draw) must not be
+//     under `--text-caption`.
+//
+// The rendered half is `check-face`'s 「type floor」 section, which
+// measures every word on the card; this half names the line.
+{
+  const tokens = readFileSync(join(root, "src/styles/tokens.css"), "utf8");
+  // `--text-caption` is `var(--fs-caption)` since the scale went through
+  // `--ui-scale` (`--fs-caption: calc(11px * var(--ui-scale))`), so the
+  // probe follows one `var()` hop and reads the first px in the value —
+  // the base size, at scale 1. A probe written for the old `11px` form
+  // went dead quietly (UX-34 §4).
+  const tokenValue = (name) => tokens.match(new RegExp(`^\\s*${name}:\\s*([^;]+);`, "m"))?.[1]?.trim();
+  const basePx = (name) => {
+    const v = tokenValue(name);
+    if (!v) return NaN;
+    const hop = v.match(/^var\((--[\w-]+)\)$/);
+    return hop ? basePx(hop[1]) : Number(v.match(/([\d.]+)px/)?.[1]);
+  };
+  const caption = basePx("--text-caption");
+  if (!(caption > 0)) offenders.push("type floor: probe dead — --text-caption not found in tokens.css");
+  const dayDir = join(root, "src/day");
+  const lines = (rel) => readFileSync(join(root, rel), "utf8").split("\n");
+  for (const name of readdirSync(dayDir)) {
+    const rel = `src/day/${name}`;
+    //   JS: every `'font-size'` value must be one of the scale's names
+    //   (`cap`, `call`, `TYPE.*`) — a ternary of two numbers
+    //   (`narrow?8:8.5`) is a written size too, and was the common
+    //   spelling. CSS: a value that starts with a digit.
+    const css = name.endsWith(".css");
+    if (!css && !name.endsWith(".js")) continue;
+    const written = (line) =>
+      css
+        ? /font-size\s*:\s*[\d.]/.test(line)
+        : [...line.matchAll(/'font-size'\s*:\s*([^,}]+)/g)].some((m) => !/^(cap|call|TYPE\.\w+)$/.test(m[1].trim()));
+    lines(rel).forEach((line, i) => {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+      if (written(line)) {
+        offenders.push(`${rel}:${i + 1}: a written font size in the 24h figure — read it from the scale (\`TYPE\`, var(--text-*)): ${line.trim()}`);
+      }
+    });
+  }
+  lines("src/views/MachineCard.tsx").forEach((line, i) => {
+    if (/fontSize=\{\s*[\d.]+\s*\}/.test(line)) {
+      offenders.push(`src/views/MachineCard.tsx:${i + 1}: a written SVG font size on the machine card — use PLOT.tick or a token: ${line.trim()}`);
+    }
+  });
+  const tick = Number(readFileSync(join(root, "src/lib/plot.ts"), "utf8").match(/^\s*tick:\s*([\d.]+),/m)?.[1]);
+  if (!(tick > 0)) offenders.push("type floor: probe dead — PLOT.tick not found in src/lib/plot.ts");
+  else if (caption > 0 && tick < caption) {
+    offenders.push(`src/lib/plot.ts: PLOT.tick is ${tick}px, under --text-caption ${caption}px — the scatters' tick words are text too`);
+  }
+}
+
+// The tempo twins. Parsed, not assumed: a gate that greps for the
+// numbers it remembers keeps passing after somebody changes one.
+const cssYield = readFileSync(join(root, "src/styles/tokens.css"), "utf8").match(
+  /--time-yield:\s*([\d.]+)s/,
+);
+const tsYield = readFileSync(join(root, "src/lib/tempo.ts"), "utf8").match(
+  /YIELD_MS\s*=\s*([\d_]+)/,
+);
+if (!cssYield || !tsYield) {
+  offenders.push("tempo: probe dead — --time-yield or YIELD_MS not found");
+} else if (Number(cssYield[1]) * 1000 !== Number(tsYield[1].replaceAll("_", ""))) {
+  offenders.push(
+    `tempo: --time-yield ${cssYield[1]}s != YIELD_MS ${tsYield[1]} — one name, two numbers`,
+  );
+}
+
+// ── and the sizes survive being merged ───────────────────────────────
+//
+// **A size can be written correctly and still not reach the screen.**
+// `cn()` is tailwind-merge, which knows Tailwind's own size names and
+// files every other `text-*` as a colour — so this app's six own sizes
+// were in the colour group, and any colour class in the same call
+// superseded them. A paragraph came back at the shell's base with the
+// browser's leading: no error, `tsc` clean, build clean. `lib/utils.ts`
+// registers them; this holds that it worked.
+//
+// **Behaviour, not the presence of a line.** Grepping `utils.ts` for
+// `extendTailwindMerge` would go red the day somebody writes it another
+// way, and stay green the day the registration is right there but wrong.
+//
+// **And both directions.** That file changes the merge rules for the
+// whole app, so「the new names work」is half a claim; the other half is
+// that the names that already worked still do, and still *conflict*.
+{
+  const { cn } = await import("../src/lib/utils.ts");
+  const css = readFileSync(join(root, "src/styles/tokens.css"), "utf8");
+  // Every size the theme declares, the companions dropped: `--text-x`
+  // is a size, `--text-x--line-height` is its leading.
+  const sizes = [...css.matchAll(/^\s*--text-([a-z0-9-]+):/gm)]
+    .map((m) => m[1])
+    // `--text-x--line-height`, `--text-x--font-weight`: a size's companions.
+    .filter((n) => !n.includes("--"));
+
+  // The probe. A parse that found nothing would let the loop below pass
+  // by doing nothing, and「all sizes survive」would be a sentence about
+  // an empty list.
+  if (sizes.length < 6) {
+    offenders.push(`merge: probe dead — only ${sizes.length} --text-* found in tokens.css`);
+  } else {
+    // 1) every size the theme has, next to a colour, in both orders.
+    //    Read against a colour that is *not* a size, which is the shape
+    //    the failure took: `text-read text-read-ink` lost the size.
+    for (const n of sizes) {
+      for (const [a, b] of [
+        [`text-${n}`, "text-muted-foreground"],
+        ["text-muted-foreground", `text-${n}`],
+      ]) {
+        const out = cn(a, b);
+        if (!out.includes(`text-${n}`)) {
+          offenders.push(
+            `merge: cn("${a}", "${b}") = "${out}" — the size is gone. ` +
+              `--text-${n} exists in tokens.css but nothing told tailwind-merge it is a size ` +
+              `(lib/utils.ts), so it is being filed as a colour and superseded`,
+          );
+        }
+      }
+    }
+    // 2) the sizes really joined the size group rather than being made
+    //    inert: two of them in one call must still resolve to the last.
+    const twoOwn = cn("text-read", "text-callout");
+    if (twoOwn !== "text-callout") {
+      offenders.push(`merge: cn("text-read", "text-callout") = "${twoOwn}", want "text-callout"`);
+    }
+    const ownAndStock = cn("text-body", "text-sm");
+    if (ownAndStock !== "text-sm") {
+      offenders.push(`merge: cn("text-body", "text-sm") = "${ownAndStock}", want "text-sm"`);
+    }
+    // 3) nothing that already worked was broken by the registration.
+    for (const [call, want] of [
+      [["text-sm", "text-lg"], "text-lg"],
+      [["text-lg", "text-sm"], "text-sm"],
+      [["text-sm", "text-muted-foreground"], "text-sm text-muted-foreground"],
+      [["text-foreground", "text-muted-foreground"], "text-muted-foreground"],
+      [["p-2", "p-4"], "p-4"],
+      [["font-mono", "font-sans"], "font-sans"],
+    ]) {
+      const out = cn(...call);
+      if (out !== want) {
+        offenders.push(
+          `merge: cn(${call.map((c) => `"${c}"`).join(", ")}) = "${out}", want "${want}" — ` +
+            `registering this app's sizes changed a rule it was not meant to touch`,
+        );
+      }
+    }
+  }
+}
+
+if (offenders.length) {
+  console.error("type outside tokens — use a token (docs/design-system/guidelines/50-gates.md):\n" + offenders.join("\n"));
+  process.exit(1);
+}
+console.log("type gate: tokens own the letterforms, and cn() keeps them");
