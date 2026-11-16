@@ -1,0 +1,1255 @@
+//! Shared delegation tools for native A2A HTTP targets and detached ACP hosts.
+//! Khor's authenticated mesh can select the connector/execution home.
+use crate::{
+    Node,
+    gui_host::{GuiNote, GuiOp},
+    host::{Hello, Welcome, read_frame, write_frame},
+};
+pub use khor_a2a::{
+    AgentTarget, Execution, Executor, InputResolution, Record, SessionRef, Store, TaskRef,
+    dispatch, protocol,
+};
+use khor_core::{DeviceId, SessionId};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    fs,
+    net::TcpStream,
+    path::Path,
+    time::{Duration, Instant},
+};
+
+/// Birth record for a session opened specifically for a Khor delegation.
+/// Receiving a task on an existing session never makes that session owned.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct ChildOwner {
+    pub(crate) parent: TaskRef,
+    pub(crate) context: String,
+}
+
+fn start_gate(root: &Path, context: &str) -> Result<fs::File, String> {
+    let path = root.join(".khor/a2a").join(format!(
+        "start-{}.lock",
+        blake3::hash(context.as_bytes()).to_hex()
+    ));
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let gate = options.open(path).map_err(|e| e.to_string())?;
+    gate.lock().map_err(|e| e.to_string())?;
+    Ok(gate)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Action {
+    ResolveBinding {
+        agent: String,
+        task: Option<String>,
+    },
+    Bound {
+        binding: Binding,
+        action: BoundAction,
+    },
+    Agents,
+    Connect {
+        agent: String,
+        url: String,
+    },
+    Disconnect {
+        agent: String,
+    },
+    Send {
+        agent: String,
+        message: protocol::Message,
+        parent: Option<TaskRef>,
+    },
+    Get {
+        agent: String,
+        task: String,
+    },
+    Wait {
+        agent: String,
+        task: String,
+        revision: u64,
+    },
+    List {
+        agent: String,
+        context: Option<String>,
+        after: Option<String>,
+    },
+    Cancel {
+        agent: String,
+        task: String,
+    },
+    Answer {
+        agent: String,
+        task: String,
+        ask: u64,
+        option: Option<String>,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Answer {
+    Binding {
+        binding: Binding,
+    },
+    Input {
+        binding: Binding,
+        message: String,
+        parent: Option<TaskRef>,
+        resolution: InputResolution,
+    },
+    Agents {
+        agents: Vec<Agent>,
+    },
+    Task {
+        record: Box<Record>,
+    },
+    Tasks {
+        records: Vec<Record>,
+        #[serde(default)]
+        next: Option<String>,
+        #[serde(default)]
+        cached: bool,
+    },
+    Message {
+        agent: String,
+        message: protocol::Message,
+    },
+}
+
+/// Captured before a side effect. It contains no endpoint credentials or history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Binding {
+    pub home: DeviceId,
+    pub caller: DeviceId,
+    pub agent: String,
+    pub protocol: BindingProtocol,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BindingProtocol {
+    Native,
+    Http { endpoint_digest: String },
+}
+/// A flat whitelist prevents recursive envelopes and unrelated configuration work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BoundAction {
+    Send {
+        message: protocol::Message,
+        parent: Option<TaskRef>,
+    },
+    Answer {
+        task: String,
+        ask: u64,
+        option: Option<String>,
+    },
+    Get {
+        task: String,
+    },
+    Cancel {
+        task: String,
+    },
+    CancelInput {
+        message: String,
+        parent: Option<TaskRef>,
+    },
+}
+impl BoundAction {
+    pub(crate) fn into_action(self, agent: String) -> Result<Action, String> {
+        Ok(match self {
+            Self::Send { message, parent } => Action::Send {
+                agent,
+                message,
+                parent,
+            },
+            Self::Answer { task, ask, option } => Action::Answer {
+                agent,
+                task,
+                ask,
+                option,
+            },
+            Self::Get { task } => Action::Get { agent, task },
+            Self::Cancel { task } => Action::Cancel { agent, task },
+            Self::CancelInput { .. } => {
+                return Err("Native input cancellation is unsupported by this adapter".into());
+            }
+        })
+    }
+}
+
+pub(crate) fn validate_answer(
+    action: &Action,
+    home: DeviceId,
+    caller: DeviceId,
+    answer: &Answer,
+) -> Result<(), String> {
+    let valid = match (action, answer) {
+        (Action::ResolveBinding { agent, .. }, Answer::Binding { binding }) => {
+            binding.home == home && binding.caller == caller && &binding.agent == agent
+        }
+        (Action::Bound { binding, action }, Answer::Task { record }) => {
+            let expected_task = match action {
+                BoundAction::Get { task }
+                | BoundAction::Cancel { task }
+                | BoundAction::Answer { task, .. } => Some(task),
+                BoundAction::Send { message, .. } => message.task_id.as_ref(),
+                BoundAction::CancelInput { .. } => {
+                    return Err("Delegation reply identity mismatch".into());
+                }
+            };
+            record.target.home == binding.home
+                && record.caller == binding.caller
+                && record.target.agent == binding.agent
+                && expected_task.is_none_or(|task| task == &record.task.id)
+        }
+        (
+            Action::Bound {
+                binding,
+                action: BoundAction::Send { .. },
+            },
+            Answer::Message { agent, .. },
+        ) => &binding.agent == agent,
+        (
+            Action::Bound {
+                binding,
+                action: BoundAction::CancelInput { message, parent },
+            },
+            Answer::Input {
+                binding: received,
+                message: received_message,
+                parent: received_parent,
+                resolution,
+            },
+        ) => {
+            binding == received
+                && binding.home == home
+                && binding.caller == caller
+                && message == received_message
+                && parent == received_parent
+                && match resolution {
+                    InputResolution::Fenced => true,
+                    InputResolution::Known { task, .. } | InputResolution::Superseded { task } => {
+                        task.home == home
+                            && !task.id.trim().is_empty()
+                            && task.id.len() <= 256
+                            && !task.id.chars().any(char::is_control)
+                    }
+                }
+        }
+        (Action::ResolveBinding { .. } | Action::Bound { .. }, _) => false,
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err("Delegation reply identity mismatch".into())
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Agent {
+    pub name: String,
+    pub available: bool,
+    pub why: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<protocol::AgentCard>,
+}
+impl Node {
+    pub fn delegation_store(&self) -> Result<Store, String> {
+        self.refuse_unless_hosting()?;
+        Store::open(self.root().join(".khor/a2a"), self.device()).map_err(|e| e.to_string())
+    }
+    pub fn delegation_target(&self, agent: &str) -> Result<AgentTarget, String> {
+        self.refuse_unless_hosting()?;
+        self.agent_or_refuse(agent)?;
+        Ok(AgentTarget {
+            home: self.device(),
+            agent: agent.into(),
+        })
+    }
+    /// `caller` is supplied by the authenticated transport, never by Action.
+    pub(crate) fn delegation_here(
+        &self,
+        caller: DeviceId,
+        action: Action,
+    ) -> Result<Answer, String> {
+        self.refuse_unless_hosting()?;
+        let action = match action {
+            Action::ResolveBinding { agent, task } => {
+                let protocol = if crate::a2a_http::is_target(&agent) {
+                    crate::a2a_http::resolve_binding(self, caller, &agent, task.as_deref())?
+                } else {
+                    if let Some(task) = task {
+                        self.delegation_store()?
+                            .get(
+                                caller,
+                                &AgentTarget {
+                                    home: self.device(),
+                                    agent: agent.clone(),
+                                },
+                                &task,
+                            )
+                            .map_err(|e| e.to_string())?;
+                    } else {
+                        self.delegation_target(&agent)?;
+                    }
+                    BindingProtocol::Native
+                };
+                return Ok(Answer::Binding {
+                    binding: Binding {
+                        home: self.device(),
+                        caller,
+                        agent,
+                        protocol,
+                    },
+                });
+            }
+            Action::Bound { binding, action } => {
+                if binding.home != self.device() || binding.caller != caller {
+                    return Err("Delegation binding identity mismatch".into());
+                }
+                match &binding.protocol {
+                    BindingProtocol::Http { endpoint_digest }
+                        if crate::a2a_http::is_target(&binding.agent) =>
+                    {
+                        return crate::a2a_http::handle_bound(
+                            self,
+                            caller,
+                            &binding.agent,
+                            action,
+                            endpoint_digest,
+                        );
+                    }
+                    BindingProtocol::Native if !crate::a2a_http::is_target(&binding.agent) => {
+                        if let BoundAction::CancelInput { message, parent } = action {
+                            let store = self.delegation_store()?;
+                            store.recover().map_err(|error| error.to_string())?;
+                            let resolution = store
+                                .cancel_input(
+                                    caller,
+                                    &AgentTarget {
+                                        home: self.device(),
+                                        agent: binding.agent.clone(),
+                                    },
+                                    &message,
+                                    parent.clone(),
+                                )
+                                .map_err(|error| error.to_string())?;
+                            return Ok(Answer::Input {
+                                binding,
+                                message,
+                                parent,
+                                resolution,
+                            });
+                        }
+                        action.into_action(binding.agent)?
+                    }
+                    _ => return Err("Delegation binding protocol mismatch".into()),
+                }
+            }
+            action => action,
+        };
+        match &action {
+            Action::Connect { agent, url } => {
+                return Ok(Answer::Agents {
+                    agents: vec![crate::a2a_http::describe(
+                        self.connect_a2a(agent, url, None)?,
+                    )],
+                });
+            }
+            Action::Disconnect { agent } => {
+                self.disconnect_a2a(agent)?;
+                return Ok(Answer::Agents { agents: vec![] });
+            }
+            Action::Send { agent, .. }
+            | Action::Get { agent, .. }
+            | Action::Wait { agent, .. }
+            | Action::List { agent, .. }
+            | Action::Cancel { agent, .. }
+            | Action::Answer { agent, .. }
+                if crate::a2a_http::is_target(agent) =>
+            {
+                return crate::a2a_http::handle(self, caller, action);
+            }
+            _ => {}
+        }
+        let store = self.delegation_store()?;
+        store.recover().map_err(|e| e.to_string())?;
+        if matches!(action, Action::Agents) {
+            let mut agents: Vec<_> = self
+                .agents()?
+                .into_iter()
+                .map(|(name, spec)| {
+                    let why = Node::agent_launch(&spec).err();
+                    Agent {
+                        name,
+                        available: why.is_none(),
+                        why,
+                        protocol: Some("ACP".into()),
+                        card: None,
+                    }
+                })
+                .collect();
+            agents.extend(
+                self.a2a_agents()?
+                    .into_iter()
+                    .map(crate::a2a_http::describe),
+            );
+            return Ok(Answer::Agents { agents });
+        }
+
+        let agent = match &action {
+            Action::ResolveBinding { .. }
+            | Action::Bound { .. }
+            | Action::Agents
+            | Action::Connect { .. }
+            | Action::Disconnect { .. } => unreachable!(),
+            Action::Send { agent, .. }
+            | Action::Get { agent, .. }
+            | Action::Wait { agent, .. }
+            | Action::List { agent, .. }
+            | Action::Cancel { agent, .. }
+            | Action::Answer { agent, .. } => agent,
+        };
+        // Existing receipts remain readable and cancelable after unregistering.
+        let target = AgentTarget {
+            home: self.device(),
+            agent: agent.clone(),
+        };
+        let read = |task: &str| store.get(caller, &target, task).map_err(|e| e.to_string());
+        let record = match action {
+            Action::ResolveBinding { .. }
+            | Action::Bound { .. }
+            | Action::Agents
+            | Action::Connect { .. }
+            | Action::Disconnect { .. } => unreachable!(),
+            Action::Send {
+                agent,
+                message,
+                parent,
+            } => {
+                self.delegation_target(&agent)?;
+                if parent.as_ref().is_some_and(|p| p.home != caller) {
+                    return Err(
+                        "Parent task must belong to the authenticated calling device".into(),
+                    );
+                }
+                if message.context_id.is_some()
+                    && message
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|m| m.contains_key("khor.cwd"))
+                {
+                    return Err("A continued context keeps its working directory; omit cwd".into());
+                }
+                if message
+                    .parts
+                    .iter()
+                    .any(|p| !matches!(p.content, protocol::PartContent::Text(_)))
+                {
+                    return Err("ACP delegation currently accepts text parts only".into());
+                }
+                let submission = store
+                    .accept(caller, &target, &message, parent)
+                    .map_err(|e| e.to_string())?;
+                let mut record = submission.record;
+                // Only an explicitly retried Submitted input may be dispatched.
+                // Working/terminal deduplication is a read, never a second prompt.
+                if record.task.status.state == protocol::TaskState::Submitted {
+                    if let Err(why) = self.start_delegation(&store, &record, &message.message_id) {
+                        if let Ok(mut execution) =
+                            Execution::claim(store.clone(), &record.task.id, &message.message_id)
+                        {
+                            execution
+                                .update(
+                                    protocol::TaskState::Failed,
+                                    Some(agent_message(&why)),
+                                    None,
+                                )
+                                .map_err(|e| e.to_string())?;
+                        } else {
+                            return Err(why);
+                        }
+                    }
+                    record = read(&record.task.id)?;
+                }
+                record
+            }
+            Action::Get { task, .. } => read(&task)?,
+            Action::Wait { task, revision, .. } => {
+                let until = Instant::now() + Duration::from_secs(8);
+                loop {
+                    let record = read(&task)?;
+                    if record.revision != revision
+                        || record.task.status.state.is_terminal()
+                        || approval(&record).is_some()
+                        || Instant::now() >= until
+                    {
+                        break record;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+            Action::List { context, after, .. } => {
+                let records = store
+                    .list(caller, &target, context.as_deref(), after.as_deref(), 50)
+                    .map_err(|e| e.to_string())?;
+                let next = if records.len() == 50 {
+                    records.last().map(|r| r.task.id.clone())
+                } else {
+                    None
+                };
+                return Ok(Answer::Tasks {
+                    records,
+                    next,
+                    cached: false,
+                });
+            }
+            Action::Cancel { task, .. } => {
+                store
+                    .request_cancel(caller, &target, &task)
+                    .map_err(|e| e.to_string())?;
+                // The host observes intent for this exact task. An unscoped
+                // GuiOp::Stop could arrive after completion and stop the next
+                // task or a human's turn in the same live session instead.
+                read(&task)?
+            }
+            Action::Answer {
+                task, ask, option, ..
+            } => {
+                let record = read(&task)?;
+                let pending = approval(&record).ok_or("This task has no pending permission")?;
+                if pending["ask"].as_u64() != Some(ask)
+                    || option.as_ref().is_some_and(|id| {
+                        !pending["options"].as_array().is_some_and(|options| {
+                            options.iter().any(|o| o[0].as_str() == Some(id))
+                        })
+                    })
+                {
+                    return Err("The permission or option is no longer current".into());
+                }
+                let session = record
+                    .context_session
+                    .as_ref()
+                    .ok_or("Task has no session")?;
+                host_op(self.root(), &session.id, &GuiOp::Answer { ask, option })?;
+                // Wait for the host's receipt, not merely a successful socket write.
+                let until = Instant::now() + Duration::from_secs(3);
+                loop {
+                    let updated = read(&task)?;
+                    if approval(&updated).and_then(|a| a["ask"].as_u64()) != Some(ask) {
+                        break updated;
+                    }
+                    if Instant::now() >= until {
+                        return Err(
+                            "Permission answer has not been confirmed; read task status".into()
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
+        Ok(Answer::Task {
+            record: Box::new(record),
+        })
+    }
+
+    fn start_delegation(
+        &self,
+        store: &Store,
+        record: &Record,
+        message: &str,
+    ) -> Result<(), String> {
+        // Serialize session creation across request handlers/processes. The ACP
+        // host separately owns the execution lease for the entire prompt.
+        let _gate = start_gate(self.root(), &record.task.context_id)?;
+        let current = store
+            .get(record.caller, &record.target, &record.task.id)
+            .map_err(|e| e.to_string())?;
+        if current.task.status.state != protocol::TaskState::Submitted {
+            return Ok(());
+        }
+        store
+            .check_context_idle(&current.task.context_id)
+            .map_err(|e| e.to_string())?;
+        let mut connection = if let Some(session) = &current.context_session {
+            match connect_host(self.root(), &session.id) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let Some((native, cwd, title)) = self.live.retired_child(
+                        &session.id,
+                        &current.task.context_id,
+                        current.caller,
+                    )?
+                    else {
+                        return Err(error);
+                    };
+                    let spec = self.agent_or_refuse(&record.target.agent)?;
+                    let launch = Node::agent_launch(&spec)?;
+                    let resumed = self.reopen_gui_as(
+                        &cwd,
+                        &title,
+                        &[launch],
+                        &native.agent,
+                        &native.native_id,
+                    )?;
+                    if resumed != session.id {
+                        return Err("Delegation resumed a different session identity".into());
+                    }
+                    connect_host(self.root(), &resumed)?
+                }
+            }
+        } else {
+            let spec = self.agent_or_refuse(&record.target.agent)?;
+            let launch = Node::agent_launch(&spec)?;
+            let cwd = current
+                .task
+                .history
+                .as_ref()
+                .and_then(|h| h.last())
+                .and_then(|m| m.metadata.as_ref())
+                .and_then(|m| m.get("khor.cwd"))
+                .and_then(Value::as_str)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| self.root().to_path_buf());
+            if !cwd.is_absolute() || !cwd.is_dir() {
+                return Err(
+                    "Delegation cwd must be an existing absolute directory on the target machine"
+                        .into(),
+                );
+            }
+            self.refuse_unless_hosting()?;
+            let owner = current.parent.clone().map(|parent| ChildOwner {
+                parent,
+                context: current.task.context_id.clone(),
+            });
+            let session = crate::gui_host::spawn_delegated_host(
+                self.root(),
+                &cwd,
+                &record.target.agent,
+                &[launch],
+                owner.as_ref(),
+            )?;
+            connect_host(self.root(), &session)?
+        };
+        write_frame(
+            &mut connection,
+            &GuiOp::Delegate {
+                task: current.task.id.clone(),
+                message: message.into(),
+            },
+        )?;
+        // The socket acknowledgement carries only task identity; the durable
+        // receipt remains authoritative if the reply is lost.
+        loop {
+            match read_frame::<GuiNote>(&mut connection)? {
+                GuiNote::Delegated { task, why } if task == current.task.id => {
+                    return why.map_or(Ok(()), Err);
+                }
+                GuiNote::Gone => return Err("ACP session ended before accepting the task".into()),
+                _ => {}
+            }
+        }
+    }
+}
+
+pub(crate) fn approval(record: &Record) -> Option<&Value> {
+    record
+        .task
+        .status
+        .message
+        .as_ref()?
+        .metadata
+        .as_ref()?
+        .get("khor.approval")
+}
+fn agent_message(text: &str) -> protocol::Message {
+    protocol::Message::new(protocol::Role::Agent, vec![protocol::Part::text(text)])
+}
+fn connect_host(root: &Path, session: &SessionId) -> Result<TcpStream, String> {
+    let live = crate::live::LiveKind::new(root.to_path_buf(), DeviceId([0; 32]));
+    let dir = live.dir_of(session).ok_or("Unknown ACP session")?;
+    let host = crate::host::read_host_file(&dir)?;
+    let mut stream =
+        TcpStream::connect_timeout(&([127, 0, 0, 1], host.port).into(), Duration::from_secs(2))
+            .map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    write_frame(
+        &mut stream,
+        &Hello {
+            cookie: host.cookie,
+            cols: 0,
+            rows: 0,
+        },
+    )?;
+    let welcome: Welcome = read_frame(&mut stream)?;
+    if !welcome.ok {
+        return Err(welcome.why);
+    }
+    Ok(stream)
+}
+fn host_op(root: &Path, session: &SessionId, op: &GuiOp) -> Result<(), String> {
+    write_frame(&mut connect_host(root, session)?, op)
+}
+
+/// Held in the detached GUI host, so closing a caller or restarting the node
+/// does not abandon a live agent. Errors fail the task and cancel the prompt.
+#[derive(Default)]
+struct DelegatedTrace {
+    updates: Vec<String>,
+    bytes: usize,
+    partial: bool,
+}
+impl DelegatedTrace {
+    fn note(&mut self, update: &Value) -> Result<(), String> {
+        let kind = update["sessionUpdate"].as_str().unwrap_or_default();
+        let display = matches!(
+            kind,
+            "agent_thought_chunk"
+                | "tool_call"
+                | "tool_call_update"
+                | "plan"
+                | "compaction_update"
+                | "compaction_summary_chunk"
+        ) || kind == "agent_message_chunk" && update["content"]["type"] != "text";
+        if !display {
+            return Ok(());
+        }
+        let encoded = serde_json::to_string(update).map_err(|error| error.to_string())?;
+        // Retention is bounded and optional: overflow must never abort the task.
+        if self.updates.len() >= 512 || self.bytes + encoded.len() > 128 * 1024 {
+            self.partial = true;
+        } else {
+            self.bytes += encoded.len();
+            self.updates.push(encoded);
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct HostedTask {
+    execution: Execution,
+    output: String,
+    trace: DelegatedTrace,
+    pending: Option<Value>,
+    published: Instant,
+    owned: bool,
+}
+impl HostedTask {
+    pub fn claim(
+        root: &Path,
+        session: &SessionId,
+        task: &str,
+        message: &str,
+    ) -> Result<(Self, String), String> {
+        let node = Node::open(root.to_path_buf())?;
+        let mut execution =
+            Execution::claim(node.delegation_store()?, task, message).map_err(|e| e.to_string())?;
+        let owned = node.live.child_owner(session).is_some_and(|owner| {
+            owner.context == execution.record().task.context_id
+                && owner.parent.home == execution.record().caller
+        });
+        if let Err(error) = execution.bind_session(SessionRef {
+            home: node.device(),
+            id: session.clone(),
+        }) {
+            let _ = execution.update(
+                protocol::TaskState::Failed,
+                Some(agent_message(&error.to_string())),
+                None,
+            );
+            return Err(error.to_string());
+        }
+        let text = execution
+            .message()
+            .parts
+            .iter()
+            .filter_map(|p| match &p.content {
+                protocol::PartContent::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok((
+            Self {
+                execution,
+                output: String::new(),
+                trace: DelegatedTrace::default(),
+                pending: None,
+                published: Instant::now(),
+                owned,
+            },
+            text,
+        ))
+    }
+    pub fn note(&mut self, json: &str) -> Result<(), String> {
+        let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let update = &value["update"];
+        self.trace.note(update)?;
+        if update["sessionUpdate"] == "agent_message_chunk" {
+            if let Some(text) = update["content"]["text"].as_str() {
+                if self.output.len() + text.len() > 96 * 1024 {
+                    return Err("Delegated output exceeded 96 KiB".into());
+                }
+                self.output.push_str(text);
+            }
+        }
+        if self.published.elapsed() >= Duration::from_millis(300) {
+            self.publish(protocol::TaskState::Working)?;
+        }
+        Ok(())
+    }
+    pub fn ask(
+        &mut self,
+        ask: u64,
+        title: &str,
+        options: &[(String, String)],
+    ) -> Result<(), String> {
+        self.pending = Some(json!({"ask":ask,"title":title,"options":options}));
+        self.publish(protocol::TaskState::Working)
+    }
+    pub fn answered(&mut self) -> Result<(), String> {
+        self.pending = None;
+        self.publish(protocol::TaskState::Working)
+    }
+    pub fn cancel_requested(&self) -> bool {
+        self.execution.cancellation_requested().unwrap_or(true)
+    }
+    /// Serialize automatic retirement with reopening this context. The caller
+    /// holds the guard through driver shutdown and durable exit publication.
+    pub fn retirement_gate(&self, root: &Path) -> Result<Option<fs::File>, String> {
+        self.owned
+            .then(|| start_gate(root, &self.execution.record().task.context_id))
+            .transpose()
+    }
+    pub fn finish(&mut self, result: Result<&str, &str>) -> Result<(), String> {
+        let state = match result {
+            Ok("EndTurn") => protocol::TaskState::Completed,
+            Ok("Cancelled") => protocol::TaskState::Canceled,
+            Ok(stop) => {
+                self.output.push_str(&format!("\nACP ended: {stop}"));
+                protocol::TaskState::Failed
+            }
+            Err(error) => {
+                self.output
+                    .push_str(&format!("\nACP prompt failed: {error}"));
+                protocol::TaskState::Failed
+            }
+        };
+        self.pending = None;
+        self.publish(state)
+    }
+    fn publish(&mut self, state: protocol::TaskState) -> Result<(), String> {
+        let mut message = agent_message(&self.output);
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("khor.acp_trace".into(), json!(1));
+        metadata.insert("khor.acp_updates".into(), json!(self.trace.updates));
+        if self.trace.partial {
+            metadata.insert("khor.acp_trace_partial".into(), json!(true));
+        }
+        if let Some(pending) = &self.pending {
+            metadata.insert("khor.approval".into(), pending.clone());
+        }
+        message.metadata = Some(metadata);
+        self.execution
+            .update(state, Some(message), None)
+            .map_err(|e| e.to_string())?;
+        self.published = Instant::now();
+        Ok(())
+    }
+}
+impl Drop for HostedTask {
+    fn drop(&mut self) {
+        if !self.execution.record().task.status.state.is_terminal() {
+            let _ = self.execution.update(
+                protocol::TaskState::Failed,
+                Some(agent_message(
+                    "ACP host was interrupted; work was not replayed",
+                )),
+                None,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delegated_trace_retains_only_bounded_task_process_without_failing_execution() {
+        let mut trace = DelegatedTrace::default();
+        for kind in ["user_message_chunk", "agent_message_chunk"] {
+            trace.note(&json!({"sessionUpdate":kind,"content":{"type":"text","text":"already retained in canonical history"}})).unwrap();
+        }
+        assert!(trace.updates.is_empty());
+        trace.note(&json!({"sessionUpdate":"tool_call","toolCallId":"one","title":"check","status":"completed"})).unwrap();
+        assert_eq!(trace.updates.len(), 1);
+        let oversized = json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"x".repeat(128 * 1024)}});
+        trace.note(&oversized).unwrap();
+        assert!(trace.partial);
+        assert_eq!(trace.updates.len(), 1);
+        for _ in 0..600 {
+            trace
+                .note(&json!({"sessionUpdate":"plan","entries":[]}))
+                .unwrap();
+        }
+        assert_eq!(trace.updates.len(), 512);
+        assert!(trace.bytes <= 128 * 1024);
+    }
+
+    #[test]
+    fn delegation_uses_the_existing_registry_and_this_nodes_private_store() {
+        let root = std::env::temp_dir().join(format!("khor-node-a2a-{}", protocol::new_task_id()));
+        let node = Node::open_as(root.clone(), "delegation-fixture").unwrap();
+        assert!(node.delegation_target("fixture-agent").is_err());
+        // This deliberately absent command must never be spawned by discovery.
+        node.register_agent("fixture-agent", &["khor-fixture-must-not-run".into()])
+            .unwrap();
+        let target = node.delegation_target("fixture-agent").unwrap();
+        assert_eq!(target.home, node.device());
+        let store = node.delegation_store().unwrap();
+        let message = protocol::Message::new(
+            protocol::Role::User,
+            vec![protocol::Part::text("record only")],
+        );
+        let accepted = store
+            .accept(node.device(), &target, &message, None)
+            .unwrap();
+        assert_eq!(
+            accepted.record.task.status.state,
+            protocol::TaskState::Submitted
+        );
+        assert!(root.join(".khor/a2a/tasks.json").is_file());
+        assert!(!root.join(".khor/agent/runs").exists());
+        assert_eq!(
+            node.agent("fixture-agent").unwrap().unwrap().command,
+            "khor-fixture-must-not-run"
+        );
+        // Official optional-field JSON must survive both positional transports.
+        fn round_trip<T: serde::Serialize + serde::de::DeserializeOwned>(value: T) {
+            let decoded: T = crate::proto::decode(&crate::proto::encode(&value).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(value).unwrap(),
+                serde_json::to_value(decoded).unwrap()
+            );
+        }
+        let action = Action::Send {
+            agent: "fixture-agent".into(),
+            message,
+            parent: None,
+        };
+        let answer = Answer::Task {
+            record: Box::new(accepted.record),
+        };
+        round_trip(crate::proto::Request::Delegation {
+            action: action.clone(),
+        });
+        round_trip(crate::proto::Response::Delegation {
+            answer: answer.clone(),
+        });
+        round_trip(crate::ipc::Op::Delegation {
+            machine: "here".into(),
+            action,
+        });
+        round_trip(crate::ipc::Reply::Delegation { answer });
+        let first = TaskRef {
+            home: node.device(),
+            id: "first-root-run".into(),
+        };
+        let next = TaskRef {
+            home: node.device(),
+            id: "next-root-run".into(),
+        };
+        assert_eq!(
+            original_parent(
+                &root,
+                &first,
+                &Binding {
+                    home: node.device(),
+                    caller: node.device(),
+                    agent: "fixture-agent".into(),
+                    protocol: BindingProtocol::Native
+                },
+                "same-input"
+            )
+            .unwrap(),
+            first
+        );
+        assert_eq!(
+            original_parent(
+                &root,
+                &next,
+                &Binding {
+                    home: node.device(),
+                    caller: node.device(),
+                    agent: "fixture-agent".into(),
+                    protocol: BindingProtocol::Native
+                },
+                "same-input"
+            )
+            .unwrap(),
+            first
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ChildLink {
+    pub(crate) machine: String,
+    pub(crate) binding: Binding,
+    pub(crate) message: String,
+    pub(crate) task: Option<String>,
+    #[serde(default)]
+    pub(crate) input_parent: Option<TaskRef>,
+    #[serde(default, alias = "input_recovered")]
+    pub(crate) input_scoped: bool,
+}
+fn input_scope_after_update(previous: Option<&ChildLink>, requested: bool) -> bool {
+    requested || previous.is_some_and(|link| link.input_scoped)
+}
+pub(crate) fn children_dir(root: &Path, run: &str) -> std::path::PathBuf {
+    root.join(".khor/agent/children")
+        .join(blake3::hash(run.as_bytes()).to_hex().as_str())
+}
+pub(crate) fn child_key(binding: &Binding, message: &str) -> Result<String, String> {
+    let fingerprint = serde_json::to_vec(&(binding, message)).map_err(|e| e.to_string())?;
+    Ok(format!("{}.json", blake3::hash(&fingerprint).to_hex()))
+}
+/// Bind before sending. A lost response keeps an unresolved link; cancellation
+/// never replays Send/Answer or claims an unknown task has stopped.
+pub(crate) fn track_child(
+    root: &Path,
+    parent: &TaskRef,
+    machine: &str,
+    binding: &Binding,
+    message: &str,
+    task: Option<&str>,
+) -> Result<(), String> {
+    track_child_inner(root, parent, machine, binding, message, task, None, false)
+}
+/// Capture the wire parent before a delegate Send can have any remote effect.
+pub(crate) fn track_input(
+    root: &Path,
+    parent: &TaskRef,
+    machine: &str,
+    binding: &Binding,
+    message: &str,
+    task: Option<&str>,
+) -> Result<(), String> {
+    let original = original_parent(root, parent, binding, message)?;
+    track_child_inner(
+        root,
+        parent,
+        machine,
+        binding,
+        message,
+        task,
+        Some(original),
+        false,
+    )
+}
+/// Commit exact-input mode before any cancellation receipt can refer to it.
+/// It is sticky even if a normal Send reply publishes a task concurrently.
+pub(crate) fn scope_input_child(
+    root: &Path,
+    parent: &TaskRef,
+    machine: &str,
+    binding: &Binding,
+    message: &str,
+    input_parent: &TaskRef,
+) -> Result<(), String> {
+    track_child_inner(
+        root,
+        parent,
+        machine,
+        binding,
+        message,
+        None,
+        Some(input_parent.clone()),
+        true,
+    )
+}
+pub(crate) fn recover_input_child(
+    root: &Path,
+    parent: &TaskRef,
+    machine: &str,
+    binding: &Binding,
+    message: &str,
+    input_parent: &TaskRef,
+    task: &str,
+) -> Result<(), String> {
+    track_child_inner(
+        root,
+        parent,
+        machine,
+        binding,
+        message,
+        Some(task),
+        Some(input_parent.clone()),
+        true,
+    )
+}
+fn track_child_inner(
+    root: &Path,
+    parent: &TaskRef,
+    machine: &str,
+    binding: &Binding,
+    message: &str,
+    task: Option<&str>,
+    input_parent: Option<TaskRef>,
+    scoped: bool,
+) -> Result<(), String> {
+    let dir = children_dir(root, &parent.id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if binding.caller != parent.home {
+        return Err("Child binding caller mismatch".into());
+    }
+    // A Send reply can race exact-input recovery. Serialize this short local
+    // publication so neither writer can erase the other's recovered marker.
+    let _links = crate::remote_cancel::gate(&dir.join("links.lock"))?;
+    let path = dir.join(child_key(binding, message)?);
+    let names = crate::remote_cancel::names(&dir, crate::remote_cancel::CHILD_LIMIT * 2)?;
+    if !path.exists() && names.len() >= crate::remote_cancel::CHILD_LIMIT {
+        return Err("Child link resource limit".into());
+    }
+    let prior = if path.try_exists().map_err(|e| e.to_string())? {
+        let prior: ChildLink = crate::remote_cancel::read(&path, 16 * 1024)?;
+        if prior.binding != *binding
+            || prior.message != message
+            || input_parent.as_ref().is_some_and(|parent| {
+                prior
+                    .input_parent
+                    .as_ref()
+                    .is_some_and(|previous| previous != parent)
+            })
+            || task.is_some_and(|task| prior.task.as_ref().is_some_and(|previous| previous != task))
+        {
+            return Err("Child link identity mismatch".into());
+        }
+        Some(prior)
+    } else {
+        None
+    };
+    if scoped && prior.is_none() {
+        return Err("Child link missing".into());
+    }
+    let input_parent =
+        input_parent.or_else(|| prior.as_ref().and_then(|prior| prior.input_parent.clone()));
+    let input_scoped = input_scope_after_update(prior.as_ref(), scoped);
+    let link = ChildLink {
+        input_parent,
+        input_scoped,
+        machine: machine.into(),
+        binding: binding.clone(),
+        message: message.into(),
+        task: task
+            .map(str::to_owned)
+            .or_else(|| prior.and_then(|p| p.task)),
+    };
+    let temporary = dir.join(format!("{}.tmp", protocol::new_task_id()));
+    let bytes = serde_json::to_vec(&link).map_err(|e| e.to_string())?;
+    if bytes.len() > 16 * 1024 {
+        return Err("Child link resource limit".into());
+    }
+    crate::link::write_private(&temporary, &bytes)?;
+    fs::File::open(&temporary)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
+    fs::rename(temporary, &path).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    fs::File::open(&dir)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+/// Official A2A types omit optional JSON fields. Positional MessagePack cannot
+/// safely carry those structs directly; carry canonical JSON at this boundary.
+pub(crate) mod wire_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+    pub fn serialize<T: Serialize, S: Serializer>(
+        value: &T,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            return value.serialize(serializer);
+        }
+        let json = serde_json::to_string(value).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&json)
+    }
+    pub fn deserialize<'de, T: DeserializeOwned, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<T, D::Error> {
+        if deserializer.is_human_readable() {
+            return T::deserialize(deserializer);
+        }
+        let json = String::deserialize(deserializer)?;
+        serde_json::from_str(&json).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A retry from a later Pi turn keeps the original parent in the accepted
+/// message fingerprint. The new turn separately tracks the same child for Stop.
+pub(crate) fn original_parent(
+    root: &Path,
+    parent: &TaskRef,
+    binding: &Binding,
+    message: &str,
+) -> Result<TaskRef, String> {
+    fn validate(parent: &TaskRef, binding: &Binding) -> Result<(), String> {
+        if parent.home != binding.caller
+            || parent.id.trim().is_empty()
+            || parent.id.len() > 256
+            || parent.id.chars().any(char::is_control)
+        {
+            return Err("Original parent identity mismatch".into());
+        }
+        Ok(())
+    }
+    validate(parent, binding)?;
+    if message.trim().is_empty() || message.len() > 256 || message.chars().any(char::is_control) {
+        return Err("Invalid original input identity".into());
+    }
+    let dir = root.join(".khor/agent/messages");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(child_key(binding, message)?);
+    // Release this short first-parent gate before taking any child-link gate.
+    // Tail tools from distinct turns must observe the same first writer.
+    let _parent = crate::remote_cancel::gate(&path.with_extension("lock"))?;
+    if path.try_exists().map_err(|e| e.to_string())? {
+        let stored: TaskRef = crate::remote_cancel::read(&path, 16 * 1024)?;
+        validate(&stored, binding)?;
+        return Ok(stored);
+    }
+    let temporary = dir.join(format!("{}.tmp", protocol::new_task_id()));
+    let outcome: Result<TaskRef, String> = (|| {
+        crate::link::write_private(
+            &temporary,
+            &serde_json::to_vec(parent).map_err(|e| e.to_string())?,
+        )?;
+        fs::File::open(&temporary)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        fs::rename(&temporary, &path).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        fs::File::open(&dir)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        Ok(parent.clone())
+    })();
+    if outcome.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    outcome
+}

@@ -1,0 +1,486 @@
+import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+
+import type { DeviceRow } from "@/api";
+import { type OmniAxis } from "@/components/Omnibox";
+import { type FilterOption } from "@/components/PaneBar";
+import { EditableName } from "@/components/EditableName";
+import { machineKind } from "@/components/SessionFace";
+import { type RowAction } from "@/components/RowMenu";
+import { SideList, type SideRow } from "@/components/SideList";
+import { band, BAND_INK } from "@/lib/latency";
+import { cli, gui } from "@/gen/catalog";
+import { type ListAxis, listAxes, listOptions, sieve } from "@/lib/list-filter";
+import { lasting, connectionKey, connectionKeyWord, groupLabel, hopRoad, latency, systemWord } from "@/words";
+import { MachineEditDialog } from "@/views/MachineEditDialog";
+import { PendingStrip } from "@/views/PairDialogs";
+
+/**
+ * **What the machines list can be narrowed by** (2026-09-29, the owner:
+ * 「所有的session list应该都可以filter吧？」) — the sessions' filter,
+ * the same menu and chips and the same rule (`lib/list-filter`), on the
+ * three things a machine row says out loud:
+ *
+ * - `link:` 连接方式 — **the word in the row's top-right corner**
+ *   (`connectionKey`, WORDS-1008: one derivation, so a tick on 中继 keeps
+ *   every row that says 中继): 已暂停, 本机, the road (直连 / 中继), 未连,
+ *   不通, or 「通过 <name>」 (a satellite's sponsor, a peer hop's middle).
+ *   **One value per machine, not one 「借网」 for all of them**: the row
+ *   prints 「通过 turing」, so the option prints the same words and a tick
+ *   keeps exactly the rows that say them. Merged, the option would need
+ *   a word no row carries, and one tick would stand for rows that read
+ *   differently — the filter would be saying something the list does
+ *   not. A network has a sponsor or two, so the menu does not grow.
+ * - `sys:` 系统 — the family the corner draws (`vitals.system`). A
+ *   machine that could not say (an older peer, a satellite, no reading
+ *   yet) wears the plain machine mark, never a guess, and files under
+ *   `""` 「未知」 — which is what that corner says.
+ * - ⚠️ 墓碑 (WORDS-1008): `state:` 状态, which held 已暂停 alone. 已暂停 is
+ *   the row's connection word now, so it is a `link:` value — two axes
+ *   would have offered one fact twice.
+ *
+ * The first prefix is also where a bare key would land (`axisOf`);
+ * nothing ever wrote one into this store.
+ */
+export const DEVICE_KEYS = ["link:", "sys:"] as const;
+const devicePick = {
+  "link:": (d: DeviceRow) => connectionKey(d),
+  "sys:": (d: DeviceRow) => d.vitals?.vitals.system ?? "",
+};
+/** The three axes as the sieve reads them: keys and answers, no words. */
+const DEVICE_SIEVE = DEVICE_KEYS.map((key) => ({ key, pick: devicePick[key] }));
+/** …and with their headings and words, for the menu and the box. A
+    function, not a constant: the words are catalog reads (批 D3). */
+export const deviceAxes = (): ListAxis<DeviceRow>[] => [
+  {
+    key: "link:",
+    heading: gui.axis_connection,
+    pick: devicePick["link:"],
+    label: (v) => connectionKeyWord(v) ?? gui.filter_unknown,
+  },
+  {
+    key: "sys:",
+    heading: gui.axis_system,
+    pick: devicePick["sys:"],
+    label: (v) => (v === "" ? gui.filter_unknown : systemWord(v)),
+  },
+];
+
+/** The pane bar's half of it: the menu's options and the box's axes,
+    one list read two ways (`listAxes`). No faces — none of the three
+    values is a machine. */
+export function useDeviceFilter(rows: DeviceRow[], ticked: string[]): { options: FilterOption[]; axes: OmniAxis[] } {
+  return useMemo(() => {
+    const options = listOptions(rows, ticked, deviceAxes(), DEVICE_KEYS);
+    return { options, axes: listAxes(options, DEVICE_KEYS) };
+  }, [rows, ticked]);
+}
+
+/** Search matches the name people call the machine and the id they
+    paste. The id left the row's face (2026-09-02 — the card carries it
+    now), but it is still the string people hold, so it still matches. */
+export function visibleDevices(rows: DeviceRow[], query: string) {
+  const q = query.trim().toLowerCase();
+  if (q === "") return rows;
+  // **Both names are searchable.** A renamed machine must be findable
+  // by what it is called now, and one somebody else renamed must still
+  // answer to the name this person knew it by — neither is the wrong
+  // thing to type.
+  return rows.filter((d) => `${d.shown} ${d.name} ${d.id}`.toLowerCase().includes(q));
+}
+
+/**
+ * The machine list. Three panes drew it once — devices, files and
+ * browser — because "which machine" is the first step of all three;
+ * the latter two grew their own starting points and only the devices
+ * pane draws this now.
+ *
+ * # Whether a row goes anywhere is the caller's to say
+ *
+ * The rule has not changed since the batch that wrote it down: **no
+ * affordance may suggest a destination that does not exist**, because
+ * one that answers nothing teaches people to stop trying the ones that
+ * do. What changed is the input — the devices pane now opens a machine
+ * card, so on that pane the row is a button, lights under the pointer
+ * and is reachable by keyboard. A pane without a second step would pass
+ * no `onOpen` and its rows would stay inert.
+ *
+ * That is why this is a prop and not a flag read from a landing name:
+ * the thing that decides is "is there somewhere to go", and the only
+ * code that knows it is the code that would take you there. A pane that
+ * grows a destination turns its rows into buttons by handing one over,
+ * and there is no way to get the button without it.
+ *
+ * # The row's actions are its menu, not a button on it
+ *
+ * The pin sat on the row's right end as its own button until 2026-09-06
+ * (「机器左侧 list,与 session 一样,是右键,置顶或删除,取消现在的置顶
+ * icon」). It is the session row's `RowMenu` now — right-click, a long
+ * press, the keyboard's Menu key — for the reason that file gives: a
+ * control that lives on the row is one a phone has no room for, and a
+ * menu is one gesture for one job on both lists. What the pin's shape
+ * used to say about the row's state, the menu's first item says at the
+ * moment somebody asks: it reads 置顶 or 取消置顶. The list still floats
+ * a pinned machine to the top, which is the node's own order and not
+ * this file's.
+ *
+ * The second item is `khor forget` — the machine leaves the network,
+ * for everyone (`Node::forget_device`). Two presses, and the sentence
+ * between them is the catalog's; the refusal, when there is one, is the
+ * node's own and stays on the menu where the press was made.
+ */
+export function DevicesList({
+  rows,
+  loading = false,
+  query,
+  words = [],
+  onPin,
+  onForget,
+  onOpen,
+  selected,
+  pinFailed,
+  forgetRefused,
+  onPause,
+  pauseRefused,
+  onRestyled,
+}: {
+  rows: DeviceRow[];
+  /** Not answered yet: a skeleton rather than 「there are none」. */
+  loading?: boolean;
+  query: string;
+  /** The ticked filter keys (`DEVICE_KEYS`), from the pane bar. */
+  words?: string[];
+  /** Resolves when the pin took and rejects when it did not — the menu
+      reads which to decide between closing and staying open (`RowMenu`). */
+  onPin: (row: DeviceRow) => Promise<void>;
+  /** Shows the machine the door. Same contract as `onPin`: a rejection
+      is how the menu learns the machine is still here. */
+  onForget: (row: DeviceRow) => Promise<void>;
+  /** Where a row goes, when it goes anywhere. Absent on a pane that
+      has no second step — see above. */
+  onOpen?: (row: DeviceRow) => void;
+  selected?: string | null;
+  /** Rows whose last pin attempt did not take — see `App`. */
+  pinFailed: Set<string>;
+  /** The node's sentence for a forget it refused, by row — cleared the
+      moment a later attempt on that row gets anywhere (`App`). */
+  forgetRefused: Map<string, string>;
+  /** 暂停 / 恢复 on a row — `onPin`'s contract: a rejection keeps the
+      menu open where the press was made. */
+  onPause?: (row: DeviceRow) => Promise<void>;
+  /** The node's sentence for a pause it refused, by row. */
+  pauseRefused?: Map<string, string>;
+  /** Something was written from 编辑… (a name, a face) — the shell
+      re-reads the table. Absent, the row offers no 编辑…. (The name is
+      the prop's from when 更改头像… was the item; kept so the shell's call
+      site stands.) */
+  onRestyled?: () => void;
+}) {
+  // Which machine the edit window is open on, if any.
+  const [editing, setEditing] = useState<DeviceRow | null>(null);
+  const actions = (d: DeviceRow): RowAction[] => [
+    {
+      key: "pin",
+      // The word is what pressing it *does*, so it is the opposite of
+      // the row's current state — which is also what makes this item
+      // say what the state is. When the last attempt did not take, the
+      // word becomes the one for what failed, said on the very thing
+      // that was pressed (docs/UX.md 做了但没变化 / 失败).
+      label: pinFailed.has(d.id)
+        ? d.pinned
+          ? gui.unpin_failed
+          : gui.pin_failed
+        : d.pinned
+          ? gui.unpin
+          : gui.pin,
+      failed: pinFailed.has(d.id),
+      run: () => onPin(d),
+    },
+    // **暂停 / 恢复, after 置顶** (docs/SHELL.md 第五轮 第 10 条; 删除 moved
+    // behind it to the foot on 2026-09-28, audit 第 16 条).
+    // On another machine's row it is this machine no longer talking to
+    // that one — it runs on as it was; on this machine's own row it is
+    // `khor pause`. Either way the word is what pressing it does, so it
+    // is the opposite of the row's state. Absent where the caller has
+    // nothing to do with it.
+    ...(onPause
+      ? [
+          {
+            key: d.paused ? "resume" : "pause",
+            label: d.paused ? gui.resume : gui.pause,
+            note: pauseRefused?.get(d.id),
+            run: () => onPause(d),
+          },
+        ]
+      : []),
+    // **编辑…** (2026-09-30, the owner: 「右键→编辑，然后这里可以改名称、
+    // 头像等诸多信息」): the one window where a machine's name and face
+    // are changed (`MachineEditDialog`) — on every machine, this one
+    // included; 全网同一份, anyone may set anyone's. It replaced 更改头像…
+    // (2026-09-28), which opened the face half alone, and 这台机器's own
+    // copies of both went with it. The ellipsis because a window follows.
+    ...(onRestyled
+      ? [
+          {
+            key: "edit",
+            label: gui.accounts_edit,
+            run: () => setEditing(d),
+          },
+        ]
+      : []),
+    // **Not on this machine's own row.** `Node::forget_device` refuses
+    // it by name — a table cannot be left from the inside — so the
+    // item would exist only to be refused, an offer whose one answer
+    // is no.
+    ...(d.me
+      ? []
+      : [
+          {
+            key: "forget",
+            // **删除, the word every sidebar's last item says** — one act
+            // (`Node::forget_device`), one word. What deleting a machine
+            // *means* is the sentence in the window that follows. **This
+            // is the one way to it** since 2026-09-28: the map's card
+            // forgot a machine on one press, and went with the map's
+            // second home (`check-face` 「删除一台机器永远先问」).
+            //
+            // What the user once called 断开 is 暂停 above (第四轮: 「机器的
+            // 断开指的是暂停」), which khor now has for one machine too.
+            label: gui.delete,
+            askLabel: gui.delete,
+            destructive: true,
+            ask: gui.forget_machine_confirm,
+            note: forgetRefused.get(d.id),
+            run: () => onForget(d),
+          },
+        ]),
+  ];
+  // **The rows are `SideList`'s** (docs/SHELL.md 第四轮): the node's
+  // order (pinned first), the pinned group and its fold, the box's one
+  // rule. What is left here is what a machine row says — of the rows
+  // the ticks leave standing (`DEVICE_SIEVE`).
+  const side: SideRow[] = sieve(rows, words, DEVICE_SIEVE, DEVICE_KEYS).map((d) => {
+    const system = d.vitals?.vitals.system ?? null;
+    const modelName = d.vitals?.vitals.model?.name ?? null;
+    // **The owner's row rule** (UX-48, 2026-10-07, every list): the face at
+    // the far left; top-left the name alone; bottom-left the latest
+    // readings; top-right the state; bottom-right how long it has held. A
+    // slot with nothing true to say is not drawn.
+    //
+    // A machine's state is its connection, **the one derivation every
+    // surface and the filter read** (`connectionKey`, WORDS-1008): 已暂停
+    // wins (this machine stopped talking to it); 本机; the road its live
+    // wire is on (直连 / 中继) for as long as it has been on it
+    // (`since_ms`); 不通 when unreachable (`down_ms`: an attempt failed and
+    // nothing was heard since), for as long as it has not been heard; 未连
+    // when idle — no live wire, nothing known wrong — for as long as it has
+    // been so. The bottom-right is a **duration**, bare (「4 小时」): how
+    // long the state has held. Without a live wire its readings are not
+    // drawn, an old number being no reading at all.
+    // Tombstone (UX-15 → UX-48): the model as the name's aside; the
+    // sessions running in the second line; the latency on the right with
+    // the unreadable / not-connected words and the last-heard time under
+    // it. And (UX-48, the lead 2026-10-07) the offline word on every idle
+    // row: idle is not unreachable. (UX-50) the latency first in the
+    // second line and the middle dots between its readings; a fourth
+    // reading (disk beside GPU) — at most three, the owner 2026-10-08.
+    // (WORDS-1008) 离线 for unreachable, and the last road (中继) on an
+    // idle row: the filter said 未连 for the same row, so ticking 中继 did
+    // not find a row that said 中继. The last road is the detail's.
+    const rtt = typeof d.rtt_ms === "number" ? d.rtt_ms : null;
+    const key = connectionKey(d);
+    // A wire through a middle is live too (the peer hop, NET-DIRECT): its
+    // row says 「通过 turing」 and the two legs added (`hopRoad`).
+    const live = d.me || d.hop === "direct" || d.hop === "relay" || d.hop === "forwarded";
+    const state = connectionKeyWord(key);
+    const held =
+      key === "paused" || key === "here"
+        ? null
+        : key === "down"
+          ? typeof d.heard_ms === "number"
+            ? lasting(d.heard_ms)
+            : null
+          : typeof d.since_ms === "number"
+            ? lasting(d.since_ms)
+            : null;
+    // **UX-50** (the owner 2026-10-08): the latency is the title line's,
+    // after the name; under the name at most three readings, each a label
+    // and a value with a gap between them and no middle dot: CPU, memory,
+    // then the GPU on a machine that has one, else the disk (`vitals.disk`,
+    // the volume khor's home is on — the one the card's disk ring reads, so
+    // the two never disagree). When they do not fit, whole items go from
+    // the end (`Whole`); CPU stays.
+    const v = live ? d.vitals?.vitals : undefined;
+    const lat = live && !d.me ? (d.hop === "forwarded" ? (hopRoad(d, rows)?.ms ?? rtt) : rtt) : null;
+    const share = (f: { used: number; total: number }) => Math.round((f.used / f.total) * 100);
+    const readings = [
+      v ? { key: "cpu", label: cli.vitals_name_cpu, value: Math.round(v.cpu_pct) } : null,
+      v && v.mem.total > 0 ? { key: "mem", label: cli.vitals_name_mem, value: share(v.mem) } : null,
+      v?.gpu
+        ? { key: "gpu", label: cli.vitals_name_gpu, value: Math.round(v.gpu.util_pct) }
+        : v?.disk && v.disk.total > 0
+          ? { key: "disk", label: cli.vitals_name_disk, value: share(v.disk) }
+          : null,
+    ].filter((w): w is { key: string; label: string; value: number } => w !== null);
+    return {
+      id: d.id,
+      group: d.pinned ? "pin" : "",
+      pinned: d.pinned,
+      face: { machine: d.face },
+      // **The system family's own mark** (docs/SHELL.md 第五轮第 7 条改画法:
+      // 「角标按系统」) — the node's `vitals.system`. A machine that could
+      // not say (an older peer, a satellite, no reading yet) wears the
+      // plain machine mark, never a guess. The model is not the mark's
+      // any more (nor, since UX-48, the row's). On the face or
+      // on its corner by the 外观 setting (`FaceMark`, 2026-10-02) — and
+      // `MachineFace` is this same assembly for anywhere else.
+      mark: machineKind(system),
+      // Double-click to rename, the gesture a session row wears
+      // (`EditableName`); `nested` because it sits inside the button
+      // that opens the row. Only where a row opens anything.
+      title: onOpen ? (
+        <EditableName
+          kind="machine"
+          id={d.id}
+          title={d.shown}
+          className="block"
+          inputClassName="w-full text-body"
+          nested
+        />
+      ) : (
+        <span className="block truncate">{d.shown}</span>
+      ),
+      name: d.shown,
+      // The title line's aside: `SideList` draws it one size down
+      // (`callout`) in the secondary ink. Whole or not at all.
+      aside:
+        lat !== null ? (
+          <Whole>
+            <span data-row-reading="rtt" className="flex-none whitespace-nowrap tabular-nums">
+              {/* The latency light, in the app's one scale of bands
+                  (UX-26, `lib/latency`) — never the colour alone: the
+                  number is beside it. */}
+              <span
+                aria-hidden="true"
+                data-lat={band(lat)}
+                className="me-xxs inline-block size-1.5 rounded-full align-middle"
+                style={{ background: BAND_INK[band(lat)] }}
+              />
+              {latency(lat)}
+            </span>
+          </Whole>
+        ) : undefined,
+      sub: readings.length ? (
+        <Whole keep={1} data-row-readings>
+          {readings.map((r) => (
+            <span key={r.key} data-row-reading={r.key} className="flex-none whitespace-nowrap">
+              <span data-reading-label>{r.label}</span>{" "}
+              <span data-reading-value className="text-foreground tabular-nums">
+                {gui.row_pct(r.value)}
+              </span>
+            </span>
+          ))}
+        </Whole>
+      ) : undefined,
+      corners: {
+        top: state ? (
+          <span data-row-state={key === "down" ? "offline" : key === "quiet" ? "idle" : key}>
+            {state}
+          </span>
+        ) : undefined,
+        bottom: held ? <span data-row-held>{held}</span> : undefined,
+      },
+      // **Both names are searchable**, and the id people paste: a renamed
+      // machine must be findable by what it is called now and by the
+      // name this person knew it by.
+      find: `${d.shown} ${d.name} ${d.id} ${modelName ?? ""}`,
+      selected: onOpen !== undefined && d.id === selected,
+      // A pane with nowhere to send a row has not earned actions on it.
+      menu: onOpen ? actions(d) : [],
+      onOpen: onOpen ? () => onOpen(d) : undefined,
+      // Grey, the way SideList greys a row (`dim`) — the machine is still
+      // in the table and still openable; this machine is not talking to it.
+      // **And a machine it cannot reach** (the redesign's 下拉刷新 ruling:
+      // 「够不到的机器的行灰显并注明无法获取和上次的时间」, UX-5): unreachable,
+      // and its corner says when it was last heard; the sessions list
+      // greys its far rows the same way. Idle is not unreachable (round
+      // NET-13): its row is drawn as any other.
+      dim: key === "paused" || key === "down",
+      rowData: {
+        "data-device": d.name,
+        "data-row": d.id,
+        "data-pinned": d.pinned,
+        "data-me": d.me,
+        "data-paused": d.paused,
+      },
+      openData: { "data-row-open": "" },
+    };
+  });
+  // The row it was opened on, re-read off the table so the title follows
+  // a rename and the window goes if the machine does.
+  const edited = editing ? (rows.find((d) => d.id === editing.id) ?? null) : null;
+  return (
+    <>
+      {/* 待批 (docs/CONNECT.md 根不在场): who waits for the root holder,
+          above the rows it will join. Draws nothing while nobody waits. */}
+      <PendingStrip />
+      <SideList
+        rows={side}
+        loading={loading}
+        query={query}
+        filtered={words.length > 0}
+        label={groupLabel}
+        empty={gui.no_matches}
+        none={gui.devices_empty}
+      />
+      {/* An errand — 办完就回去 — so a window over the list, not a page.
+          Picking a face keeps it open (the table is re-read, the window
+          stays): only 完成 or Esc closes it. */}
+      <MachineEditDialog row={edited} onClose={() => setEditing(null)} onChanged={() => onRestyled?.()} />
+    </>
+  );
+}
+
+/**
+ * **Whole items or none** (UX-50, the owner 2026-10-08: when they do not
+ * fit, items drop from the end, whole; never a cut value). The items sit in a row with `gap-row` between
+ * them; those past the line's end are hidden from the last back, so a
+ * reading is never cut mid-number. Measured, because what fits is each
+ * item's laid-out width against the line's, which no flex rule can say:
+ * every item is shown, measured, and the ones that do not fit are hidden
+ * again before the frame is painted. A hidden item says so (`hidden`),
+ * which is what the face gate reads. The first `keep` items stay whatever
+ * the width: CPU is never dropped.
+ */
+function Whole({ keep = 0, children, ...data }: { keep?: number; children: ReactNode } & Record<`data-${string}`, unknown>) {
+  const box = useRef<HTMLSpanElement | null>(null);
+  const fit = useCallback(() => {
+    const el = box.current;
+    if (!el) return;
+    const items = [...el.children] as HTMLElement[];
+    for (const i of items) i.hidden = false;
+    const room = el.getBoundingClientRect().width;
+    const gap = Number.parseFloat(getComputedStyle(el).columnGap) || 0;
+    let used = 0;
+    let out = false;
+    items.forEach((i, n) => {
+      used += (n > 0 ? gap : 0) + i.getBoundingClientRect().width;
+      // A hair of rounding is not a cut glyph.
+      out ||= used > room + 0.5;
+      i.hidden = out && n >= keep;
+    });
+  }, [keep]);
+  // Every render: a new number changes what the items need.
+  useLayoutEffect(fit);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const watch = new ResizeObserver(fit);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [fit]);
+  return (
+    <span ref={box} {...data} className="flex min-w-0 gap-row overflow-hidden">
+      {children}
+    </span>
+  );
+}
