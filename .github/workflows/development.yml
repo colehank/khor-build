@@ -115,7 +115,7 @@ jobs:
           runpy.run_path(str(script), run_name='__main__')
           PY
       - uses: dtolnay/rust-toolchain@1.95.0
-      - name: Run exact extracted Rust transport and native WebKit diagnostic
+      - name: Compare real aborted preconnections against resilient accept handling
         env:
           DEV_TASK: ${{ inputs.task }}
           REPORT_DIR: ${{ runner.temp }}/mac-network-evidence
