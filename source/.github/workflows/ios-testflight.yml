@@ -1,0 +1,78 @@
+name: iOS candidate TestFlight
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Original signed iOS producer run
+        type: string
+        required: true
+      quality_run:
+        description: Successful complete main Quality for the exact product source
+        type: string
+        required: true
+      source:
+        description: Exact product commit
+        type: string
+        required: true
+      tag:
+        description: Existing rc tag for the product source
+        type: string
+        required: true
+      build:
+        description: Exact signed Apple build number
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: distribute-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  testflight:
+    runs-on: macos-26
+    timeout-minutes: 35
+    environment: apple-testflight
+    env:
+      GH_TOKEN: ${{ github.token }}
+      IOS_PRODUCER_RUN: ${{ inputs.run_id }}
+      IOS_QUALITY_RUN: ${{ inputs.quality_run }}
+      IOS_SOURCE: ${{ inputs.source }}
+      IOS_TAG: ${{ inputs.tag }}
+      IOS_BUILD: ${{ inputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - run: sudo xcode-select -s /Applications/Xcode_26.5.app
+      - name: Verify exact signed archive and all shared product quality gates
+        run: >-
+          python3 scripts/ios_candidate_testflight.py stage
+          --run-id "$IOS_PRODUCER_RUN" --quality-run "$IOS_QUALITY_RUN"
+          --source "$IOS_SOURCE" --tag "$IOS_TAG" --build "$IOS_BUILD"
+          --root "$RUNNER_TEMP/ios-candidate" --report "$RUNNER_TEMP/ios-testflight-report"
+      - name: Upload once and confirm the exact Apple build
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE_P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROFILE: ${{ secrets.IOS_PROFILE }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: >-
+          python3 scripts/ios_candidate_testflight.py upload
+          --run-id "$IOS_PRODUCER_RUN" --quality-run "$IOS_QUALITY_RUN"
+          --source "$IOS_SOURCE" --tag "$IOS_TAG" --build "$IOS_BUILD"
+          --root "$RUNNER_TEMP/ios-candidate" --report "$RUNNER_TEMP/ios-testflight-report"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: ios-testflight-evidence
+          path: |
+            ${{ runner.temp }}/ios-testflight-report/*.json
+          if-no-files-found: error
+          retention-days: 90

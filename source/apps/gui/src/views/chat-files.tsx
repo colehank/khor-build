@@ -1,0 +1,569 @@
+import { useFileHandoff } from "@/hooks/use-file-handoff";
+import { FileHandoffAction, FileHandoffStatus } from "@/components/FileHandoff";
+import { fileManagerLabel } from "@/lib/file-actions";
+// **Files in an agent conversation** (round CHAT, 2026-10-03, the owner:
+// 「gui 对话得做到像 WeChat 一样：发文件、预览文件、还得显示文件在哪个路径」).
+//
+// # Where a file goes, and what the agent is told
+//
+// A file from the device — a phone's photo, a Mac's desktop file, a drop —
+// is put on the machine the conversation runs on, in that machine's
+// receive directory (`~/khor-drop` unless set in 存储, under its own name,
+// `khor_gui_core::chat::chat_put`), the very folder a `khor send` to that
+// machine lands in — or in a directory there the person chose above the
+// box (「存到」, `SendInto`, STORE-BRIEF phase 2: 指定位置就传到指定位置);
+// the agent is told the landed path. A file already on that machine
+// (「这台机器上的文件」) is
+// not copied at all. Either way the agent is told the **path**, one line
+// `@<path>` per file after the person's words (`lib/paths`): what Claude
+// Code and Codex read. A small picture also rides inline when the agent
+// said it takes pictures, as pictures did before this round (`INLINE_MAX`).
+//
+// # Composing
+//
+// Selection owns a local draft. Only explicit Send prepares/uploads its
+// snapshot to the chosen destination; errors keep the draft for retry.
+//
+// # Looking at one
+//
+// A pressed file opens in `FilePreview`, which is the workspace's own
+// `FileView` in a window — pictures, PDFs, markdown, code, and the same
+// sentences for what it will not draw — read only, with the three things
+// a person does next: open it where it lives, copy its path, and hand it
+// on (Finder on the Mac, the system's share sheet on a phone).
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+
+import { fetchDevices, fetchFileText, fetchLs, fetchPreview, fetchRevealHere, pullFile, reveal } from "@/api";
+import {AttachmentList} from "@/views/AttachmentList";
+import {AttachmentFile} from '@/views/AttachmentFile';
+import {deviceAttachments,pathAttachment,type Attachment} from '@/lib/term-attachments';
+import { DirPicker } from "@/components/DirPicker";
+import { FileKindIcon } from "@/components/FileKindIcon";
+import { PathCut } from "@/components/PathCut";
+import { PathField } from "@/components/PathField";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { Button } from "@/components/ui/button";
+import { Dialog, TaskOverlay, TaskActions, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { gui } from "@/gen/catalog";
+import { baseName, shownName } from "@/lib/paths";
+import { cn } from "@/lib/utils";
+import { sizeWord } from "@/views/FilesPane";
+import { defaultFaceOf, FileView, kindOf } from "@/views/FileView";
+import { useShowFile } from "@/views/linkHome";
+
+/** One file going along with the line being written. */
+export type Pending = import('@/lib/composer-files').PendingFile;
+import {composerFiles,composerReady} from '@/lib/composer-files';
+
+/** How large a picture still rides inline beside its path: 5 MB, the
+    old picture road's limit again. A turn with pictures goes in slices,
+    off the main thread, with its progress shown (`chat_say_with`, the
+    net lane's c85d45d; the host takes 64 MB a turn) — ⚠️ 墓碑: 1 MiB
+    while one 8.5 MB frame could hold the dev bridge's only request loop
+    for minutes (round CHAT). */
+const INLINE_MAX = 5 * 1024 * 1024;
+/** How large a picture still gets a thumbnail on its chip. */
+const THUMB_MAX = 1024 * 1024;
+
+const why = (e: unknown) => String((e as { message?: string })?.message ?? e);
+
+async function base64Of(f: File): Promise<string> {
+  const buf = new Uint8Array(await f.arrayBuffer());
+  // Chunked: spreading a multi-megabyte array into one call overflows the
+  // stack at a size a test image never reaches.
+  let bin = "";
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** `into` is resolved by the explicit send, not by selection. Null
+ * uses the target receive directory; source references stay references. */
+export function usePendingFiles(upload: {
+  put: (file: File, into: string | null) => Promise<string>;
+  putPaths: (paths: string[], into: string | null) => Promise<string[]>;
+}, into: string | null = null, session = 'composer',targetMachine:string|null=null) {
+  const store=composerFiles(session);
+  const items=useSyncExternalStore(store.subscribe,store.snapshot);
+  const [preparing,setPreparing]=useState(false);
+  const lock=useRef(false);
+  const addSources=(entries:Attachment[])=>store.add(entries.map(source=>{
+    const file=source.device?.files[0]?.file;
+    return {key:store.key(),name:source.name,size:source.size,thumb:file?.type.startsWith('image/')&&file.size<=THUMB_MAX?URL.createObjectURL(file):null,
+      inline:null,path:!source.device&&source.from===targetMachine?source.path:null,error:null,source,reference:!source.device&&source.from===targetMachine};
+  }));
+  const addFiles=(files:File[])=>addSources(deviceAttachments(files,false,'这台设备'));
+  const addLocalPaths=(paths:string[])=>addSources(paths.map(path=>pathAttachment(path,null,'这台设备')));
+  const addPaths=(paths:string[])=>store.add(paths.map(path=>({key:store.key(),name:baseName(path),size:null,thumb:null,inline:null,path,error:null,source:pathAttachment(path,targetMachine,targetMachine??'会话所在机器'),reference:true})));
+  const replace=(key:string,file:File)=>{
+    const old=store.snapshot().find(item=>item.key===key);if(!old||lock.current)return;
+    if(old.thumb)URL.revokeObjectURL(old.thumb);
+    const source=deviceAttachments([file],false,'这台设备')[0];
+    store.patch(key,{name:file.name,size:file.size,source,path:null,error:null,inline:null,landedInto:undefined,landedOn:undefined,
+      thumb:file.type.startsWith('image/')&&file.size<=THUMB_MAX?URL.createObjectURL(file):null});
+  };
+  const prepare=async():Promise<Pending[]>=>{
+    if(lock.current)throw new Error('附件正在准备');
+    lock.current=true;setPreparing(true);
+    const entries=store.snapshot();
+    try{
+      for(const item of entries){
+        // Execution home may finish resolving after selection. A reference
+        // belongs to its source machine, not whichever home was first painted.
+        if(item.source&&!item.source.device&&item.source.from===targetMachine){
+          store.patch(item.key,{path:item.source.path,reference:true,error:null});continue;
+        }
+        if(item.path!==null&&(!item.source||(!item.reference&&item.landedInto===into&&item.landedOn===targetMachine)))continue;
+        if(!store.snapshot().some(current=>current.key===item.key))continue;
+        store.patch(item.key,{encoding:true,error:null});
+        try{
+          const source=item.source;
+          if(!source)throw new Error('请重新添加此附件');
+          const file=source.device?.files[0]?.file;
+          const path=file?await upload.put(file,into):(await upload.putPaths([source.from?await pullFile(source.from,source.path):source.path],into))[0];
+          if(!path)throw new Error('附件未能送达');
+          const inline:[string,string]|null=file?.type.startsWith('image/')&&file.size<=INLINE_MAX?[file.type,await base64Of(file)]:null;
+          store.patch(item.key,{path,inline,encoding:false,landedInto:into,landedOn:targetMachine,reference:false});
+        }catch(error){store.patch(item.key,{encoding:false,error:why(error)});throw error;}
+      }
+      const keys=new Set(entries.map(item=>item.key));
+      return store.snapshot().filter(item=>keys.has(item.key));
+    }finally{lock.current=false;setPreparing(false);}
+  };
+  const restore=(remembered:readonly Pending[])=>store.add(remembered.map(item=>({...item,key:store.key(),thumb:null})));
+  return {items,addFiles,addLocalPaths,addPaths,addSources,replace,prepare,preparing,
+    retry:(key:string)=>store.patch(key,{error:null}),remove:(key:string)=>{if(!lock.current)store.remove(key);},clear:()=>store.clear(),restore,
+    busy:preparing,ready:!preparing&&composerReady(items)};
+}
+
+/** Unsent files retain their independent preview and removal controls. */
+export function PendingChips({ items, onRemove, machine, here,onRetry,onAdd,busy=false }: {
+  items: Pending[];
+  onRemove: (key: string) => void;
+  machine: string;
+  here: boolean;
+  onReplace?:(key:string,file:File)=>void;onRetry?:(key:string)=>void;onAdd?:()=>void;busy?:boolean;
+}) {
+  const [looking, setLooking] = useState<string | null>(null);
+  if (items.length === 0) return null;
+  const chosen=items.find(item=>item.key===looking);
+  const chosenEntry=chosen?(chosen.source??(chosen.path?pathAttachment(chosen.path,here?null:machine,machine):null)):null;
+  return (
+    <div data-chat-pending className="max-h-48 min-w-0 overflow-y-auto overscroll-contain px-2 pb-in">
+      <AttachmentList items={items.map(item=>({...item,detail:item.reference?"引用原文件":item.source?.shown,busy:!!item.encoding||(!item.source&&item.path===null&&!item.error)}))} onOpen={setLooking} onRemove={key=>{if(looking===key)setLooking(null);onRemove(key);}} onAdd={onAdd} onRetry={onRetry} busy={busy}/>
+      <AttachmentFile entry={chosenEntry} devices={[]} onClose={()=>setLooking(null)}/>
+    </div>
+  );
+}
+
+/**
+ * **Where a file sent from here lands** (STORE-BRIEF phase 2): 「存到」 and
+ * the receiving machine's receive location, or the directory picked on
+ * it (更改…, `DirPicker` fixed to that machine); 恢复默认 once one is
+ * picked. One line for both conversations — a machine's (`MachineChat`)
+ * and an agent's (`ChatView`) — so the two cannot say it two ways.
+ */
+export type SendIntoControl = {path:string;pick:()=>void;reset:(()=>void)|null};
+
+export function SendInto({
+  machine,
+  name,
+  into,
+  onInto,
+  className,
+  render,
+}: {
+  /** The API's spelling, for the picker: `""` is this machine. */
+  machine: string;
+  /** The machine's name as its device row reads it. */
+  name: string;
+  /** The picked directory; `null` is the receive location. */
+  into: string | null;
+  onInto: (into: string | null) => void;
+  className?: string;
+  /** Reuse this location and picker from an action menu. */
+  render?: (control:SendIntoControl)=>ReactNode;
+}) {
+  const [at, setAt] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  useEffect(() => {
+    let live = true;
+    fetchDevices().then(
+      (rows) => live && setAt(rows.find((r) => r.name === name)?.receive_at ?? null),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [name]);
+  return (
+    <>
+      {render?render({path:into??at??"~/khor-drop",pick:()=>setPicking(true),reset:into===null?null:()=>onInto(null)}):<div
+        data-send-into={into ?? ""}
+        className={cn("flex min-w-0 items-center gap-in text-caption text-muted-foreground", className)}
+      >
+        <span className="flex-none">{gui.send_into}</span>
+        {/* `~/khor-drop` where the row has no `receive_at` (an older khor). */}
+        <PathCut data-send-into-path text={into ?? at ?? "~/khor-drop"} className="min-w-0 flex-1" />
+        <Button size="sm" variant="ghost" data-send-into-change onClick={() => setPicking(true)}>
+          {gui.store_place_change}
+        </Button>
+        {into !== null && (
+          <Button size="sm" variant="ghost" data-send-into-reset onClick={() => onInto(null)}>
+            {gui.store_place_reset}
+          </Button>
+        )}
+      </div>}
+      <DirPicker open={picking} onOpenChange={setPicking} machine={machine} fixed onPick={async p=>onInto((await fetchLs(machine,p.path)).path)} />
+    </>
+  );
+}
+
+/** 「<machine> 上的文件…」: a path on the conversation's machine, typed
+    with the file completion every directory box has (`PathField`). Not
+    copied anywhere — the agent is told where it already is. */
+export function MachineFilePick({
+  open,
+  onOpenChange,
+  machine,
+  shown,
+  onPick,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The API's spelling: `""` is this machine. */
+  machine: string;
+  /** The name a person reads. */
+  shown: string;
+  onPick: (path: string) => void;
+}) {
+  const [value, setValue] = useState("~/");
+  useEffect(() => {
+    if (open) setValue("~/");
+  }, [open]);
+  const take = () => {
+    const v = value.trim();
+    if (!v || v.endsWith("/")) return;
+    onOpenChange(false);
+    // **Whole, never `~`-led**: the agent is told this path, and so is
+    // the card's listing; only the machine knows its home, and its
+    // listing of `""` says it (`fetchLs`).
+    if (!v.startsWith("~")) return onPick(v);
+    void fetchLs(machine, "").then(
+      (home) => onPick(`${home.path.replace(/\/+$/, "")}${v.slice(1)}`),
+      () => onPick(v),
+    );
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <TaskOverlay purpose="selection" initialHeight="fit" data-chat-machine-pick>
+        <DialogHeader>
+          <DialogTitle>{gui.chat_attach_machine_title(shown)}</DialogTitle>
+        </DialogHeader>
+        <PathField machine={machine} value={value} onValueChange={setValue} onSubmit={take} files autoFocus />
+        <TaskActions dirty={!!value} cancel={<Button data-dialog-cancel onClick={() => onOpenChange(false)}>
+            {gui.delete_keep}
+          </Button>} primary={<Button variant="primary" data-chat-machine-pick-add onClick={take}>
+            {gui.watch_add}
+          </Button>}/>
+      </TaskOverlay>
+    </Dialog>
+  );
+}
+
+/** Whether Finder can show this machine's files, asked once a page. */
+let revealing: Promise<boolean> | null = null;
+export const revealHere = () => (revealing ??= fetchRevealHere().catch(() => false));
+
+/** The file's bytes for the share sheet, from the reads the preview
+    already makes: a picture or a PDF as the preview carries it, text as
+    text. `null` for anything else, which is not offered. */
+export async function bytesOf(machine: string, path: string): Promise<File | null> {
+  const name = shownName(path);
+  const kind = kindOf(path);
+  if (kind === "text") {
+    const f = await fetchFileText(machine, path);
+    return f.binary || f.cut ? null : new File([f.text], name, { type: "text/plain" });
+  }
+  if (kind === "doc") return null;
+  const look = await fetchPreview(machine, path);
+  if (look.data === "" || look.cut) return null;
+  const raw = atob(look.data);
+  const buf = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+  return new File([buf], name, { type: look.media });
+}
+
+/** The system's share sheet takes files here (a phone's WebKit; a desktop
+    browser may take only links). */
+export const shares = () =>
+  typeof navigator.share === "function" &&
+  typeof navigator.canShare === "function" &&
+  navigator.canShare({ files: [new File([""], "x.txt", { type: "text/plain" })] });
+
+/** One file of a conversation, looked at (round CHAT item 3). */
+export function FilePreview({
+  machine,
+  shown,
+  path,
+  here,
+  onClose,
+  footer,
+  initialFace,
+}: {
+  /** The API's spelling of the conversation's machine. */
+  machine: string;
+  /** That machine is this one: its files are already on this disk. */
+  here: boolean;
+  /** Its name as a person reads it; empty draws no name. */
+  shown: string;
+  /** Absolute on that machine; `null` is closed. */
+  path: string | null;
+  onClose: () => void;
+  footer?: ReactNode;
+  /** The face it opens on; left out, the file's own (`defaultFaceOf`). */
+  initialFace?: "source" | "preview";
+}) {
+  const handoff=useFileHandoff(machine,path??"",path!==null);
+  const opening = initialFace ?? (path === null ? "source" : defaultFaceOf(path));
+  const [face, setFace] = useState(opening);
+  useEffect(() => setFace(opening), [machine, path, opening]);
+  const show = useShowFile();
+  const [finder, setFinder] = useState(false);
+  const [said, setSaid] = useState<"copied" | "failed" | string | null>(null);
+  useEffect(() => {
+    void revealHere().then(setFinder);
+  }, []);
+  useEffect(() => setSaid(null), [path]);
+  const kind = path === null ? "text" : kindOf(path);
+  const nativePreview = (kind === "doc" || kind === "pdf") && handoff.previewSupported;
+  const sharing = path !== null && kind !== "doc" && shares();
+  const copy = () => {
+    if (path === null) return;
+    navigator.clipboard.writeText(path).then(
+      () => setSaid("copied"),
+      () => setSaid("failed"),
+    );
+  };
+  // A far machine's file is taken to this Mac first (the downloads,
+  // `pullFile`) and that copy is the one Finder shows.
+  const toFinder = () => {
+    if (path === null) return;
+    const local = here ? Promise.resolve(path) : pullFile(machine, path);
+    void local
+      .then((p) => reveal(p)).catch((e: unknown) => setSaid(String((e as Error)?.message ?? e)));
+  };
+  const share = () => {
+    if (path === null) return;
+    void bytesOf(machine, path)
+      .then((f) => (f ? navigator.share({ files: [f] }) : undefined))
+      .catch(() => {
+        // Dismissing the sheet rejects too; nothing to say about it.
+      });
+  };
+  return (
+    <Dialog open={path !== null} onOpenChange={(o) => !o && onClose()}>
+      <TaskOverlay
+        data-file-preview={path ?? undefined}
+        // The phone's sheet (grabber, pulled down to put away); a window
+        // over the scrim elsewhere, closed by a press outside or Esc.
+        purpose="preview"
+
+      >
+        {path !== null && (
+          <>
+            <div
+              data-file-preview-head
+              className="flex flex-none flex-col gap-in"
+            >
+              <DialogTitle>{shownName(path)}</DialogTitle>
+              <TaskActions close={<Button data-file-preview-close onClick={onClose}>{gui.close}</Button>}/>
+              <div className="flex min-w-0 text-caption text-muted-foreground">
+                {shown && <span className="flex-none">{shown}&nbsp;·&nbsp;</span>}
+                <PathCut text={path} className="min-w-0 flex-1" />
+              </div>
+              <div className="flex items-center justify-between gap-in">
+                <SegmentedControl label={gui.file_face_preview} value={face} onChange={setFace}
+                  options={[{ key: "source", label: gui.files_original }, { key: "preview", label: gui.file_face_preview }]} />
+                <span className="text-caption text-muted-foreground">{gui.file_read_only}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-in">
+                {show && (
+                  <Button
+                    size="sm"
+                    data-file-preview-open
+                    onClick={() => {
+                      onClose();
+                      show(machine, path);
+                    }}
+                  >
+                    {gui.chat_file_open}
+                  </Button>
+                )}
+                <Button size="sm" data-file-preview-copy onClick={copy}>
+                  {gui.tab_copy_path}
+                </Button>
+                {finder && (
+                  <Button size="sm" data-file-preview-reveal onClick={toFinder}>
+                    {fileManagerLabel()}
+                  </Button>
+                )}
+                {!finder && handoff.supported && !nativePreview && <FileHandoffAction handoff={handoff}/>}
+                {!finder && !handoff.supported && sharing && (
+                  <Button size="sm" data-file-preview-share onClick={share}>
+                    {gui.chat_file_share}
+                  </Button>
+                )}
+                {said !== null && (
+                  <span data-file-preview-said className="text-callout text-muted-foreground">
+                    {said === "copied" ? gui.copied : said === "failed" ? gui.copy_failed : said}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div ref={handoff.owner} data-file-preview-body className="relative flex min-h-0 flex-1 flex-col border-t">
+              <FileHandoffStatus handoff={handoff}/>
+              {/* The workspace's own view of a file, read only: editing is
+                  the file view's, one press away above. */}
+              <FileView
+                handoff={handoff}
+                key={`${machine} ${path}`}
+                machine={machine}
+                path={path}
+                git={false}
+                face={face}
+                reading
+              />
+            </div>
+            {footer && <div className="flex flex-none items-center justify-between gap-row border-t py-in">{footer}</div>}
+          </>
+        )}
+      </TaskOverlay>
+    </Dialog>
+  );
+}
+
+/** What a card says about a file besides its name: its size, and a
+    picture's thumbnail. */
+type Facts = { size: number | null; thumb: string | null };
+
+/** Asked once a page per file (and per `stamp`, for a file the agent
+    rewrote): a conversation repaints often and its files do not move. A
+    question that could not be asked answers `null` and is forgotten, so
+    the card asks again (`useFacts`). */
+const asked = new Map<string, Promise<Facts | null>>();
+const factBytes=new Map<string,number>();
+function forgetFact(key:string){asked.delete(key);factBytes.delete(key);}
+function trimFacts(){
+ while(asked.size>64||[...factBytes.values()].reduce((sum,n)=>sum+n,0)>8*1024*1024){
+  const oldest=asked.keys().next().value;if(oldest===undefined)break;forgetFact(oldest);
+ }
+}
+
+function factsOf(machine: string, path: string, stamp: string): Promise<Facts | null> {
+  const key = `${machine}\n${path}\n${stamp}`;
+  const had = asked.get(key);
+  if (had) {asked.delete(key);asked.set(key,had);return had;}
+  const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+  const name = baseName(path);
+  const p = fetchLs(machine, dir).then(
+    async (l): Promise<Facts> => {
+      const row = l.entries.find((e) => e.name === name && !e.dir);
+      if (!row) return { size: null, thumb: null };
+      if (kindOf(path) !== "image" || row.size > THUMB_MAX) return { size: row.size, thumb: null };
+      const look = await fetchPreview(machine, path).catch(() => null);
+      const thumb = look && look.data !== "" && !look.cut ? `data:${look.media};base64,${look.data}` : null;
+      return { size: row.size, thumb };
+    },
+    () => {
+      forgetFact(key);
+      return null;
+    },
+  );
+  asked.set(key, p);trimFacts();
+  void p.then(facts=>{if(asked.get(key)!==p)return;factBytes.set(key,(facts?.thumb?.length??0)*2);trimFacts();},()=>{if(asked.get(key)===p)forgetFact(key);});
+  return p;
+}
+
+const RETRY_MS = 5000;
+const RETRIES = 6;
+
+function useFacts(machine: string, path: string, stamp: string): Facts {
+  const [facts, setFacts] = useState<Facts>({ size: null, thumb: null });
+  useEffect(() => {
+    let live = true;
+    setFacts({size:null,thumb:null});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // A machine that could not be reached is asked again a little later,
+    // a few times: a card left without its size for the life of the page
+    // because of one dropped answer is the failure this avoids.
+    const ask = (left: number) =>
+      void factsOf(machine, path, stamp).then((f) => {
+        if (!live) return;
+        if (f !== null) setFacts(f);
+        else if (left > 0) timer = setTimeout(() => ask(left - 1), RETRY_MS);
+      });
+    ask(RETRIES);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [machine, path, stamp]);
+  return facts;
+}
+
+/** **A file in the conversation, as a card** (round CHAT item 2): the
+    picture's thumbnail or the kind's icon, the name as it was given, its
+    size, and where it is — `machine · path`, cut at the start like every
+    path in a line too short for it (`PathCut`). Pressed, it opens. */
+export function FileCard({
+  machine,
+  shown,
+  path,
+  note = null,
+  stamp = "",
+  onOpen,
+  embedded = false,
+}: {
+  /** The API's spelling of the machine the file is on. */
+  machine: string;
+  /** That machine's name as a person reads it; empty draws none. */
+  shown: string;
+  /** Absolute on that machine. */
+  path: string;
+  /** What happened to it, before the size (「已写入」). */
+  note?: string | null;
+  /** Changes when the file did, so its facts are asked again. */
+  stamp?: string;
+  onOpen: () => void;
+  /** The containing draft row owns the width and single background. */
+  embedded?: boolean;
+}) {
+  const { size, thumb } = useFacts(machine, path, stamp);
+  const name = shownName(path);
+  const first = [note, size === null ? null : sizeWord(size)].filter(Boolean).join(" · ");
+  return (
+    <button
+      type="button"
+      data-chat-file={path}
+      onClick={onOpen}
+      title={path}
+      className={cn("flex max-w-full min-w-0 items-center gap-row rounded-lg p-2 text-left",embedded?"w-full bg-transparent":"w-80 bg-fill")}
+    >
+      {thumb ? (
+        <img src={thumb} alt="" className="size-10 flex-none rounded-md object-cover" />
+      ) : (
+        <FileKindIcon name={name} className="size-10 flex-none" />
+      )}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span data-chat-file-name className="truncate text-body text-foreground">
+          {name}
+        </span>
+        {first && <span className="text-caption text-muted-foreground tabular-nums">{first}</span>}
+        <span className="flex min-w-0 text-caption text-muted-foreground">
+          {shown && <span className="flex-none">{shown}&nbsp;·&nbsp;</span>}
+          <PathCut text={path} className="min-w-0 flex-1" />
+        </span>
+      </span>
+    </button>
+  );
+}
