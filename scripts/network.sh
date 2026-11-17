@@ -54,7 +54,7 @@ baseline = production.replace(old, r"""
                             }
                         };""")
 candidate = baseline.replace("                                break;", r"""
-                                if matches!(error.kind(), std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::Interrupted) {
+                                if matches!(error.kind(), std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::Interrupted) || (cfg!(any(target_os = "macos", target_os = "ios")) && error.kind() == std::io::ErrorKind::InvalidInput && error.raw_os_error().is_none()) {
                                     continue;
                                 }
                                 break;""", 1)
@@ -104,7 +104,7 @@ plan = dict(order=order, original_source_sha256=hashlib.sha256(s.encode()).hexdi
             fault="16 real IPv6 loopback TCP connections reset with zero linger before accept task polls; native request then unchanged",
             native_deadline_seconds=30, replacements=0, product_changes=0,
             limits=["Extracted Rust with only occupied-port text stub, not full product gate",
-                    "All six retained; causal confirmation requires baseline failed native reads with observed aborted/reset accept, and candidate successes",
+                    "All six retained; Darwin peer-address decode InvalidInput without OS errno is additionally classified; fatal OS EINVAL stays fatal",
                     "Failure-only accept/liveness logs; no success probes or CFNetwork diagnostic env"])
 (R / "abort-design.json").write_text(json.dumps(plan, indent=2) + "\n")
 with (R / "rust-build.log").open("w") as log:
@@ -127,7 +127,7 @@ for i, name in enumerate(order, 1):
                                  "--", "--exact", "--ignored", "--nocapture", "--test-threads=1"],
                                 env=env, stdout=output, stderr=subprocess.STDOUT, timeout=110)
     text = log.read_text()
-    observed = "ACCEPT_ERROR" in text and any("kind=" + x in text for x in ["ConnectionAborted", "ConnectionReset", "Interrupted"])
+    observed = "ACCEPT_ERROR" in text and (any("kind=" + x in text for x in ["ConnectionAborted", "ConnectionReset", "Interrupted"]) or "kind=InvalidInput raw=None" in text)
     row = dict(index=i, variant=name, returncode=result.returncode, observed_recoverable_accept_error=observed,
                connection_refused="Connection refused" in text, native_success="test result: ok. 1 passed;" in text)
     rows.append(row)
