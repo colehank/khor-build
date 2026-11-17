@@ -1,0 +1,200 @@
+name: DSH integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Retain passed suites and focus a changed integration fixture
+        type: choice
+        options: [full, integration, delegation, format]
+        default: full
+      reuse_frontend_run:
+        description: Optional verified frontend run for fixture-only changes
+        type: string
+        default: ''
+      reuse_frontend_sha:
+        description: Exact source SHA of the reused frontend
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      scope:
+        type: string
+        default: full
+      reuse_frontend_run:
+        type: string
+        default: ''
+      reuse_frontend_sha:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  frontend:
+    if: ${{ inputs.scope != 'format' && inputs.reuse_frontend_run == '' }}
+    uses: ./.github/workflows/frontend.yml
+  native:
+    needs: frontend
+    if: ${{ !cancelled() && (inputs.scope == 'format' || needs.frontend.result == 'success' || inputs.reuse_frontend_run != '') }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Isolate build and runtime paths
+        run: |
+          {
+            echo "CARGO_TARGET_DIR=$RUNNER_TEMP/dsh-target"
+            echo "KHOR_AGENT_BUNDLE=$RUNNER_TEMP/khor-agent"
+            echo "KHOR_TEST_MCP_EXECUTABLE=$RUNNER_TEMP/dsh-target/debug/khor"
+            echo "KHOR_RUNTIME_DIR=$RUNNER_TEMP/dsh-runtime"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        if: ${{ inputs.scope != 'format' }}
+        with:
+          node-version: 22.19.0
+          cache: npm
+          cache-dependency-path: apps/agent/package-lock.json
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        if: ${{ inputs.scope != 'format' }}
+        with:
+          bun-version: 1.3.14
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        if: ${{ inputs.scope != 'format' }}
+        with:
+          key: dsh-integration
+          cache-targets: false
+      - run: npm ci --prefix apps/agent
+        if: ${{ inputs.scope != 'format' }}
+      - name: Embed the real Khor agent
+        if: ${{ inputs.scope != 'format' }}
+        run: node apps/agent/build.mjs aarch64-apple-darwin "$KHOR_AGENT_BUNDLE"
+      - uses: ./.github/actions/restore-frontend
+        if: ${{ inputs.scope != 'format' && inputs.reuse_frontend_run == '' }}
+      - name: Prove reused frontend inputs are unchanged
+        if: ${{ inputs.scope != 'format' && inputs.reuse_frontend_run != '' }}
+        env:
+          FRONTEND_RUN: ${{ inputs.reuse_frontend_run }}
+          FRONTEND_SHA: ${{ inputs.reuse_frontend_sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          sha = os.environ['FRONTEND_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', sha)
+          assert re.fullmatch('[0-9]+', os.environ['FRONTEND_RUN'])
+          subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', sha], check=True)
+          changed = subprocess.check_output(['git', 'diff', '--name-only', sha, 'HEAD'], text=True).splitlines()
+          allowed = {'.github/workflows/dsh-integration.yml', '.github/workflows/quality.yml', 'crates/node/tests/delegation_wire.rs',
+                     'crates/cli/tests/far_open.rs', 'docs/handoff/deepseek-harness-20261117.md'}
+          assert set(changed) <= allowed, f'Frontend inputs changed: {changed}'
+          PY
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: ${{ inputs.scope != 'format' && inputs.reuse_frontend_run != '' }}
+        with:
+          name: frontend
+          path: frontend
+          run-id: ${{ inputs.reuse_frontend_run }}
+          github-token: ${{ github.token }}
+      - name: Restore the source-verified reused frontend
+        if: ${{ inputs.scope != 'format' && inputs.reuse_frontend_run != '' }}
+        env:
+          FRONTEND_SHA: ${{ inputs.reuse_frontend_sha }}
+        run: |
+          python3 scripts/release_manifest.py verify --root frontend --sha "$FRONTEND_SHA"
+          mkdir -p apps/gui/src
+          cp -R frontend/dist apps/gui/dist
+          cp -R frontend/gen apps/gui/src/gen
+          mkdir -p "$RUNNER_TEMP/dsh-evidence"
+          echo "$FRONTEND_SHA" > "$RUNNER_TEMP/dsh-evidence/frontend-source-sha.txt"
+      - name: Check formatting and retain a source-only repair patch
+        id: formatting
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/dsh-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/dsh-evidence/format-source-sha.txt"
+          if ! python3 scripts/check-rust-format.py --check; then
+            python3 scripts/check-rust-format.py --write
+            git diff --binary -- '*.rs' > "$RUNNER_TEMP/dsh-evidence/format.patch"
+            git restore -- '*.rs'
+            exit 1
+          fi
+      - name: Prove optional-installation and recovery regressions before checking their fixes
+        if: ${{ inputs.scope == 'full' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/empty-agent-path"
+          cp crates/node/src/doctor.rs "$RUNNER_TEMP/doctor.green.rs"
+          cp crates/node/src/session_recovery.rs "$RUNNER_TEMP/recovery.green.rs"
+          trap 'cp "$RUNNER_TEMP/doctor.green.rs" crates/node/src/doctor.rs; cp "$RUNNER_TEMP/recovery.green.rs" crates/node/src/session_recovery.rs' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/node/src/doctor.rs')
+          source = path.read_text()
+          green = 'let Ok(rows) = node.agents_loaded().map(|loaded| loaded.doc.all()) else {'
+          assert source.count(green) == 1
+          path.write_text(source.replace(green, 'let Ok(rows) = node.agents() else {'))
+          path = Path('crates/node/src/session_recovery.rs')
+          source = path.read_text()
+          green = '            .or_else(|| khor_sync::agents::registry::builtin(name).and_then(|agent| agent.spec()))\n'
+          assert source.count(green) == 1
+          path.write_text(source.replace(green, ''))
+          PY
+          git diff -- crates/node/src/doctor.rs crates/node/src/session_recovery.rs > "$RUNNER_TEMP/dsh-evidence/regressions-red.patch"
+          set +e
+          KHOR_PATH="$RUNNER_TEMP/empty-agent-path" cargo test --locked -p khor-node --lib dsh_ -- --test-threads=1 --color never > "$RUNNER_TEMP/dsh-evidence/regressions-red.log" 2>&1
+          red_status=$?
+          set -e
+          cp "$RUNNER_TEMP/doctor.green.rs" crates/node/src/doctor.rs
+          cp "$RUNNER_TEMP/recovery.green.rs" crates/node/src/session_recovery.rs
+          test "$red_status" -ne 0
+          grep -F 'dsh_default_is_optional_but_an_explicit_missing_agent_is_diagnosed ... FAILED' "$RUNNER_TEMP/dsh-evidence/regressions-red.log"
+          grep -F 'dsh_readonly_recovery_uses_the_same_default_and_override ... FAILED' "$RUNNER_TEMP/dsh-evidence/regressions-red.log"
+          git diff --exit-code -- crates/node/src/doctor.rs crates/node/src/session_recovery.rs
+      - name: Build the exact CLI for isolated local DSH acceptance
+        if: ${{ inputs.scope != 'format' }}
+        id: native_build
+        run: |
+          cargo build --locked -p khor-cli --bin khor -p khor-gui-core --bin bridge
+          cp "$CARGO_TARGET_DIR/debug/khor" "$RUNNER_TEMP/dsh-evidence/khor"
+          cp "$CARGO_TARGET_DIR/debug/bridge" "$RUNNER_TEMP/dsh-evidence/bridge"
+          git rev-parse HEAD > "$RUNNER_TEMP/dsh-evidence/source-sha.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/dsh-evidence/source-tree.txt"
+          shasum -a 256 "$RUNNER_TEMP/dsh-evidence/khor" "$RUNNER_TEMP/dsh-evidence/bridge" > "$RUNNER_TEMP/dsh-evidence/binaries.sha256"
+      - name: Verify default discovery and launch ownership
+        if: ${{ inputs.scope == 'full' }}
+        run: |
+          KHOR_PATH="$RUNNER_TEMP/empty-agent-path" cargo test --locked -p khor-node --lib dsh_ -- --test-threads=1
+          cargo test --locked -p khor-sync --lib agents -- --test-threads=1
+          cargo test --locked -p khor-gui-core --lib agents::tests -- --test-threads=1
+      - name: Verify cross-machine user sessions
+        if: ${{ inputs.scope == 'full' || inputs.scope == 'integration' }}
+        run: cargo test --locked -p khor-cli --test far_open -- --test-threads=1
+      - name: Verify ACP configuration, permissions, cancellation and recovery
+        if: ${{ inputs.scope == 'full' && !cancelled() && steps.native_build.outcome == 'success' }}
+        run: cargo test --locked -p khor-acp --test conversation -- --test-threads=1
+      - name: Verify the real Khor agent delegation path
+        env:
+          RUST_BACKTRACE: '1'
+        if: ${{ inputs.scope != 'format' && !cancelled() && steps.native_build.outcome == 'success' }}
+        run: cargo test --locked -p khor-node --test delegation_wire -- --test-threads=1
+      - name: Require clean formatting
+        if: always()
+        env:
+          FORMAT_OUTCOME: ${{ steps.formatting.outcome }}
+        run: test "$FORMAT_OUTCOME" = success
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: dsh-integration-native
+          path: ${{ runner.temp }}/dsh-evidence
+          if-no-files-found: error
+          retention-days: 7
