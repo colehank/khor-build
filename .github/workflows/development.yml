@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   network-mac:
-    if: inputs.executor == 'mac' && inputs.task == 'net-node'
+    if: inputs.executor == 'mac' && inputs.task == 'net-unit'
     runs-on: macos-26
     timeout-minutes: 20
     env:
