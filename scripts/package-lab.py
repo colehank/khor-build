@@ -22,9 +22,10 @@ launcher = programs / "KhorLab"
 launcher.write_text('''#!/bin/sh
 set -eu
 export KHOR_HOME="$HOME/Library/Caches/KhorLab/SNAPSHOT"
+export KHOR_RUNTIME_DIR="$KHOR_HOME/runtime"
 export KHOR_NAME="Khor Lab"
 export KHOR_WEB_PORT=0
-unset KHOR_SESSION
+unset KHOR_SESSION KHOR_RUNTIME_INSTALL_SOURCE
 mkdir -p "$KHOR_HOME"
 exec "$(dirname "$0")/khor-gui-bin" "$@"
 '''.replace("SNAPSHOT", info["snapshot_commit"]))
