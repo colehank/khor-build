@@ -1,0 +1,31 @@
+# Khor's one-use PROMPT_COMMAND bootstrap for a native interactive login Bash.
+# --noprofile prevents double sourcing; --login retains login_shell and logout.
+if [ -n "${KHOR_ORIG_PROMPT_COMMAND+set}" ]; then
+  PROMPT_COMMAND=$KHOR_ORIG_PROMPT_COMMAND
+else
+  unset PROMPT_COMMAND
+fi
+unset KHOR_ORIG_PROMPT_COMMAND
+_khor_login_integration=$KHOR_BASH_INTEGRATION
+unset KHOR_BASH_INTEGRATION
+[ -r /etc/profile ] && builtin source /etc/profile
+for _khor_login_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+  if [ -r "$_khor_login_profile" ]; then
+    builtin source "$_khor_login_profile"
+    break
+  fi
+done
+unset _khor_login_profile
+KHOR_BASH_SKIP_RC=1
+builtin source "$_khor_login_integration"
+unset _khor_login_integration
+# PROMPT_COMMAND was replaced while Bash was evaluating its initial value.
+# Run the normal, now configured first prompt once before Bash draws PS1.
+case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in
+  "declare -a"*)
+    for _khor_login_prompt in "${PROMPT_COMMAND[@]}"; do
+      builtin eval "$_khor_login_prompt"
+    done
+    ;;
+  *) builtin eval "${PROMPT_COMMAND-}" ;;
+esac

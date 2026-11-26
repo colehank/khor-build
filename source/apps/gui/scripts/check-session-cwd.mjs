@@ -1,0 +1,110 @@
+import assert from "node:assert/strict";
+import { sessionCwd, sessionCwdOnScreen, workspaceCwd, followsSessionCwd, sessionInWorkspace } from "../src/lib/session-cwd.ts";
+const row = { place: "/birth", doing: { cwd: "/after-cd" } };
+assert.equal(sessionCwd(row), "/after-cd", "workspace follows cd, not birthplace");
+assert.equal(sessionCwd(row, "/live-prompt"), "/after-cd", "runtime shell reading is authoritative");
+row.mux = true;
+assert.equal(sessionCwd(row, "/old-pane"), "/after-cd", "active pane snapshot outranks a stale terminal OSC mark");
+row.doing.cwd = "/second-pane";
+assert.equal(sessionCwd(row, "/old-pane"), "/second-pane", "pane switch changes the default workspace");
+row.doing.cwd = "/after-cd";
+assert.equal(sessionCwd(row), "/after-cd", "returning to the original pane reads its current directory");
+assert.equal(sessionCwd({ place: "/birth" }), "/birth");
+assert.equal(sessionCwd({ place: "/birth", doing: { cwd: "" } }, ""), "/birth");
+assert.equal(sessionCwd(null), null);
+assert.equal(workspaceCwd(row, { dir: "/previous", follow: true }), "/after-cd", "default side workspace follows cwd");
+assert.equal(workspaceCwd(row, { dir: "/chosen", follow: false }), "/chosen", "manual workspace navigation stays pinned");
+assert.equal(workspaceCwd(row, { dir: "/chosen" }), "/chosen", "saved manually navigated locations stay pinned");
+globalThis.document = { querySelector: () => ({ dataset: { keptTerminal: "other-tab" }, querySelector: () => ({ __marks: { cwd: () => "/wrong-tab" } }) }) };
+assert.equal(sessionCwdOnScreen({ ...row, id: "current-tab", mux: false }), "/after-cd", "kept terminal from another tab cannot supply cwd");
+globalThis.document.querySelector = () => ({ dataset: { keptTerminal: "current-tab" }, querySelector: () => ({ __marks: { cwd: () => "/immediate-cd" } }) });
+assert.equal(sessionCwdOnScreen({ ...row, id: "current-tab", mux: false }), "/after-cd", "nested tmux keeps its runtime cwd even with native shell transport");
+assert.equal(sessionCwdOnScreen({ id: "current-tab", place: "/birth" }), "/immediate-cd", "OSC remains a fallback when runtime cwd is unknown");
+assert.equal(sessionCwdOnScreen({ ...row, id: "current-tab", mux: true }), "/after-cd");
+delete globalThis.document;
+assert(followsSessionCwd(row, { dir: "/birth", start: null, spot: null }), "old birthplace default migrates to following");
+assert(!followsSessionCwd(row, { dir: "/birth", start: { path: "/birth/file" } }), "old explicit file remains pinned");
+assert(!followsSessionCwd(row, { dir: "/birth", spot: { file: "/birth/file" } }), "old open file remains pinned");
+assert(!followsSessionCwd(row, { dir: "/chosen" }), "old explicit directory remains pinned");
+console.log("session cwd: passed");
+
+// Exercise the real filter options and matching table, not a duplicate policy.
+const { build } = await import("esbuild");
+const { fileURLToPath } = await import("node:url");
+// **`fileURLToPath`, not `.pathname`**: on Windows the latter keeps a leading
+// slash (`/F:/…`) and esbuild resolves nothing from it — this check could not
+// run on the platform whose path handling it is meant to protect.
+const resolveDir = fileURLToPath(new URL("..", import.meta.url));
+const bundle = await build({
+  stdin: { contents: 'export { SESSION_SIEVE, sessionOptions, visibleSessions, sessionSearchText } from "./src/lib/session-filter"; export { sessionName } from "./src/lib/session-name";', resolveDir, loader: "ts" },
+  bundle: true, write: false, format: "esm", platform: "node",
+});
+const { SESSION_SIEVE, sessionOptions, visibleSessions, sessionSearchText, sessionName } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+const moving = { id: "moving", title: "shell", home: "MacLab", word: "busy", category: "codex", place: "/birth", doing: { cwd: "/work/ACL2027" } };
+const axis = SESSION_SIEVE.find((a) => a.key === "at:");
+assert.equal(axis.pick(moving), "/work/ACL2027", "location filter follows cd");
+assert(sessionOptions([moving], []).some((o) => o.key === "at:/work/ACL2027"), "new cwd offered in menu");
+assert(!sessionOptions([moving], []).some((o) => o.key === "at:/birth"), "birthplace not offered for moved row");
+assert.deepEqual(visibleSessions([moving], "", ["at:/work/ACL2027"]), [moving]);
+assert.deepEqual(visibleSessions([moving], "", ["at:/birth"]), [], "old directory no longer matches");
+assert.deepEqual(visibleSessions([moving], "acl2027", []), [moving], "search uses live cwd");
+assert.deepEqual(visibleSessions([moving], "/birth", []), [], "search does not use birthplace");
+assert(sessionSearchText(moving).includes("/work/ACL2027"));
+assert(sessionInWorkspace(moving, "MacLab", "/work"));
+assert(sessionInWorkspace(moving, "MacLab", "/work/ACL2027"));
+assert(!sessionInWorkspace(moving, "MacLab", "/birth"));
+assert(!sessionInWorkspace(moving, "other-machine", "/work"));
+assert(!sessionInWorkspace(moving, null, "/work"));
+assert(!sessionInWorkspace(moving, "MacLab", "/wor"), "directory component boundary");
+assert(!sessionInWorkspace(moving, "MacLab", ""));
+moving.doing.cwd = "/other-pane";
+assert.equal(axis.pick(moving), "/other-pane", "filter follows pane switch");
+assert(sessionOptions([moving], ["at:/work/ACL2027"]).some((o) => o.key === "at:/work/ACL2027"), "previous tick remains removable");
+assert(!sessionInWorkspace(moving, "MacLab", "/work"), "pane switch leaves former workspace");
+assert(sessionInWorkspace(moving, "MacLab", "/other-pane"));
+for (const cwd of ["", "  ", null]) {
+  moving.doing.cwd = cwd;
+  assert.equal(axis.pick(moving), "/birth");
+  assert(sessionInWorkspace(moving, "MacLab", "/birth"));
+}
+moving.place = null;
+assert.equal(axis.pick(moving), "");
+assert(!sessionInWorkspace(moving, "MacLab", "/birth"));
+moving.doing.cwd = String.raw`C:\work\project`;
+assert(sessionInWorkspace(moving, "MacLab", String.raw`C:\work`));
+assert(!sessionInWorkspace(moving, "MacLab", String.raw`C:\wor`));
+// ── Windows path identity (T0-3) ────────────────────────────────────
+// One place, many spellings. Every case here was a way the right column
+// could silently list nothing on Windows.
+const { pathKey, samePath, underPath } = await import("../src/lib/session-cwd.ts");
+assert.equal(pathKey(String.raw`\\?\C:\work\project`), pathKey(String.raw`C:\work\project`), "extended-length prefix is a spelling, not a name");
+assert.equal(pathKey("C:/work/project"), pathKey(String.raw`C:\work\project`), "forward slashes are a spelling");
+assert.equal(pathKey(String.raw`c:\WORK\PROJECT`), pathKey(String.raw`C:\work\project`), "NTFS is case-insensitive");
+assert.equal(pathKey(String.raw`C:\work\project\\`), pathKey(String.raw`C:\work\project`), "a trailing separator is not a different place");
+assert.equal(pathKey(String.raw`\\?\UNC\server\share\p`), pathKey(String.raw`\\server\share\p`), "the UNC form of the prefix folds too");
+assert.equal(pathKey("/work/project/"), "/work/project", "unix trailing separator folds");
+assert.notEqual(pathKey("/Work"), "/work", "unix is case-sensitive and stays so");
+assert.equal(pathKey("C:\\"), "c:\\", "a drive root keeps its separator");
+assert.equal(pathKey("C:"), "c:\\", "a bare drive folds to its root — khor compares absolute paths only");
+assert(samePath(String.raw`\\?\C:\w`, String.raw`C:\W`), "samePath sees through prefix and case");
+assert(underPath(String.raw`\\?\C:\work\project\src`, String.raw`C:\work`), "membership works across spellings");
+assert(underPath(String.raw`C:/work/project`, String.raw`C:\work\project`), "at the root, in another spelling");
+assert(!underPath(String.raw`C:\workshop`, String.raw`C:\work`), "neighbours are not children");
+assert(!underPath(String.raw`C:\work`, String.raw`C:\workshop`), "and not the other way round");
+assert(underPath("/work/project", "/"), "everything is under the unix root");
+assert(!underPath("", "/work") && !underPath("/work", ""), "an empty path is nobody's child");
+assert(underPath(String.raw`\\server\share\p\q`, String.raw`\\server\share`), "UNC share boundary");
+assert(!underPath(String.raw`\\server\share2`, String.raw`\\server\share`), "and its neighbour");
+console.log("session location filter, search and workspace membership: passed");
+console.log("windows path identity: passed");
+
+const namedRow = {title:'shell',place:'/birth',doing:{cwd:'/work/ACL2027',title:'✳ Claude generated title',command:'claude'}};
+assert.equal(sessionName(namedRow),'ACL2027','automatic OSC titles do not name sessions');
+namedRow.doing.cwd=String.raw`C:\work\project`;
+assert.equal(sessionName(namedRow),'project','Windows current directory names match Unix');
+assert.equal(sessionName({...namedRow,title:'My session'}),'My session','explicit user name wins');
+assert.equal(sessionName({...namedRow,title:'✳ My session'}),'✳ My session','user emoji names remain literal');
+assert.equal(sessionName({title:'shell',place:'/birth'}),'birth','birthplace is only a fallback');
+assert.equal(sessionName({title:'shell',doing:{cwd:'/',title:'automatic'}}),'/');
+assert.equal(sessionName({title:'shell',doing:{title:'automatic'}}),'shell','missing cwd never restores an agent title');
+console.log('stable session names: passed');
