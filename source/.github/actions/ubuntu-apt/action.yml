@@ -1,0 +1,28 @@
+name: Ubuntu dependency downloads
+description: Use official HTTPS mirrors and bounded dependency transport waits
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        case "$(dpkg --print-architecture)" in
+          amd64)
+            archive=https://archive.ubuntu.com/ubuntu
+            security=https://security.ubuntu.com/ubuntu
+            ;;
+          arm64)
+            archive=https://ports.ubuntu.com/ubuntu-ports
+            security=$archive
+            ;;
+          *) echo 'Unsupported Ubuntu runner architecture' >&2; exit 1 ;;
+        esac
+        # Replacing only the Azure entry leaves slower HTTP fallbacks active.
+        if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+          printf '%s\n' "$archive" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        fi
+        if [[ -f /etc/apt/apt-security-mirrors.txt ]]; then
+          printf '%s\n' "$security" | sudo tee /etc/apt/apt-security-mirrors.txt >/dev/null
+        fi
+        printf '%s\n' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "2";' |
+          sudo tee /etc/apt/apt.conf.d/99-khor-ci-transport >/dev/null

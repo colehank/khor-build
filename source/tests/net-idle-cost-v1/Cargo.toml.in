@@ -1,0 +1,33 @@
+[package]
+name = "khor-net-idle-cost"
+version = "0.0.0"
+edition = "2024"
+[workspace]
+[lib]
+path = "lib.rs"
+[dependencies]
+khor-core = { path = "@ROOT@/crates/core" }
+khor-net = { path = "@ROOT@/crates/net" }
+khor-node = { path = "@ROOT@/crates/node" }
+patchbay = "=0.7.0"
+iroh = { path = "@ROOT@/vendor/iroh" }
+iroh-relay = { version = "=1.4.1", features = ["server"] }
+rcgen = "0.14"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ctor = "1.0"
+libc = "0.2"
+[patch.crates-io]
+agent-client-protocol = { path = "@ROOT@/vendor/agent-client-protocol" }
+tiny_http = { path = "@ROOT@/vendor/tiny_http" }
+patchbay = { path = "@ROOT@/vendor/patchbay" }
+loro-internal = { path = "@ROOT@/vendor/loro-internal" }
+iroh = { path = "@ROOT@/vendor/iroh" }
+noq-proto = { path = "@ROOT@/vendor/noq-proto" }
+iroh-mdns-address-lookup = { path = "@ROOT@/vendor/iroh-mdns-address-lookup" }
+swarm-discovery = { path = "@ROOT@/vendor/swarm-discovery" }
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

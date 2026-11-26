@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Khor",
+  "version": "0.2.0",
+  "identifier": "io.github.colehank.khor",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "Khor",
+    "copyright": "© 2026 colehank",
+    "category": "DeveloperTool",
+    "shortDescription": "A terminal and agent session manager",
+    "longDescription": "Khor keeps shell sessions, agent conversations and files in one place, reachable from this machine and from the other machines you trust.",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico",
+      "icons/icon.icns"
+    ],
+    "macOS": {
+      "bundleName": "khor"
+    },
+    "iOS": {
+      "frameworks": [
+        "QuickLook",
+        "PDFKit"
+      ]
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "SimpChinese"
+        ]
+      },
+      "wix": {
+        "language": [
+          "en-US",
+          "zh-CN"
+        ]
+      }
+    }
+  }
+}
