@@ -1,0 +1,177 @@
+//! Cross-module integration: doc + store + plan composed the way a real
+//! driver composes them. Single-module behavior is tested next to its
+//! code.
+
+use std::fs;
+use std::path::PathBuf;
+
+use crate::chat::{ChatDoc, open_channel};
+use crate::plan::{Side, plan};
+use crate::store::BlockStore;
+use crate::testutil::{me, render, tmpdir};
+
+/// A dumb node: a directory holding blocks. It merges nothing.
+struct Dumb(PathBuf);
+
+#[test]
+fn command_receipts_replicate_updates_without_duplicate_messages() {
+    use crate::chat::CommandRecord;
+    let a = ChatDoc::new(0xa).unwrap();
+    let b = ChatDoc::new(0xb).unwrap();
+    let sender = me("executor");
+    let mut record = CommandRecord {
+        id: "command-unique-token".into(),
+        line: "/devices".into(),
+        owner: sender.id.clone(),
+        owner_name: sender.name.clone(),
+        status: "running".into(),
+        started_at_ms: 100,
+        ended_at_ms: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        data_json: None,
+        session: None,
+        error: None,
+        agent: None,
+    };
+    a.command(&sender, &record).unwrap();
+    b.merge(&a.changes_since(&b.version()).unwrap()).unwrap();
+    assert_eq!(b.messages()[0].command.as_ref(), Some(&record));
+    // An unrelated reader edit survives the executor's final receipt.
+    b.retract(&record.id).unwrap();
+    record.status = "done".into();
+    record.ended_at_ms = Some(200);
+    record.stdout = "one machine".into();
+    a.command(&sender, &record).unwrap();
+    a.merge(&b.changes_since(&a.version()).unwrap()).unwrap();
+    b.merge(&a.changes_since(&b.version()).unwrap()).unwrap();
+    b.merge(&a.changes_since(&Default::default()).unwrap())
+        .unwrap();
+    let messages = b.messages();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].retracted);
+    assert_eq!(messages[0].at, 200);
+    assert_eq!(messages[0].command.as_ref(), Some(&record));
+    assert!(b.command(&me("other-executor"), &record).is_err());
+}
+impl Dumb {
+    fn new(tag: &str) -> Self {
+        let d = tmpdir(tag);
+        fs::create_dir_all(&d).unwrap();
+        Self(d)
+    }
+    fn side(&self) -> Side {
+        let names: Vec<String> = fs::read_dir(&self.0)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".loro"))
+            .collect();
+        // `merged` empty: it stores for others, merges nothing.
+        Side::new(names, Vec::<String>::new())
+    }
+    fn get(&self, n: &str) -> Vec<u8> {
+        fs::read(self.0.join(n)).unwrap()
+    }
+    fn put(&self, n: &str, b: &[u8]) {
+        fs::write(self.0.join(n), b).unwrap();
+    }
+}
+
+/// One sync round: plan → move → done. Returns (pulled, pushed) counts.
+fn sync_with_dumb(st: &mut BlockStore, doc: &ChatDoc, dumb: &Dumb) -> (usize, usize) {
+    let p = plan(&st.side().unwrap(), &dumb.side());
+    for n in &p.pull {
+        st.absorb(doc, n, &dumb.get(n)).unwrap();
+    }
+    for n in &p.push {
+        dumb.put(n, &st.read_block(n).unwrap());
+    }
+    (p.pull.len(), p.push.len())
+}
+
+/// Two machines converge through a node that understands nothing — the
+/// falsifiable form of "an ssh-only machine is a member of the network".
+#[test]
+fn two_machines_converge_through_a_node_that_understands_nothing() {
+    let dumb = Dumb::new("dumb-node");
+    let dir_a = tmpdir("mach-a");
+    let dir_b = tmpdir("mach-b");
+
+    let mut a = open_channel(&dir_a, 0xA).unwrap();
+    a.doc.tell(&me("mac"), "from the mac").unwrap();
+    a.store.flush(&a.doc).unwrap();
+    let (pull, push) = sync_with_dumb(&mut a.store, &a.doc, &dumb);
+    assert_eq!(
+        (pull, push),
+        (0, 1),
+        "A should push one block, nothing to pull"
+    );
+
+    let mut b = open_channel(&dir_b, 0xB).unwrap();
+    let (pull, _) = sync_with_dumb(&mut b.store, &b.doc, &dumb);
+    assert_eq!(pull, 1, "B should pull A's block off the dumb node");
+    b.doc.tell(&me("phone"), "from the phone").unwrap();
+    b.store.flush(&b.doc).unwrap();
+    sync_with_dumb(&mut b.store, &b.doc, &dumb);
+
+    sync_with_dumb(&mut a.store, &a.doc, &dumb);
+
+    assert_eq!(
+        render(&a.doc),
+        render(&b.doc),
+        "both machines must end identical"
+    );
+    assert_eq!(a.doc.messages().len(), 2, "both lines must be there");
+
+    // Idempotence: another round moves nothing.
+    assert_eq!(sync_with_dumb(&mut a.store, &a.doc, &dumb), (0, 0));
+    assert_eq!(sync_with_dumb(&mut b.store, &b.doc, &dumb), (0, 0));
+
+    for d in [&dir_a, &dir_b, &dumb.0] {
+        let _ = fs::remove_dir_all(d);
+    }
+}
+
+/// Syncing after compaction must not pull the compacted blocks back —
+/// the directory-as-criterion implementation goes red here, and its
+/// failure mode in the wild is "compaction undone on every sync, no
+/// error anywhere".
+#[test]
+fn compacting_survives_the_next_sync() {
+    let dumb = Dumb::new("dumb-compact");
+    let dir = tmpdir("mach-compact");
+    let mut m = open_channel(&dir, 0xC).unwrap();
+
+    for i in 0..5 {
+        m.doc.tell(&me("a"), &format!("line {i}")).unwrap();
+        m.store.flush(&m.doc).unwrap();
+    }
+    sync_with_dumb(&mut m.store, &m.doc, &dumb); // all five uploaded
+    let want = render(&m.doc);
+
+    m.store.compact(&m.doc).unwrap();
+    let left = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".loro"))
+        .count();
+    assert_eq!(
+        left, 1,
+        "after compaction only the snapshot remains, got {left}"
+    );
+
+    let (pull, _) = sync_with_dumb(&mut m.store, &m.doc, &dumb);
+    assert_eq!(
+        pull, 0,
+        "none of the five compacted blocks may be re-pulled"
+    );
+    assert_eq!(
+        render(&m.doc),
+        want,
+        "the content must not change by a byte"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&dumb.0);
+}
